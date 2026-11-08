@@ -1,0 +1,127 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * The Trial build of Berkeley Mono deliberately draws "/" as a mirrored backslash.
+ * This alias reads the locally installed Trial for every printable ASCII character except "/" and "\\",
+ * which fall through to the next font in --font-mono. A licensed "Berkeley Mono" is used as-is.
+ */
+@font-face {
+  font-family: "Berkeley Mono Trial Fixed";
+  src: local("Berkeley Mono Trial"), local("BerkeleyMonoTrial-Regular");
+  unicode-range: U+0020-002E, U+0030-005B, U+005D-007E;
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  /* Set at runtime from Settings > Appearance (see use-apply-appearance.ts); default in :root below. */
+  --font-mono: var(--code-font);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-panel: var(--panel);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-selection: var(--selection);
+  --color-added: var(--added);
+  --color-added-foreground: var(--added-foreground);
+  --color-removed: var(--removed);
+  --color-removed-foreground: var(--removed-foreground);
+  --color-renamed: var(--renamed);
+  --color-diff-added: var(--diff-added-row);
+  --color-diff-removed: var(--diff-removed-row);
+  --color-diff-added-number: var(--diff-added-number);
+  --color-diff-removed-number: var(--diff-removed-number);
+}
+
+/* V1 is dark-only: tokens live on :root. Values sampled from the reference design. */
+:root {
+  color-scheme: dark;
+  /* Berkeley Mono is licensed per machine: used when installed locally, never bundled (see @font-face above). */
+  --code-font:
+    "Berkeley Mono", "Berkeley Mono Trial Fixed", "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  --code-size: 11px;
+  --radius: 0.5rem;
+
+  --background: #1b1c1f;
+  --panel: #1b1c1f;
+  --sidebar: #25262b;
+  --card: #1b1c1f;
+  --border: #2a2b30;
+
+  --foreground: #e0e2e2;
+  --card-foreground: #e0e2e2;
+  --sidebar-foreground: #9a9ba1;
+  --muted-foreground: #86878c;
+  --popover: #26272c;
+  --popover-foreground: #e0e2e2;
+
+  --primary: #7770c8;
+  --primary-foreground: #ffffff;
+  --selection: #7770c8;
+  --secondary: #2a2b30;
+  --secondary-foreground: #e4e4e9;
+  --muted: #26272b;
+  --accent: #2a2b30;
+  --accent-foreground: #f2f2f5;
+  --input: #303136;
+  --ring: #8e88d8;
+  --destructive: #b65f68;
+
+  --added: #4f9b68;
+  --added-foreground: #8db88f; /* text on dark surfaces: ≥ 4.5:1 */
+  --removed: #b65f68;
+  --removed-foreground: #d38a8f;
+  --renamed: #c8a35a;
+
+  /* Diff rows, sampled from the reference: greyish tints that leave syntax colors readable. */
+  --diff-added-row: #2b322e;
+  --diff-removed-row: #372e2f;
+  --diff-added-number: #86a383;
+  --diff-removed-number: #b88083;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body,
+  #root {
+    @apply h-full overflow-hidden;
+  }
+  body {
+    @apply bg-background text-foreground font-sans text-[12px] antialiased select-none;
+    font-optical-sizing: auto;
+  }
+  code,
+  .font-mono {
+    font-feature-settings:
+      "calt" 0,
+      "liga" 0;
+  }
+}
