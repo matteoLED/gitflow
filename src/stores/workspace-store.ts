@@ -2,8 +2,18 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { RepositoryInfo, WorkingSide } from "@/types/git";
 
-/** history: branches + commits; github: pull requests + their commits; changes: working tree. */
-export type View = "history" | "github" | "changes";
+/** history: branches + commits; github: pull requests + their commits; changes: working tree; agents: AI runs. */
+export type View = "home" | "history" | "github" | "changes" | "ci" | "agents" | "preview" | "linear";
+
+/** The pull request being reviewed: `base` is its merge-base, so `base..head` is its whole diff. */
+export type ActivePullRequest = {
+  number: number;
+  title: string;
+  author: string;
+  base: string | null;
+  head: string;
+  url: string;
+};
 
 export type SelectedChange = { path: string; previousPath: string | null; side: WorkingSide };
 
@@ -21,6 +31,9 @@ type WorkspaceState = {
   /** Human title for historyRev when it isn't a ref name (e.g. a pull request). */
   historyLabel: string | null;
   selectedCommitHash: string | null;
+  /** When set, the selected commit is compared with this base instead of its parent (a PR's whole diff). */
+  compareBase: string | null;
+  pullRequest: ActivePullRequest | null;
   selectedFilePath: string | null;
   selectedChange: SelectedChange | null;
   /** Files of the selected commit whose diff card is collapsed. */
@@ -31,6 +44,9 @@ type WorkspaceState = {
   forgetRecent: (path: string) => void;
   setView: (view: View) => void;
   showHistoryOf: (rev: string | null, label?: string) => void;
+  openPullRequest: (pr: ActivePullRequest, range: string) => void;
+  /** Selects the active pull request's whole diff. */
+  showPullRequestChanges: () => void;
   selectCommit: (hash: string) => void;
   selectFile: (path: string) => void;
   selectChange: (change: SelectedChange | null) => void;
@@ -42,6 +58,8 @@ const cleared = () => ({
   historyRev: null,
   historyLabel: null,
   selectedCommitHash: null,
+  compareBase: null,
+  pullRequest: null,
   selectedFilePath: null,
   selectedChange: null,
   collapsedDiffs: new Set<string>(),
@@ -55,18 +73,22 @@ type Session = Pick<
   | "historyRev"
   | "historyLabel"
   | "selectedCommitHash"
+  | "compareBase"
+  | "pullRequest"
   | "selectedFilePath"
   | "selectedChange"
   | "collapsedDiffs"
 >;
 
-const freshSession = (): Session => ({ view: "history", ...cleared() });
+const freshSession = (): Session => ({ view: "home", ...cleared() });
 
 const sessionOf = (s: Session): Session => ({
   view: s.view,
   historyRev: s.historyRev,
   historyLabel: s.historyLabel,
   selectedCommitHash: s.selectedCommitHash,
+  compareBase: s.compareBase,
+  pullRequest: s.pullRequest,
   selectedFilePath: s.selectedFilePath,
   selectedChange: s.selectedChange,
   collapsedDiffs: s.collapsedDiffs,
@@ -120,9 +142,35 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           historyRev: rev,
           historyLabel: label ?? null,
           selectedCommitHash: null,
+          compareBase: null,
+          pullRequest: null,
           selectedFilePath: null,
         })),
-      selectCommit: (hash) => set({ selectedCommitHash: hash, selectedFilePath: null, collapsedDiffs: new Set() }),
+      // Opening a pull request lands on its whole diff, ready to review; its commits stay one click away.
+      openPullRequest: (pr, range) =>
+        set({
+          view: "github",
+          historyRev: range,
+          historyLabel: `#${pr.number} ${pr.title}`,
+          pullRequest: pr,
+          selectedCommitHash: pr.head,
+          compareBase: pr.base,
+          selectedFilePath: null,
+          collapsedDiffs: new Set(),
+        }),
+      showPullRequestChanges: () =>
+        set(({ pullRequest }) =>
+          pullRequest
+            ? {
+                selectedCommitHash: pullRequest.head,
+                compareBase: pullRequest.base,
+                selectedFilePath: null,
+                collapsedDiffs: new Set(),
+              }
+            : {},
+        ),
+      selectCommit: (hash) =>
+        set({ selectedCommitHash: hash, compareBase: null, selectedFilePath: null, collapsedDiffs: new Set() }),
       // Picking a file in the tree always reveals its diff, even if its card was collapsed.
       selectFile: (path) =>
         set(({ collapsedDiffs }) => ({

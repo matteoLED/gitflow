@@ -2,12 +2,12 @@ import type { ComponentProps, ReactNode } from "react";
 import { ListFilter, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { BrailleLoader, type BrailleVariant } from "@/components/braille-loader";
 import { useT } from "@/i18n";
 
 /*
- * Shared vertical grid, matching the reference: every panel header is centered on the window-controls line
- * (y = 29, see trafficLightPosition in tauri.conf.json), every toolbar row (Pull/Push, filters) sits on the
- * line below, and lists start together underneath.
+ * Shared vertical grid: the sidebar header is 58px, centered on the window controls (y = 29, see
+ * trafficLightPosition in tauri.conf.json); views sit in an inset 6px lower, so their 46px headers share that line.
  */
 
 /** Top bar of a panel. Doubles as the window drag region since the title bar is hidden. */
@@ -15,7 +15,7 @@ export function PanelHeader({ className, ...props }: ComponentProps<"header">) {
   return (
     <header
       data-tauri-drag-region
-      className={cn("flex h-[58px] shrink-0 items-center gap-2 px-3", className)}
+      className={cn("flex h-[46px] shrink-0 items-center gap-2 border-b border-white/[0.06] px-3", className)}
       {...props}
     />
   );
@@ -23,7 +23,19 @@ export function PanelHeader({ className, ...props }: ComponentProps<"header">) {
 
 /** Second row of a panel (filters, sync buttons): same height and position in every column. */
 export function PanelToolbar({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("flex h-[22px] shrink-0 items-center gap-1.5 px-3", className)} {...props} />;
+  return <div className={cn("flex h-7 shrink-0 items-center gap-1.5 px-3", className)} {...props} />;
+}
+
+/** Full-panel loading state: animated dot grid above the message. */
+export function PanelLoading({ title, variant = "grid" }: { title: string; variant?: BrailleVariant }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-muted-foreground">
+      <BrailleLoader variant={variant} dotSize={2.5} dotGap={1.5} label={title} className="text-primary" />
+      <p aria-hidden className="text-[12px]">
+        {title}
+      </p>
+    </div>
+  );
 }
 
 export function PanelMessage({ icon, title, hint }: { icon?: ReactNode; title: string; hint?: string }) {
@@ -64,7 +76,7 @@ export function FilterInput({
         aria-label={label}
         placeholder={placeholder ?? t("common.filter")}
         onChange={(event) => onValueChange(event.target.value)}
-        className="h-[22px] rounded-md border-white/[0.09] bg-transparent pl-7 text-[11px] shadow-none placeholder:text-muted-foreground/70 md:text-[11px] dark:bg-transparent"
+        className="h-7 rounded-md border-white/[0.09] bg-transparent pl-7 text-[12px] shadow-none placeholder:text-muted-foreground md:text-[12px] dark:bg-transparent"
         {...props}
       />
     </div>

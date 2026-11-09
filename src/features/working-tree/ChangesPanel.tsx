@@ -1,11 +1,16 @@
+import { useShallow } from "zustand/react/shallow";
+import { DataUnavailable } from "@/components/states";
 import { useMemo, useState } from "react";
-import { CircleCheck, Loader2, Minus, Plus, TriangleAlert } from "lucide-react";
+import { CircleCheck, Minus, Plus, Sparkles } from "lucide-react";
+import { BrailleLoader } from "@/components/braille-loader";
+import { pickAgent } from "@/features/agents/AgentButton";
+import { startAgentRun, useInstalledAgents } from "@/features/agents/use-agents";
+import { finalAnswer, useAgentsStore } from "@/stores/agents-store";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { PanelHeader, PanelMessage } from "@/components/layout/panel";
+import { PanelHeader, PanelLoading, PanelMessage } from "@/components/layout/panel";
 import { useRefs, useWorkingTree } from "@/lib/git-queries";
 import { gitBackend } from "@/lib/tauri-git";
-import { toGitError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useGitAction } from "@/features/operations/use-git-action";
@@ -17,7 +22,9 @@ type ChangeRowProps = { item: ChangeItem; action: "stage" | "unstage" | null; on
 
 function ChangeRow({ item, action, onAction, busy }: ChangeRowProps) {
   const t = useT();
-  const { selectedChange, selectChange } = useWorkspaceStore();
+  const { selectedChange, selectChange } = useWorkspaceStore(
+    useShallow((s) => ({ selectedChange: s.selectedChange, selectChange: s.selectChange })),
+  );
   const selected = selectedChange?.path === item.path && selectedChange.side === item.side;
   const status = FILE_STATUS[item.status];
   const slash = item.path.lastIndexOf("/");
@@ -29,13 +36,13 @@ function ChangeRow({ item, action, onAction, busy }: ChangeRowProps) {
         onClick={() => selectChange({ path: item.path, previousPath: item.previousPath, side: item.side })}
         title={item.previousPath ? `${item.previousPath} → ${item.path}` : item.path}
         className={cn(
-          "flex h-7 w-full items-center gap-2 rounded-md pr-9 pl-2 text-left outline-none hover:bg-white/4 focus-visible:ring-2 focus-visible:ring-ring",
+          "flex h-7 w-full items-center gap-2 rounded-md pr-9 pl-2 text-left outline-none hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-ring",
           selected && "bg-white/[0.06]",
         )}
       >
         <span
           aria-label={t(status.label)}
-          className={cn("w-3 shrink-0 font-mono text-[11px] font-semibold", status.className)}
+          className={cn("w-3 shrink-0 font-mono text-[12px] font-semibold", status.className)}
         >
           {status.letter}
         </span>
@@ -71,7 +78,7 @@ function Group({ title, items, action, run, busy }: GroupProps) {
   if (items.length === 0) return null;
   return (
     <section aria-label={title} className="mb-3">
-      <header className="flex h-7 items-center justify-between px-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+      <header className="flex h-7 items-center justify-between px-2 text-[12px] font-medium tracking-wide text-muted-foreground uppercase">
         <span>
           {title} <span className="font-mono">{items.length}</span>
         </span>
@@ -96,9 +103,38 @@ function Group({ title, items, action, run, busy }: GroupProps) {
   );
 }
 
+/** Asks the preferred agent for a message describing the staged changes, then fills it in. */
+function useGeneratedMessage(repoPath: string, onMessage: (message: string) => void) {
+  const t = useT();
+  const installed = useInstalledAgents().data;
+  const preferred = useAgentsStore((s) => s.preferredAgent);
+  const [pending, setPending] = useState(false);
+  const agent = pickAgent(installed, preferred);
+
+  const generate = async () => {
+    if (!agent) return;
+    setPending(true);
+    const id = await startAgentRun(repoPath, agent, { kind: "commit-message" }, t("agents.commitMessage"));
+    if (!id) return setPending(false);
+    // Waits for the run to end, then fills the message with the agent's answer.
+    const settle = () => {
+      const run = useAgentsStore.getState().runs.find((r) => r.id === id);
+      if (!run || run.status === "running") return false;
+      const answer = run.status === "done" ? finalAnswer(run) : null;
+      if (answer) onMessage(answer.trim());
+      setPending(false);
+      return true;
+    };
+    if (settle()) return;
+    const unsubscribe = useAgentsStore.subscribe(() => settle() && unsubscribe());
+  };
+  return { available: agent !== null, pending, generate };
+}
+
 function CommitForm({ repoPath, stagedCount }: { repoPath: string; stagedCount: number }) {
   const t = useT();
   const [message, setMessage] = useState("");
+  const generated = useGeneratedMessage(repoPath, setMessage);
   const commit = useGitAction(repoPath, {
     run: () => gitBackend.createCommit(repoPath, message),
     success: t("changes.committed"),
@@ -126,10 +162,23 @@ function CommitForm({ repoPath, stagedCount }: { repoPath: string; stagedCount: 
             submit();
           }
         }}
-        className="min-h-20 resize-none bg-transparent text-[12px] md:text-[12px]"
+        className="min-h-20 resize-none bg-transparent text-[13px] md:text-[13px]"
       />
+      {generated.available && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={stagedCount === 0 || generated.pending}
+          onClick={() => void generated.generate()}
+          className="h-7 gap-1.5 text-[13px]"
+        >
+          {generated.pending ? <BrailleLoader /> : <Sparkles aria-hidden className="size-3.5 text-primary" />}
+          {generated.pending ? t("agents.writingMessage") : t("agents.generateMessage")}
+        </Button>
+      )}
       <Button type="submit" disabled={!canCommit}>
-        {commit.isPending && <Loader2 aria-hidden className="animate-spin" />}
+        {commit.isPending && <BrailleLoader />}
         {stagedCount === 0 ? t("changes.stageFirst") : t.plural("changes.commit", stagedCount)}
       </Button>
     </form>
@@ -157,15 +206,15 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
       <PanelHeader>
         <div data-tauri-drag-region className="min-w-0">
           <h2 className="text-sm font-semibold">{t("changes.title")}</h2>
-          <p className="truncate text-[11px] text-muted-foreground">
+          <p className="truncate text-[12px] text-muted-foreground">
             {t("changes.on", { branch: branch ?? t("changes.detached") })}
           </p>
         </div>
       </PanelHeader>
       {tree.isError ? (
-        <PanelMessage icon={<TriangleAlert />} title={t("changes.readError")} hint={toGitError(tree.error).message} />
+        <DataUnavailable title={t("changes.readError")} error={tree.error} onRetry={() => void tree.refetch()} />
       ) : !tree.data ? (
-        <PanelMessage title={t("changes.reading")} />
+        <PanelLoading title={t("changes.reading")} variant="grid-searching" />
       ) : empty ? (
         <PanelMessage icon={<CircleCheck />} title={t("changes.clean")} hint={t("changes.cleanHint")} />
       ) : (

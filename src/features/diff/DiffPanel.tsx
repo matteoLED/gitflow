@@ -1,17 +1,23 @@
-import { useEffect } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { DataUnavailable } from "@/components/states";
+import { useCallback, useEffect, useState } from "react";
 import { FileDiff as FileDiffIcon, FileWarning, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PanelHeader, PanelMessage } from "@/components/layout/panel";
+import { PanelHeader, PanelLoading, PanelMessage } from "@/components/layout/panel";
 import { useCommitDiff, useCommitFiles } from "@/lib/git-queries";
-import { useInView } from "@/lib/use-in-view";
+import { useInView, useNearViewport } from "@/lib/use-in-view";
 import { revealInContainer } from "@/lib/reveal";
-import { useWorkspaceStore } from "@/stores/workspace-store";
+import { useWorkspaceStore, type ActivePullRequest } from "@/stores/workspace-store";
+import { reviewKey, useReviewStore } from "@/stores/review-store";
 import type { ChangedFile } from "@/types/git";
 import { useViewSettings } from "@/stores/view-settings-store";
 import { DiffBody, DiffCard } from "./DiffCard";
 import { isGenerated } from "./generated";
 import { ViewOptions } from "./ViewOptions";
+import { FileActions } from "./FileActions";
+import { AgentButton } from "@/features/agents/AgentButton";
+import { ReviewButton } from "@/features/github/ReviewButton";
 import { useT } from "@/i18n";
 
 const cardId = (path: string) => `diff-${path}`;
@@ -19,6 +25,7 @@ const cardId = (path: string) => `diff-${path}`;
 type CommitDiffCardProps = {
   repoPath: string;
   hash: string;
+  base: string | null;
   file: ChangedFile;
   highlighted: boolean;
   open: boolean;
@@ -26,9 +33,14 @@ type CommitDiffCardProps = {
 };
 
 /** Loads its diff only once scrolled near the viewport, so huge commits stay responsive. */
-function CommitDiffCard({ repoPath, hash, file, highlighted, open, onToggle }: CommitDiffCardProps) {
+function CommitDiffCard({ repoPath, hash, base, file, highlighted, open, onToggle }: CommitDiffCardProps) {
   const [ref, inView] = useInView<HTMLElement>();
-  const diff = useCommitDiff(repoPath, hash, file.path, file.previousPath, open && (inView || highlighted));
+  // Far off-screen, a seen diff is swapped for an empty block of its height: big PRs keep a small DOM.
+  const [placeRef, place] = useNearViewport<HTMLDivElement>();
+  const rendered = place.near || highlighted;
+  const [expanded, setExpanded] = useState(false);
+  const toggleExpanded = useCallback(() => setExpanded((e) => !e), []);
+  const diff = useCommitDiff(repoPath, hash, file.path, file.previousPath, open && (inView || highlighted), base);
   return (
     <DiffCard
       file={file}
@@ -37,9 +49,45 @@ function CommitDiffCard({ repoPath, hash, file, highlighted, open, onToggle }: C
       highlighted={highlighted}
       cardRef={ref}
       id={cardId(file.path)}
+      actions={
+        <FileActions
+          repoPath={repoPath}
+          hash={hash}
+          base={base}
+          file={file}
+          open={open}
+          onToggleOpen={onToggle}
+          expanded={expanded}
+          onToggleExpanded={toggleExpanded}
+          selected={highlighted}
+        />
+      }
     >
-      <DiffBody path={file.path} diff={diff.data} error={diff.error} loading={diff.isPending} />
+      <div ref={placeRef}>
+        {rendered ? (
+          <DiffBody
+            path={file.path}
+            diff={diff.data}
+            error={diff.error}
+            loading={diff.isPending}
+            expandAll={expanded}
+            image={{ repoPath, hash, base, status: file.status }}
+          />
+        ) : (
+          <div style={{ height: place.height }} />
+        )}
+      </div>
     </DiffCard>
+  );
+}
+
+function ReviewProgress({ pr, paths }: { pr: ActivePullRequest; paths: string[] }) {
+  const t = useT();
+  const reviewed = useReviewStore((s) => paths.filter((p) => s.reviewed[reviewKey(pr.number, pr.head, p)]).length);
+  return (
+    <span className="mr-1 text-[12px] text-muted-foreground tabular-nums">
+      {t("review.progress", { count: reviewed, total: paths.length })}
+    </span>
   );
 }
 
@@ -58,17 +106,35 @@ function CollapseAllButton({ allCollapsed, onClick }: { allCollapsed: boolean; o
   );
 }
 
-function CommitDiffs({ repoPath, hash }: { repoPath: string; hash: string }) {
+function CommitDiffs({ repoPath, hash, base }: { repoPath: string; hash: string; base: string | null }) {
   const t = useT();
-  const { selectedFilePath, collapsedDiffs: collapsed, toggleDiff, setCollapsedDiffs } = useWorkspaceStore();
+  const {
+    selectedFilePath,
+    pullRequest,
+    collapsedDiffs: collapsed,
+    toggleDiff,
+    setCollapsedDiffs,
+  } = useWorkspaceStore(
+    useShallow((s) => ({
+      selectedFilePath: s.selectedFilePath,
+      pullRequest: s.pullRequest,
+      collapsedDiffs: s.collapsedDiffs,
+      toggleDiff: s.toggleDiff,
+      setCollapsedDiffs: s.setCollapsedDiffs,
+    })),
+  );
   const hideGenerated = useViewSettings((s) => s.hideGenerated);
-  const files = useCommitFiles(repoPath, hash);
+  const files = useCommitFiles(repoPath, hash, base);
 
   useEffect(() => {
     if (selectedFilePath) revealInContainer(cardId(selectedFilePath), "start");
   }, [selectedFilePath]);
 
-  if (!files.data) return <PanelMessage title={files.isError ? t("diff.loadFilesError") : t("common.loading")} />;
+  if (files.isError)
+    return (
+      <DataUnavailable title={t("diff.loadFilesError")} error={files.error} onRetry={() => void files.refetch()} />
+    );
+  if (!files.data) return <PanelLoading title={t("common.loading")} variant="grid-diagonal" />;
   const visible = hideGenerated ? files.data.filter((f) => !isGenerated(f.path)) : files.data;
   const hiddenCount = files.data.length - visible.length;
   const paths = visible.map((f) => f.path);
@@ -77,6 +143,9 @@ function CommitDiffs({ repoPath, hash }: { repoPath: string; hash: string }) {
   return (
     <>
       <PanelHeader className="justify-end gap-1">
+        {pullRequest && <ReviewButton repoPath={repoPath} pr={pullRequest} />}
+        {pullRequest && <ReviewProgress pr={pullRequest} paths={paths} />}
+        <AgentButton repoPath={repoPath} />
         <ViewOptions />
         <CollapseAllButton
           allCollapsed={allCollapsed}
@@ -92,9 +161,10 @@ function CommitDiffs({ repoPath, hash }: { repoPath: string; hash: string }) {
         >
           {visible.map((file) => (
             <CommitDiffCard
-              key={`${hash}:${file.path}`}
+              key={`${hash}:${base}:${file.path}`}
               repoPath={repoPath}
               hash={hash}
+              base={base}
               file={file}
               highlighted={file.path === selectedFilePath}
               open={!collapsed.has(file.path)}
@@ -102,7 +172,7 @@ function CommitDiffs({ repoPath, hash }: { repoPath: string; hash: string }) {
             />
           ))}
           {hiddenCount > 0 && (
-            <p className="py-2 text-center text-[11px] text-muted-foreground">
+            <p className="py-2 text-center text-[12px] text-muted-foreground">
               {t.plural("diff.generatedHidden", hiddenCount)}
             </p>
           )}
@@ -114,11 +184,13 @@ function CommitDiffs({ repoPath, hash }: { repoPath: string; hash: string }) {
 
 export function DiffPanel({ repoPath }: { repoPath: string }) {
   const t = useT();
-  const hash = useWorkspaceStore((s) => s.selectedCommitHash);
+  const { selectedCommitHash: hash, compareBase: base } = useWorkspaceStore(
+    useShallow((s) => ({ selectedCommitHash: s.selectedCommitHash, compareBase: s.compareBase })),
+  );
   return (
     <section aria-label={t("diff.panel")} className="flex h-full flex-col">
       {hash ? (
-        <CommitDiffs key={hash} repoPath={repoPath} hash={hash} />
+        <CommitDiffs key={`${hash}:${base}`} repoPath={repoPath} hash={hash} base={base} />
       ) : (
         <PanelMessage icon={<FileDiffIcon />} title={t("diff.nothing")} hint={t("diff.nothingHint")} />
       )}

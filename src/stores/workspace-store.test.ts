@@ -58,4 +58,17 @@ describe("open repositories", () => {
     state().forgetRecent("/code/a");
     expect(state().recentRepos).toEqual([]);
   });
+
+  it("opens a pull request on its whole diff", () => {
+    openAll("a");
+    state().openPullRequest({ number: 1, title: "t", author: "x", base: "b", head: "h", url: "u" }, "origin/main..h");
+    expect([state().selectedCommitHash, state().compareBase]).toEqual(["h", "b"]);
+  });
+
+  it("compares a commit picked inside a pull request with its own parent", () => {
+    openAll("a");
+    state().openPullRequest({ number: 1, title: "t", author: "x", base: "b", head: "h", url: "u" }, "origin/main..h");
+    state().selectCommit("c");
+    expect(state().compareBase).toBeNull();
+  });
 });

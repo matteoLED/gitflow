@@ -1,17 +1,10 @@
+import { useShallow } from "zustand/react/shallow";
+import { DataUnavailable } from "@/components/states";
 import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
-import {
-  FolderOpen,
-  GitCommitHorizontal,
-  GitPullRequest,
-  List,
-  ListTree,
-  SearchX,
-  Triangle,
-  TriangleAlert,
-} from "lucide-react";
+import { FolderOpen, GitCommitHorizontal, GitPullRequest, List, ListTree, SearchX, Triangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { FilterInput, PanelHeader, PanelMessage, PanelToolbar } from "@/components/layout/panel";
+import { FilterInput, PanelHeader, PanelLoading, PanelMessage, PanelToolbar } from "@/components/layout/panel";
 import { FileIcon } from "@/components/file-icon";
 import { AuthorAvatar } from "@/components/author-avatar";
 import { MiddleTruncate } from "@/components/middle-truncate";
@@ -20,9 +13,8 @@ import { formatCommitDate } from "@/lib/format-date";
 import { splitSubject } from "@/lib/commit-subject";
 import { nextListIndex } from "@/lib/list-navigation";
 import { revealInContainer } from "@/lib/reveal";
-import { toGitError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
-import { useWorkspaceStore } from "@/stores/workspace-store";
+import { useWorkspaceStore, type ActivePullRequest } from "@/stores/workspace-store";
 import { useViewSettings, type FileListMode } from "@/stores/view-settings-store";
 import { isGenerated } from "@/features/diff/generated";
 import type { ChangedFile, CommitSummary } from "@/types/git";
@@ -66,9 +58,9 @@ function Row({ row, list, active, collapsed, onActivate }: RowProps) {
       style={{ paddingLeft: `${depth * 14 + 10}px` }}
       title={file?.previousPath ? `${file.previousPath} → ${node.path}` : node.path}
       className={cn(
-        "flex h-[22px] cursor-default items-center gap-2 rounded-md pr-2 text-[11px] hover:bg-white/4",
+        "flex h-7 cursor-default items-center gap-2 rounded-md pr-2 text-[12px] hover:bg-white/[0.07]",
         node.kind === "dir" ? "text-muted-foreground" : "text-foreground/90",
-        active && "bg-white/[0.06] text-foreground hover:bg-white/[0.06]",
+        active && "bg-white/[0.06] text-foreground hover:bg-white/[0.09]",
       )}
     >
       {node.kind === "dir" ? (
@@ -84,7 +76,7 @@ function Row({ row, list, active, collapsed, onActivate }: RowProps) {
       )}
       <MiddleTruncate text={node.name} tail={18} />
       {list && slash > 0 && (
-        <MiddleTruncate text={node.path.slice(0, slash)} tail={14} className="text-[10.5px] text-muted-foreground" />
+        <MiddleTruncate text={node.path.slice(0, slash)} tail={14} className="text-[11.5px] text-muted-foreground" />
       )}
       {file && <StatusMark file={file} />}
     </li>
@@ -101,22 +93,49 @@ function CommitHeader({ repoPath, commit }: { repoPath: string; commit: CommitSu
       <AuthorAvatar name={commit.author} src={avatar.data} className="size-7" />
       <div data-tauri-drag-region className="min-w-0">
         <h2
-          className="flex min-w-0 items-center gap-1.5 text-[13px] font-semibold text-white/95"
+          className="flex min-w-0 items-center gap-1.5 text-[14px] font-semibold text-white/95"
           title={commit.subject}
         >
           <span className="truncate">{title}</span>
           {pr && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[10px] font-normal text-foreground/85">
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] font-normal text-foreground/85">
               <GitPullRequest aria-hidden className="size-3" />#{pr}
             </span>
           )}
         </h2>
-        <p className="flex gap-1.5 truncate text-[11px] text-foreground/70">
+        <p className="flex gap-1.5 truncate text-[12px] text-foreground/90">
           <span title={commit.authorEmail}>{commit.author}</span>
           {coAuthors > 0 && <span title={commit.coAuthors.join(", ")}>+{coAuthors}</span>}
           <span>{formatCommitDate(commit.authoredAt, undefined, t.locale)}</span>
-          <span className="font-mono text-muted-foreground/80 select-text">{commit.hash.slice(0, 7)}</span>
+          <span className="font-mono text-muted-foreground select-text">{commit.hash.slice(0, 7)}</span>
           {commit.parents.length > 1 && <span>{t("files.merge")}</span>}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Header of a pull request's whole diff: who opened it, and that every commit is included. */
+function PullRequestHeader({ pr }: { pr: ActivePullRequest }) {
+  const t = useT();
+  return (
+    <div data-tauri-drag-region className="flex min-w-0 items-center gap-2.5">
+      <AuthorAvatar
+        name={pr.author}
+        src={`https://avatars.githubusercontent.com/${pr.author}?s=64`}
+        className="size-7"
+      />
+      <div data-tauri-drag-region className="min-w-0">
+        <h2 className="flex min-w-0 items-center gap-1.5 text-[14px] font-semibold text-white/95" title={pr.title}>
+          <span className="truncate">{pr.title}</span>
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] font-normal text-foreground/85">
+            <GitPullRequest aria-hidden className="size-3" />#{pr.number}
+          </span>
+        </h2>
+        <p className="flex gap-1.5 truncate text-[12px] text-foreground/90">
+          <span>{pr.author}</span>
+          <span className="text-muted-foreground">{t("pr.allChanges")}</span>
+          <span className="font-mono text-muted-foreground select-text">{pr.head.slice(0, 7)}</span>
         </p>
       </div>
     </div>
@@ -125,7 +144,7 @@ function CommitHeader({ repoPath, commit }: { repoPath: string; commit: CommitSu
 
 function ModeButton({ mode, label, icon }: { mode: FileListMode; label: MessageKey; icon: ReactNode }) {
   const t = useT();
-  const { fileList, set } = useViewSettings();
+  const { fileList, set } = useViewSettings(useShallow((s) => ({ fileList: s.fileList, set: s.set })));
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -136,7 +155,7 @@ function ModeButton({ mode, label, icon }: { mode: FileListMode; label: MessageK
           aria-pressed={fileList === mode}
           onClick={() => set("fileList", mode)}
           className={cn(
-            "size-[22px] rounded-full text-muted-foreground [&_svg]:size-3.5",
+            "size-7 rounded-full text-muted-foreground [&_svg]:size-3.5",
             fileList === mode && "bg-white/10 text-foreground",
           )}
         >
@@ -161,8 +180,12 @@ function useToggleSet() {
 
 function FileList({ files }: { files: ChangedFile[] }) {
   const t = useT();
-  const { selectedFilePath, selectFile } = useWorkspaceStore();
-  const { fileList, grouping, hideGenerated } = useViewSettings();
+  const { selectedFilePath, selectFile } = useWorkspaceStore(
+    useShallow((s) => ({ selectedFilePath: s.selectedFilePath, selectFile: s.selectFile })),
+  );
+  const { fileList, grouping, hideGenerated } = useViewSettings(
+    useShallow((s) => ({ fileList: s.fileList, grouping: s.grouping, hideGenerated: s.hideGenerated })),
+  );
   const [query, setQuery] = useState("");
   const [collapsed, toggle] = useToggleSet();
   const [activeKey, setActiveKey] = useState<string | null>(null);
@@ -231,7 +254,7 @@ function FileList({ files }: { files: ChangedFile[] }) {
               <li
                 key={row.key}
                 role="presentation"
-                className="px-2.5 pt-2.5 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase"
+                className="px-2.5 pt-2.5 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase"
               >
                 {t(FILE_STATUS[row.status].label)} <span className="font-mono">{row.count}</span>
               </li>
@@ -252,29 +275,45 @@ function FileList({ files }: { files: ChangedFile[] }) {
   );
 }
 
-function CommitFiles({ repoPath, hash }: { repoPath: string; hash: string }) {
+function CommitFiles({ repoPath, hash, base }: { repoPath: string; hash: string; base: string | null }) {
   const t = useT();
-  const files = useCommitFiles(repoPath, hash);
+  const files = useCommitFiles(repoPath, hash, base);
   if (files.isError) {
-    return (
-      <PanelMessage icon={<TriangleAlert />} title={t("files.listError")} hint={toGitError(files.error).message} />
-    );
+    return <DataUnavailable title={t("files.listError")} error={files.error} onRetry={() => void files.refetch()} />;
   }
-  if (!files.data) return <PanelMessage title={t("files.loading")} />;
+  if (!files.data) return <PanelLoading title={t("files.loading")} variant="grid-columns" />;
   return <FileList files={files.data} />;
 }
 
 export function ChangedFilesPanel({ repoPath }: { repoPath: string }) {
   const t = useT();
-  const { selectedCommitHash: hash, historyRev } = useWorkspaceStore();
+  const {
+    selectedCommitHash: hash,
+    compareBase: base,
+    pullRequest,
+    historyRev,
+  } = useWorkspaceStore(
+    useShallow((s) => ({
+      selectedCommitHash: s.selectedCommitHash,
+      compareBase: s.compareBase,
+      pullRequest: s.pullRequest,
+      historyRev: s.historyRev,
+    })),
+  );
   const commit = useCommits(repoPath, historyRev)
     .data?.pages.flat()
     .find((c) => c.hash === hash);
   return (
     <section aria-label={t("files.panel")} className="flex h-full flex-col bg-panel">
-      <PanelHeader>{commit && <CommitHeader repoPath={repoPath} commit={commit} />}</PanelHeader>
+      <PanelHeader>
+        {base && pullRequest ? (
+          <PullRequestHeader pr={pullRequest} />
+        ) : (
+          commit && <CommitHeader repoPath={repoPath} commit={commit} />
+        )}
+      </PanelHeader>
       {hash ? (
-        <CommitFiles key={hash} repoPath={repoPath} hash={hash} />
+        <CommitFiles key={`${hash}:${base}`} repoPath={repoPath} hash={hash} base={base} />
       ) : (
         <PanelMessage icon={<GitCommitHorizontal />} title={t("files.noCommit")} hint={t("files.noCommitHint")} />
       )}

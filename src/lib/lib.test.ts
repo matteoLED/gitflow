@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCommitDate } from "./format-date";
+import { formatAge, formatCommitDate } from "./format-date";
 import { nextListIndex } from "./list-navigation";
 
 describe("nextListIndex", () => {
@@ -32,5 +32,21 @@ describe("formatCommitDate", () => {
 
   it("uses the full date beyond a week", () => {
     expect(formatCommitDate(new Date(2026, 2, 3, 12, 0).toISOString(), now)).toBe("3 Mar 2026");
+  });
+});
+
+describe("formatAge", () => {
+  const now = new Date("2026-11-08T12:00:00Z");
+
+  it("uses hours within a day", () => {
+    expect(formatAge("2026-11-08T09:00:00Z", now)).toBe("3h");
+  });
+
+  it("uses weeks past a week", () => {
+    expect(formatAge("2026-09-13T12:00:00Z", now)).toBe("8w");
+  });
+
+  it("localizes the unit", () => {
+    expect(formatAge("2026-11-03T12:00:00Z", now, "fr")).toBe("5 j");
   });
 });

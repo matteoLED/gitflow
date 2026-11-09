@@ -19,7 +19,7 @@ export function AuthorAvatar({ name, src, className }: { name: string; src?: str
       {src && <AvatarImage src={src} alt={name} />}
       <AvatarFallback
         style={{ backgroundColor: `hsl(${hue} 35% 30%)`, color: `hsl(${hue} 60% 85%)` }}
-        className="text-[10px] font-semibold"
+        className="text-[11px] font-semibold"
       >
         {initials(name)}
       </AvatarFallback>

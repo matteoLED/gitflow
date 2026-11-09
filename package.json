@@ -18,12 +18,16 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@tanstack/react-query": "^5.107.1",
+    "@tanstack/react-router": "^1.170.46",
     "@tanstack/react-virtual": "^3.14.26",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.8.4",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.70.0",
@@ -31,7 +35,11 @@
     "radix-ui": "^1.8.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.19.1",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
     "shiki": "^4.6.0",
     "tailwind-merge": "^3.7.0",
     "zustand": "^5.1.0"
@@ -59,5 +67,6 @@
     "typescript-eslint": "^8.72.1",
     "vite": "^8.0.16",
     "vitest": "^5.1.0"
-  }
+  },
+  "packageManager": "pnpm@11.8.0+sha512.c1f5e7c4cb241c8f174b743851d82f42b802324afc8b0f116b96adb15aa06664948dde36960a3ba1079ba5b4b29dd0140135b94b5b5f5263592249d68e555f26"
 }

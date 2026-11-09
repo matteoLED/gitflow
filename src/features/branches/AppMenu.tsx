@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useEffect } from "react";
 import { Check, Ellipsis, FolderGit2, FolderOpen, Languages, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,7 @@ import { useUiStore } from "@/stores/ui-store";
 import { useOpenRepository } from "@/features/repositories/use-open-repository";
 import type { RepositoryInfo } from "@/types/git";
 
-const ITEM = "h-7 gap-2 px-2 text-[12px] [&_svg]:size-3.5 [&_svg]:text-muted-foreground";
+const ITEM = "h-7 gap-2 px-2 text-[13px] [&_svg]:size-3.5 [&_svg]:text-muted-foreground";
 
 /** ⌘O opens the folder picker from anywhere in the app. */
 function useOpenShortcut(pick: () => void) {
@@ -35,13 +36,13 @@ function useOpenShortcut(pick: () => void) {
 
 function LanguageMenu() {
   const t = useT();
-  const { locale, setLocale } = useLocaleStore();
+  const { locale, setLocale } = useLocaleStore(useShallow((s) => ({ locale: s.locale, setLocale: s.setLocale })));
   return (
     <DropdownMenuSub>
       <DropdownMenuSubTrigger className={ITEM}>
         <Languages aria-hidden />
         {t("menu.language")}
-        <span className="ml-auto pr-1 text-[11px] text-muted-foreground">{LOCALES[locale]}</span>
+        <span className="ml-auto pr-1 text-[12px] text-muted-foreground">{LOCALES[locale]}</span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="w-36">
         {(Object.keys(LOCALES) as Locale[]).map((code) => (
@@ -67,7 +68,7 @@ export function AppMenu({ repo }: { repo: RepositoryInfo }) {
           variant="ghost"
           size="icon-sm"
           aria-label={t("menu.label")}
-          className="ml-auto size-6 text-muted-foreground data-[state=open]:bg-white/10 data-[state=open]:text-foreground"
+          className="size-8 shrink-0 text-muted-foreground data-[state=open]:bg-white/10 data-[state=open]:text-foreground"
         >
           <Ellipsis />
         </Button>
@@ -78,22 +79,22 @@ export function AppMenu({ repo }: { repo: RepositoryInfo }) {
             <FolderGit2 aria-hidden className="size-4" />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-[12px] font-semibold">{repo.name}</p>
-            <MiddleTruncate text={repo.path} tail={22} className="text-[10.5px] text-muted-foreground" />
+            <p className="truncate text-[13px] font-semibold">{repo.name}</p>
+            <MiddleTruncate text={repo.path} tail={22} className="text-[11.5px] text-muted-foreground" />
           </div>
         </div>
         <DropdownMenuSeparator />
         <DropdownMenuItem className={ITEM} onSelect={() => void pick()}>
           <FolderOpen aria-hidden />
           {t("menu.open")}
-          <DropdownMenuShortcut className="text-[11px]">⌘O</DropdownMenuShortcut>
+          <DropdownMenuShortcut className="text-[12px]">⌘O</DropdownMenuShortcut>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <LanguageMenu />
         <DropdownMenuItem className={ITEM} onSelect={() => openSettings(true)}>
           <Settings aria-hidden />
           {t("menu.settings")}
-          <DropdownMenuShortcut className="text-[11px]">⌘,</DropdownMenuShortcut>
+          <DropdownMenuShortcut className="text-[12px]">⌘,</DropdownMenuShortcut>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

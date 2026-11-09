@@ -1,6 +1,6 @@
-import { useState, type ComponentProps, type FormEvent } from "react";
+import { useId, useState, type ComponentProps, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { BrailleLoader } from "@/components/braille-loader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AuthorAvatar } from "@/components/author-avatar";
@@ -11,7 +11,7 @@ import { toGitError } from "@/lib/errors";
 import { useNoticesStore } from "@/stores/notices-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { GitIdentity } from "@/types/git";
-import { SettingsGroup } from "./SettingsDialog";
+import { Group, Row } from "./settings-ui";
 import { useT } from "@/i18n";
 
 function GithubAccount({ repoPath }: { repoPath: string }) {
@@ -19,33 +19,37 @@ function GithubAccount({ repoPath }: { repoPath: string }) {
   const user = useGithubUser(repoPath);
   if (user.isError) {
     return (
-      <p className="py-2 text-[11.5px] text-muted-foreground">
-        {t("settings.notConnected", { message: toGitError(user.error).message })}
-      </p>
+      <Row
+        label={t("settings.notConnectedTitle")}
+        hint={t("settings.notConnected", { message: toGitError(user.error).message })}
+      />
     );
   }
-  if (!user.data) return <p className="py-2 text-[11.5px] text-muted-foreground">{t("common.loading")}</p>;
+  if (!user.data) return <Row label={<BrailleLoader variant="grid-orbit" label={t("common.loading")} />} />;
+  const name = user.data.name ?? user.data.login;
   return (
-    <div className="flex items-center gap-3 py-2">
-      <AuthorAvatar name={user.data.name ?? user.data.login} src={user.data.avatarUrl} className="size-10" />
-      <div className="min-w-0">
-        <p className="text-[12.5px] font-semibold">{user.data.name ?? user.data.login}</p>
-        <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+    <div className="flex items-center gap-3.5 px-4 py-3.5">
+      <AuthorAvatar name={name} src={user.data.avatarUrl} className="size-12" />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[15px] font-semibold">{name}</p>
+        <p className="flex items-center gap-1 text-[12.5px] text-muted-foreground">
           <GithubIcon className="size-3" />@{user.data.login}
         </p>
       </div>
+      <span className="flex items-center gap-1.5 rounded-full border border-added/30 bg-added/10 px-2.5 py-1 text-[12px] text-added-foreground">
+        <span aria-hidden className="size-1.5 rounded-full bg-added-foreground" />
+        {t("settings.connected")}
+      </span>
     </div>
   );
 }
 
-function Field({ id, label, ...props }: { id: string; label: string } & ComponentProps<typeof Input>) {
+function FieldRow({ label, ...props }: { label: string } & ComponentProps<typeof Input>) {
+  const id = useId();
   return (
-    <div className="grid grid-cols-[6rem_1fr] items-center gap-3 py-1.5">
-      <label htmlFor={id} className="text-[11.5px] text-foreground/85">
-        {label}
-      </label>
-      <Input id={id} className="h-7 text-[12px] md:text-[12px]" {...props} />
-    </div>
+    <Row label={label} htmlFor={id}>
+      <Input id={id} className="h-7 w-64 text-[13px] md:text-[13px]" {...props} />
+    </Row>
   );
 }
 
@@ -72,25 +76,12 @@ function IdentityForm({ initial }: { initial: GitIdentity }) {
     save.mutate();
   };
   return (
-    <form onSubmit={submit}>
-      <Field
-        id="git-name"
-        label={t("settings.name")}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        autoComplete="name"
-      />
-      <Field
-        id="git-email"
-        label={t("settings.email")}
-        type="email"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-      />
-      <div className="flex items-center justify-between gap-3 py-2">
-        <p className="text-[10.5px] text-muted-foreground">{t("settings.identityHint")}</p>
-        <Button type="submit" size="sm" disabled={!dirty || save.isPending} className="h-7 text-[11.5px]">
-          {save.isPending && <Loader2 aria-hidden className="animate-spin" />}
+    <form onSubmit={submit} className="divide-y divide-white/[0.06]">
+      <FieldRow label={t("settings.name")} value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />
+      <FieldRow label={t("settings.email")} type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+      <div className="flex justify-end px-4 py-2.5">
+        <Button type="submit" size="sm" disabled={!dirty || save.isPending} className="h-7 text-[13px]">
+          {save.isPending && <BrailleLoader />}
           {t("common.save")}
         </Button>
       </div>
@@ -104,22 +95,18 @@ export function ProfileSection() {
   const identity = useGitIdentity();
   return (
     <>
-      <SettingsGroup title={t("settings.githubAccount")}>
-        {repo ? (
-          <GithubAccount repoPath={repo.path} />
-        ) : (
-          <p className="py-2 text-[11.5px] text-muted-foreground">{t("settings.openRepoFirst")}</p>
-        )}
-      </SettingsGroup>
-      <SettingsGroup title={t("settings.gitIdentity")}>
+      <Group title={t("settings.githubAccount")} description={t("settings.githubHint")}>
+        {repo ? <GithubAccount repoPath={repo.path} /> : <Row label={t("settings.openRepoFirst")} />}
+      </Group>
+      <Group title={t("settings.gitIdentity")} description={t("settings.identityHint")}>
         {identity.isError ? (
-          <p className="py-2 text-[11.5px] text-removed-foreground">{toGitError(identity.error).message}</p>
+          <Row label={toGitError(identity.error).message} />
         ) : identity.data ? (
           <IdentityForm key={`${identity.data.name}|${identity.data.email}`} initial={identity.data} />
         ) : (
-          <p className="py-2 text-[11.5px] text-muted-foreground">{t("common.loading")}</p>
+          <Row label={<BrailleLoader variant="grid-orbit" label={t("common.loading")} />} />
         )}
-      </SettingsGroup>
+      </Group>
     </>
   );
 }

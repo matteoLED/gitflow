@@ -58,51 +58,51 @@
   --color-diff-removed-number: var(--diff-removed-number);
 }
 
-/* V1 is dark-only: tokens live on :root. Values sampled from the reference design. */
+/* V1 is dark-only: tokens live on :root. Values sampled from the reference design, then lifted for contrast. */
 :root {
   color-scheme: dark;
   /* Berkeley Mono is licensed per machine: used when installed locally, never bundled (see @font-face above). */
   --code-font:
     "Berkeley Mono", "Berkeley Mono Trial Fixed", "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
-  --code-size: 11px;
+  --code-size: 12px;
   --radius: 0.5rem;
 
   --background: #1b1c1f;
   --panel: #1b1c1f;
-  --sidebar: #25262b;
-  --card: #1b1c1f;
-  --border: #2a2b30;
+  --sidebar: #232428; /* window base, lighter than the columns as in the reference */
+  --card: #202125;
+  --border: #2f3036;
 
-  --foreground: #e0e2e2;
-  --card-foreground: #e0e2e2;
-  --sidebar-foreground: #9a9ba1;
-  --muted-foreground: #86878c;
-  --popover: #26272c;
-  --popover-foreground: #e0e2e2;
+  --foreground: #eeeff1;
+  --card-foreground: #eeeff1;
+  --sidebar-foreground: #b9bac1;
+  --muted-foreground: #a2a3ab;
+  --popover: #2a2b30;
+  --popover-foreground: #eeeff1;
 
-  --primary: #7770c8;
+  --primary: #7770c8; /* the reference's violet (Settings > Appearance can change it) */
   --primary-foreground: #ffffff;
   --selection: #7770c8;
-  --secondary: #2a2b30;
-  --secondary-foreground: #e4e4e9;
-  --muted: #26272b;
-  --accent: #2a2b30;
+  --secondary: #2c2d32;
+  --secondary-foreground: #e4e5ea;
+  --muted: #24252a;
+  --accent: #3a3b42; /* hover/highlight: must stand out from --popover */
   --accent-foreground: #f2f2f5;
-  --input: #303136;
+  --input: #36373e;
   --ring: #8e88d8;
   --destructive: #b65f68;
 
   --added: #4f9b68;
-  --added-foreground: #8db88f; /* text on dark surfaces: ≥ 4.5:1 */
+  --added-foreground: #9ccb9e; /* text on dark surfaces: ≥ 4.5:1 */
   --removed: #b65f68;
-  --removed-foreground: #d38a8f;
+  --removed-foreground: #e39a9f;
   --renamed: #c8a35a;
 
   /* Diff rows, sampled from the reference: greyish tints that leave syntax colors readable. */
-  --diff-added-row: #2b322e;
-  --diff-removed-row: #372e2f;
-  --diff-added-number: #86a383;
-  --diff-removed-number: #b88083;
+  --diff-added-row: #2b3a30;
+  --diff-removed-row: #412f31;
+  --diff-added-number: #98b895;
+  --diff-removed-number: #cc9295;
 }
 
 @layer base {
@@ -115,13 +115,117 @@
     @apply h-full overflow-hidden;
   }
   body {
-    @apply bg-background text-foreground font-sans text-[12px] antialiased select-none;
+    @apply bg-background text-foreground font-sans text-[13px] antialiased select-none;
     font-optical-sizing: auto;
+    font-feature-settings: "cv11", "ss03";
+  }
+  /* Tailwind v4 dropped the pointer cursor on buttons; everything clickable gets it back. */
+  button:not(:disabled),
+  [role="button"]:not(:disabled),
+  [role="menuitem"]:not([data-disabled]),
+  [role="option"]:not([data-disabled]),
+  [role="tab"]:not(:disabled),
+  a[href],
+  summary,
+  label[for],
+  select:not(:disabled) {
+    cursor: pointer;
   }
   code,
   .font-mono {
     font-feature-settings:
       "calt" 0,
       "liga" 0;
+  }
+}
+
+/* Agent answers rendered from Markdown, in the app's own type scale. */
+@layer components {
+  /* Big page titles: Inter at display size, tight and heavy, like Linear's headings. */
+  .font-display {
+    font-weight: 650;
+    letter-spacing: -0.022em;
+    line-height: 1.15;
+  }
+  /* Raised surface: hairline border, a faint top highlight (light from above), soft drop shadow. */
+  .surface {
+    @apply rounded-xl border border-white/[0.07] bg-card;
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.035),
+      0 1px 2px rgb(0 0 0 / 0.25);
+  }
+  kbd.kbd {
+    @apply inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[5px] border border-white/[0.1] bg-white/[0.04] px-1 font-sans text-[10.5px] text-muted-foreground;
+    box-shadow: inset 0 -1px 0 rgb(255 255 255 / 0.05);
+  }
+  .markdown {
+    @apply text-[13.5px] leading-relaxed text-foreground/95;
+  }
+  .markdown > * + * {
+    @apply mt-2.5;
+  }
+  .markdown h1,
+  .markdown h2,
+  .markdown h3 {
+    @apply mt-4 font-semibold text-foreground;
+  }
+  .markdown h1 {
+    @apply text-[17px];
+  }
+  .markdown h2 {
+    @apply text-[15.5px];
+  }
+  .markdown h3 {
+    @apply text-[14px];
+  }
+  .markdown ul {
+    @apply list-disc space-y-1 pl-5;
+  }
+  .markdown ol {
+    @apply list-decimal space-y-1 pl-5;
+  }
+  .markdown li > ul,
+  .markdown li > ol {
+    @apply mt-1;
+  }
+  .markdown strong {
+    @apply font-semibold text-foreground;
+  }
+  .markdown :not(pre) > code {
+    @apply rounded bg-white/[0.08] px-1 py-px font-mono text-[0.9em];
+  }
+  .markdown pre {
+    @apply overflow-x-auto rounded-lg border border-white/8 bg-black/25 p-3 font-mono text-[12px] leading-relaxed;
+  }
+  .markdown img {
+    @apply inline-block h-auto max-w-full rounded-md align-middle;
+  }
+  .markdown details {
+    @apply rounded-lg border border-white/[0.08] px-3 py-2;
+  }
+  .markdown summary {
+    @apply cursor-pointer font-medium text-foreground;
+  }
+  .markdown details[open] > summary {
+    @apply mb-2;
+  }
+  .markdown sup {
+    @apply text-[0.85em] text-muted-foreground;
+  }
+  .markdown table {
+    @apply w-full border-collapse overflow-hidden rounded-lg text-[12.5px];
+  }
+  .markdown th,
+  .markdown td {
+    @apply border border-white/10 px-2.5 py-1.5 text-left;
+  }
+  .markdown th {
+    @apply bg-white/[0.04] font-medium;
+  }
+  .markdown blockquote {
+    @apply border-l-2 border-white/15 pl-3 text-muted-foreground;
+  }
+  .markdown hr {
+    @apply border-white/10;
   }
 }

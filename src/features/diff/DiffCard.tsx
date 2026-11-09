@@ -1,17 +1,21 @@
+import { useThemeKind } from "@/features/settings/use-apply-appearance";
+import { useShallow } from "zustand/react/shallow";
 import { useEffect, useMemo, useState, type ReactNode, type Ref } from "react";
-import { ArrowDownToLine, ArrowUpToLine, ChevronDown, ChevronsUpDown, Loader2 } from "lucide-react";
+import { ArrowDownToLine, ArrowUpToLine, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { BrailleLoader } from "@/components/braille-loader";
 import { FileIcon } from "@/components/file-icon";
 import { MiddleTruncate } from "@/components/middle-truncate";
 import { useViewSettings } from "@/stores/view-settings-store";
-import { useAppearance } from "@/stores/appearance-store";
+import { LIGHT_SYNTAX_THEMES, useAppearance } from "@/stores/appearance-store";
 import { toGitError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import type { DiffLine, FileDiff, FileStatus } from "@/types/git";
-import { buildSegments, EXPAND_STEP, revealGap, type GapReveal, type Segment } from "./diff-model";
+import { buildSegments, CONTEXT_LINES, EXPAND_STEP, revealGap, type GapReveal, type Segment } from "./diff-model";
 import { parseUnifiedDiff } from "./parse-unified-diff";
-import { highlightDiff, type LineTokens } from "./syntax";
+import { highlightDiff, type LineTokens, cachedTokens } from "./syntax-client";
 import { toSplitRows } from "./split-rows";
 import { useT } from "@/i18n";
+import { ImageDiff, isImage, type ImageSource } from "./ImageDiff";
 
 const MAX_RENDERED_LINES = 3000;
 
@@ -19,7 +23,7 @@ const MAX_RENDERED_LINES = 3000;
 const ROW_STYLES: Record<DiffLine["kind"], { row: string; number: string }> = {
   added: { row: "bg-diff-added shadow-[inset_2px_0_0] shadow-added/70", number: "text-diff-added-number" },
   removed: { row: "bg-diff-removed shadow-[inset_2px_0_0] shadow-removed/70", number: "text-diff-removed-number" },
-  context: { row: "", number: "text-muted-foreground/55" },
+  context: { row: "", number: "text-muted-foreground" },
 };
 
 type TokenOf = (line: DiffLine) => LineTokens[number] | undefined;
@@ -100,7 +104,7 @@ function GutterButton({ label, onClick, children }: { label: string; onClick: ()
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="grid size-5 place-items-center rounded text-muted-foreground outline-none hover:bg-white/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5"
+      className="grid size-5 place-items-center rounded text-muted-foreground outline-none hover:bg-white/[0.14] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5"
     >
       {children}
     </button>
@@ -125,7 +129,7 @@ function Gap({ gap, reveal, onReveal, ctx }: GapProps) {
     <>
       <Lines lines={head} ctx={ctx} />
       {hidden > 0 && (
-        <div className="h-[22px] font-sans text-[10px]">
+        <div className="h-6 font-sans text-[11px]">
           {/* Pinned to the visible width so controls stay in view when long lines scroll horizontally. */}
           <div className="sticky left-0 flex h-full w-[100cqw] items-center">
             <div style={{ width: ctx.gutter }} className="flex shrink-0 gap-0.5 pl-3">
@@ -163,9 +167,16 @@ function Gap({ gap, reveal, onReveal, ctx }: GapProps) {
   );
 }
 
-function useTokens(path: string, lines: DiffLine[], enabled: boolean): TokenOf {
-  const theme = useAppearance((s) => s.syntaxTheme);
-  const [tokens, setTokens] = useState<{ lines: DiffLine[]; theme: string; tokens: LineTokens } | null>(null);
+export function useTokens(path: string, lines: DiffLine[], enabled: boolean): TokenOf {
+  const chosen = useAppearance((s) => s.syntaxTheme);
+  // A dark code theme is unreadable on a light interface (and the reverse): fall back to a matching one.
+  const kind = useThemeKind();
+  const theme = kind === "light" && !LIGHT_SYNTAX_THEMES.has(chosen) ? "github-light" : chosen;
+  // Starts from the cache: a card scrolled back into view doesn't flash uncolored.
+  const [tokens, setTokens] = useState<{ lines: DiffLine[]; theme: string; tokens: LineTokens } | null>(() => {
+    const hit = enabled ? cachedTokens(lines, theme) : null;
+    return hit ? { lines, theme, tokens: hit } : null;
+  });
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
@@ -199,10 +210,15 @@ function Note({ children }: { children: ReactNode }) {
   return <p className="px-4 py-3 text-xs text-muted-foreground">{children}</p>;
 }
 
-function DiffLines({ path, lines }: { path: string; lines: DiffLine[] }) {
+function DiffLines({ path, lines, expandAll }: { path: string; lines: DiffLine[]; expandAll: boolean }) {
   const t = useT();
-  const { layout, wrapLines, syntaxHighlighting } = useViewSettings();
-  const { segments, truncated } = useMemo(() => capSegments(buildSegments(lines)), [lines]);
+  const { layout, wrapLines, syntaxHighlighting } = useViewSettings(
+    useShallow((s) => ({ layout: s.layout, wrapLines: s.wrapLines, syntaxHighlighting: s.syntaxHighlighting })),
+  );
+  const { segments, truncated } = useMemo(
+    () => capSegments(buildSegments(lines, expandAll ? Number.MAX_SAFE_INTEGER : CONTEXT_LINES)),
+    [lines, expandAll],
+  );
   const [reveals, setReveals] = useState<Record<number, GapReveal>>({});
   const tokenOf = useTokens(path, lines, syntaxHighlighting);
   const maxLine = lines.reduce((max, l) => Math.max(max, l.newLine ?? 0, l.oldLine ?? 0), 0);
@@ -242,23 +258,32 @@ function DiffLines({ path, lines }: { path: string; lines: DiffLine[] }) {
   );
 }
 
-type DiffBodyProps = { path: string; diff?: FileDiff; error?: unknown; loading: boolean };
+type DiffBodyProps = {
+  path: string;
+  diff?: FileDiff;
+  error?: unknown;
+  loading: boolean;
+  expandAll?: boolean;
+  /** Where to read a binary image from, to show it instead of "binary file". */
+  image?: ImageSource & { status: FileStatus };
+};
 
-export function DiffBody({ path, diff, error, loading }: DiffBodyProps) {
+export function DiffBody({ path, diff, error, loading, expandAll = false, image }: DiffBodyProps) {
   const t = useT();
   const lines = useMemo(() => parseUnifiedDiff(diff?.patch ?? "").flatMap((h) => h.lines), [diff?.patch]);
   if (error) return <Note>{t("diff.loadError", { message: toGitError(error).message })}</Note>;
   if (loading || !diff) {
     return (
       <Note>
-        <Loader2 aria-hidden className="mr-1.5 inline size-3 animate-spin" />
+        <BrailleLoader className="mr-1.5 text-primary" label={t("diff.loadingDiff")} />
         {t("diff.loadingDiff")}
       </Note>
     );
   }
+  if (diff.binary && image && isImage(path)) return <ImageDiff path={path} status={image.status} source={image} />;
   if (diff.binary) return <Note>{t("diff.binary")}</Note>;
   if (lines.length === 0) return <Note>{t("diff.noText")}</Note>;
-  return <DiffLines path={path} lines={lines} />;
+  return <DiffLines path={path} lines={lines} expandAll={expandAll} />;
 }
 
 export type DiffCardFile = {
@@ -276,10 +301,12 @@ type DiffCardProps = {
   highlighted?: boolean;
   cardRef?: Ref<HTMLElement>;
   id?: string;
+  /** Controls on the right of the header (reviewed checkbox, file menu). */
+  actions?: ReactNode;
   children: ReactNode;
 };
 
-export function DiffCard({ file, open, onToggle, highlighted = false, cardRef, id, children }: DiffCardProps) {
+export function DiffCard({ file, open, onToggle, highlighted = false, cardRef, id, actions, children }: DiffCardProps) {
   const t = useT();
   const showLineCounts = useViewSettings((s) => s.showLineCounts);
   const slash = file.path.lastIndexOf("/");
@@ -290,39 +317,41 @@ export function DiffCard({ file, open, onToggle, highlighted = false, cardRef, i
       aria-label={file.path}
       className={cn("overflow-hidden rounded-lg border border-white/8 bg-card", highlighted && "border-primary/60")}
     >
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        className={cn(
-          "flex h-7 w-full items-center gap-2 bg-white/[0.02] px-3 text-left outline-none hover:bg-white/[0.04] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-          open && "border-b border-white/8",
-        )}
-      >
-        <ChevronDown
-          aria-hidden
-          className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !open && "-rotate-90")}
-        />
-        <FileIcon path={file.path} className="size-3.5" />
-        <span className={cn("truncate text-[11px] font-semibold", file.status === "added" && "text-added-foreground")}>
-          {file.path.slice(slash + 1)}
-        </span>
-        <MiddleTruncate
-          className="text-[10.5px] text-muted-foreground"
-          tail={18}
-          text={
-            file.previousPath
-              ? t("diff.renamedFrom", { path: file.previousPath })
-              : file.path.slice(0, Math.max(slash, 0))
-          }
-        />
-        {showLineCounts && (
-          <span className="ml-auto flex shrink-0 gap-2 pl-2 font-mono text-[10px]">
-            {!!file.additions && <span className="text-added-foreground">+{file.additions}</span>}
-            {!!file.deletions && <span className="text-removed-foreground">-{file.deletions}</span>}
+      <div className={cn("flex h-10 items-center bg-card pr-2", open && "border-b border-white/8")}>
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={onToggle}
+          className="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-left outline-none hover:bg-white/[0.04] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        >
+          <ChevronDown
+            aria-hidden
+            className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !open && "-rotate-90")}
+          />
+          <FileIcon path={file.path} className="size-3.5" />
+          <span
+            className={cn("truncate text-[12px] font-semibold", file.status === "added" && "text-added-foreground")}
+          >
+            {file.path.slice(slash + 1)}
           </span>
-        )}
-      </button>
+          <MiddleTruncate
+            className="text-[11.5px] text-muted-foreground"
+            tail={18}
+            text={
+              file.previousPath
+                ? t("diff.renamedFrom", { path: file.previousPath })
+                : file.path.slice(0, Math.max(slash, 0))
+            }
+          />
+          {showLineCounts && (
+            <span className="ml-auto flex shrink-0 gap-2 pl-2 font-mono text-[11px]">
+              {!!file.additions && <span className="text-added-foreground">+{file.additions}</span>}
+              {!!file.deletions && <span className="text-removed-foreground">-{file.deletions}</span>}
+            </span>
+          )}
+        </button>
+        {actions}
+      </div>
       {open && children}
     </article>
   );

@@ -12,3 +12,26 @@ export function useInView<T extends Element>(rootMargin = "400px") {
   }, [seen, rootMargin]);
   return [ref, seen] as const;
 }
+
+/**
+ * Whether the element is near the viewport right now (both ways), and its height when it last left: long
+ * lists render far items as empty blocks of that height, so scrolling stays smooth whatever their length.
+ */
+export function useNearViewport<T extends HTMLElement>(rootMargin = "1500px") {
+  const ref = useRef<T>(null);
+  const [state, setState] = useState({ near: typeof IntersectionObserver === "undefined", height: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      ([entry]) =>
+        setState((prev) =>
+          entry.isIntersecting === prev.near ? prev : { near: entry.isIntersecting, height: el.offsetHeight },
+        ),
+      { rootMargin },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [rootMargin]);
+  return [ref, state] as const;
+}

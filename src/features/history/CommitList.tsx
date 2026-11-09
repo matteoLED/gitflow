@@ -1,3 +1,5 @@
+import { useShallow } from "zustand/react/shallow";
+import { DataUnavailable } from "@/components/states";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -8,14 +10,19 @@ import {
   GitCommitHorizontal,
   SearchX,
   Tag,
-  TriangleAlert,
   Crosshair,
+  FileDiff,
+  Layers,
 } from "lucide-react";
-import { FilterInput, PanelHeader, PanelMessage, PanelToolbar } from "@/components/layout/panel";
-import { useCommits, useRefs } from "@/lib/git-queries";
+import { BrailleLoader } from "@/components/braille-loader";
+import { buildGraph, type GraphRow } from "./graph";
+import { stackOf } from "@/features/github/stacks";
+import { useOpenPullRequest } from "@/features/github/PullRequestList";
+import { useViewSettings } from "@/stores/view-settings-store";
+import { FilterInput, PanelHeader, PanelLoading, PanelMessage, PanelToolbar } from "@/components/layout/panel";
+import { useCommits, usePullRequests, useRefs } from "@/lib/git-queries";
 import { formatCommitDate } from "@/lib/format-date";
 import { nextListIndex } from "@/lib/list-navigation";
-import { toGitError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { splitSubject } from "@/lib/commit-subject";
 import { HistoryOptions } from "./HistoryOptions";
@@ -24,7 +31,7 @@ import type { CommitRef, CommitSummary } from "@/types/git";
 import { useT } from "@/i18n";
 
 const REF_ICONS = { head: Crosshair, branch: GitBranch, remote: Cloud, tag: Tag } as const;
-const ROW_HEIGHT = 40;
+const ROW_HEIGHT = 46;
 const rowId = (hash: string) => `commit-${hash}`;
 
 function matches(commit: CommitSummary, query: string): boolean {
@@ -52,7 +59,7 @@ function RefBadge({ badge }: { badge: Badge }) {
   return (
     <span
       title={badge.synced ? t("history.inSync", { name: badge.name }) : badge.name}
-      className="inline-flex max-w-40 min-w-0 shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[10px] text-foreground/85"
+      className="inline-flex max-w-40 min-w-0 shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] text-foreground/85"
     >
       <Icon aria-hidden className="size-3 shrink-0" />
       <span className="truncate">{badge.name}</span>
@@ -61,9 +68,62 @@ function RefBadge({ badge }: { badge: Badge }) {
   );
 }
 
-type CommitRowProps = { commit: CommitSummary; selected: boolean; top: number; onSelect: () => void };
+const LANE = 12;
+const NODE_Y = 15;
+const LANE_COLORS = ["var(--primary)", "#5fb3a8", "#d39a5f", "#c77dbb", "#6f9fd8", "#8db88f"];
+const MAX_LANES = 8;
 
-function CommitRow({ commit, selected, top, onSelect }: CommitRowProps) {
+const laneX = (lane: number) => 10 + Math.min(lane, MAX_LANES - 1) * LANE;
+
+/** One row of the commit graph: lines from above into the node or passing by, lines down to the parents. */
+function GraphCell({ row, merge, selected }: { row: GraphRow; merge: boolean; selected: boolean }) {
+  const path = (s: GraphRow["segments"][number]) => {
+    const [y1, y2] = s.part === "top" ? [0, NODE_Y] : [NODE_Y, ROW_HEIGHT];
+    const [x1, x2] = [laneX(s.from), laneX(s.to)];
+    if (x1 === x2) return `M${x1} ${y1}V${y2}`;
+    // Branch lines curve between lanes, like Fork and GitKraken.
+    return `M${x1} ${y1}C${x1} ${y2} ${x2} ${y1} ${x2} ${y2}`;
+  };
+  const color = LANE_COLORS[row.color % LANE_COLORS.length];
+  return (
+    <svg
+      aria-hidden
+      className="absolute top-0 left-0 overflow-visible"
+      width={laneX(row.lanes) + 4}
+      height={ROW_HEIGHT}
+    >
+      {row.segments.map((s, i) => (
+        <path
+          key={i}
+          d={path(s)}
+          fill="none"
+          strokeWidth={1.6}
+          stroke={LANE_COLORS[s.color % LANE_COLORS.length]}
+          strokeOpacity={0.75}
+        />
+      ))}
+      <circle
+        cx={laneX(row.col)}
+        cy={NODE_Y}
+        r={merge ? 3 : 4}
+        fill={selected || merge ? color : "var(--panel)"}
+        stroke={color}
+        strokeWidth={2}
+      />
+    </svg>
+  );
+}
+
+type CommitRowProps = {
+  commit: CommitSummary;
+  selected: boolean;
+  top: number;
+  onSelect: () => void;
+  graph: GraphRow | null;
+  graphWidth: number;
+};
+
+function CommitRow({ commit, selected, top, onSelect, graph, graphWidth }: CommitRowProps) {
   const t = useT();
   const badges = badgesOf(commit.refs);
   const { title, pr } = splitSubject(commit.subject);
@@ -75,27 +135,27 @@ function CommitRow({ commit, selected, top, onSelect }: CommitRowProps) {
       aria-selected={selected}
       onClick={onSelect}
       title={`${commit.subject}\n${commit.hash.slice(0, 10)} · ${commit.author}`}
-      style={{ transform: `translateY(${top}px)`, height: ROW_HEIGHT }}
+      style={{ transform: `translateY(${top}px)`, height: ROW_HEIGHT, paddingLeft: graphWidth }}
       className={cn(
-        "absolute inset-x-0 flex cursor-default flex-col justify-center gap-0.5 overflow-hidden rounded-lg pr-3 pl-8 hover:bg-white/4",
-        selected && "bg-white/[0.06] hover:bg-white/[0.06]",
+        "absolute inset-x-0 flex cursor-default flex-col justify-center gap-0.5 overflow-hidden rounded-lg pr-3 hover:bg-white/[0.07]",
+        selected && "bg-white/[0.06] hover:bg-white/[0.09]",
       )}
     >
-      <span aria-hidden className="absolute top-0 bottom-0 left-3.5 w-px bg-primary/30" />
-      <span
-        aria-hidden
-        className={cn(
-          "absolute top-[11px] left-[11px] size-[7px] rounded-full border-[1.5px] border-primary bg-panel",
-          (selected || commit.parents.length > 1) && "bg-primary",
-        )}
-      />
-      <span className="truncate text-[11.5px] font-medium text-foreground">{title}</span>
-      <span className="flex min-w-0 items-center gap-2 text-[10.5px] text-muted-foreground">
+      {graph ? (
+        <GraphCell row={graph} merge={commit.parents.length > 1} selected={selected} />
+      ) : (
+        <span
+          aria-hidden
+          className="absolute top-[11px] left-[7px] size-2 rounded-full border-2 border-primary bg-panel"
+        />
+      )}
+      <span className="truncate text-[12.5px] font-medium text-foreground">{title}</span>
+      <span className="flex min-w-0 items-center gap-2 text-[11.5px] text-muted-foreground">
         {/* Badges clip at this box's edge instead of squeezing, so the date always stays readable. */}
         <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           <span className="max-w-[45%] shrink-0 truncate">{commit.author}</span>
           {pr && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[10px] text-foreground/85">
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] text-foreground/85">
               <GitPullRequest aria-hidden className="size-3" />#{pr}
             </span>
           )}
@@ -108,7 +168,7 @@ function CommitRow({ commit, selected, top, onSelect }: CommitRowProps) {
                 .slice(MAX_BADGES)
                 .map((b) => b.name)
                 .join(", ")}
-              className="shrink-0 text-[10px]"
+              className="shrink-0 text-[11px]"
             >
               +{extra}
             </span>
@@ -124,21 +184,23 @@ function CommitRow({ commit, selected, top, onSelect }: CommitRowProps) {
 
 function HistoryHeader({ repoPath }: { repoPath: string }) {
   const t = useT();
-  const { historyRev, historyLabel } = useWorkspaceStore();
+  const { historyRev, historyLabel } = useWorkspaceStore(
+    useShallow((s) => ({ historyRev: s.historyRev, historyLabel: s.historyLabel })),
+  );
   const refs = useRefs(repoPath).data;
   const headBranch = refs?.branches.find((b) => b.name === refs.head.branch);
   const title = historyLabel ?? historyRev ?? refs?.head.branch ?? "HEAD";
   return (
     <PanelHeader>
       <div data-tauri-drag-region className="min-w-0">
-        <h2 className="truncate text-[12px] font-semibold">{title}</h2>
+        <h2 className="truncate text-[13px] font-semibold">{title}</h2>
         {historyLabel && historyRev && (
-          <p className="truncate text-[10.5px] text-muted-foreground" title={historyRev}>
+          <p className="truncate text-[11.5px] text-muted-foreground" title={historyRev}>
             {historyRev}
           </p>
         )}
         {historyRev === null && headBranch && (
-          <p className="truncate text-[10.5px] text-muted-foreground">
+          <p className="truncate text-[11.5px] text-muted-foreground">
             ↑{headBranch.ahead} ↓{headBranch.behind} {headBranch.upstream ?? t("history.noUpstream")}
           </p>
         )}
@@ -151,7 +213,9 @@ function HistoryHeader({ repoPath }: { repoPath: string }) {
 /** Like the reference: commits waiting upstream, one click away. Shown when viewing HEAD and behind. */
 function IncomingCommits({ repoPath }: { repoPath: string }) {
   const t = useT();
-  const { historyRev, showHistoryOf } = useWorkspaceStore();
+  const { historyRev, showHistoryOf } = useWorkspaceStore(
+    useShallow((s) => ({ historyRev: s.historyRev, showHistoryOf: s.showHistoryOf })),
+  );
   const refs = useRefs(repoPath).data;
   const branch = refs?.branches.find((b) => b.name === refs.head.branch);
   if (historyRev !== null || !branch?.upstream || branch.behind === 0) return null;
@@ -160,7 +224,7 @@ function IncomingCommits({ repoPath }: { repoPath: string }) {
     <button
       type="button"
       onClick={() => showHistoryOf(upstream)}
-      className="mx-2 mb-1 flex h-6 shrink-0 items-center gap-1 rounded-lg border border-dashed border-white/15 px-3 text-[10.5px] text-muted-foreground outline-none hover:border-white/30 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      className="mx-2 mb-1 flex h-6 shrink-0 items-center gap-1 rounded-lg border border-dashed border-white/15 px-3 text-[11.5px] text-muted-foreground outline-none hover:border-white/30 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span className="truncate">{t.plural("history.incoming", branch.behind, { upstream })}</span>
       <ChevronRight aria-hidden className="size-3 shrink-0" />
@@ -168,14 +232,115 @@ function IncomingCommits({ repoPath }: { repoPath: string }) {
   );
 }
 
+/** Where the open PR sits in its stack, like Linear: top first, the base branch last. Click to switch. */
+function PullRequestStack({ repoPath }: { repoPath: string }) {
+  const t = useT();
+  const current = useWorkspaceStore((s) => s.pullRequest);
+  const prs = usePullRequests(repoPath).data ?? [];
+  const { open, loading } = useOpenPullRequest(repoPath);
+  const stack = current ? stackOf(prs, current.number) : null;
+  if (!current || !stack) return null;
+  return (
+    <section className="mx-2 mb-1.5 rounded-lg border border-white/10 px-1.5 py-1.5">
+      <p className="flex items-center gap-1.5 px-1.5 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+        <Layers aria-hidden className="size-3" />
+        {t("github.stack")} · {stack.length}
+      </p>
+      <ol>
+        {stack.map((pr) => {
+          const isCurrent = pr.number === current.number;
+          return (
+            <li key={pr.number}>
+              <button
+                type="button"
+                disabled={isCurrent}
+                onClick={() => void open(pr)}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-[12px] outline-none hover:enabled:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-ring",
+                  isCurrent && "bg-white/[0.05]",
+                )}
+              >
+                {loading === pr.number ? (
+                  <BrailleLoader className="text-primary" />
+                ) : (
+                  <span
+                    className={cn(
+                      "size-2 shrink-0 rounded-full border-2",
+                      isCurrent ? "border-primary bg-primary" : "border-added-foreground",
+                    )}
+                  />
+                )}
+                <span className="shrink-0 text-muted-foreground">#{pr.number}</span>
+                <span className="min-w-0 flex-1 truncate">{pr.title}</span>
+                {isCurrent && <span className="shrink-0 text-[11px] text-muted-foreground">{t("github.current")}</span>}
+              </button>
+            </li>
+          );
+        })}
+        <li className="flex items-center gap-2 px-1.5 py-1 font-mono text-[11.5px] text-muted-foreground">
+          <span className="size-2 shrink-0 rounded-full border-2 border-white/25" />
+          {stack[stack.length - 1].baseRefName}
+        </li>
+      </ol>
+    </section>
+  );
+}
+
+/** In a pull request, its whole diff (what GitHub's "Files changed" shows) sits above its commits. */
+function PullRequestChanges() {
+  const t = useT();
+  const { pullRequest, compareBase, showPullRequestChanges } = useWorkspaceStore(
+    useShallow((s) => ({
+      pullRequest: s.pullRequest,
+      compareBase: s.compareBase,
+      showPullRequestChanges: s.showPullRequestChanges,
+    })),
+  );
+  if (!pullRequest?.base) return null;
+  const selected = compareBase !== null;
+  return (
+    <button
+      type="button"
+      aria-current={selected ? "true" : undefined}
+      onClick={showPullRequestChanges}
+      className={cn(
+        "mx-2 mb-1 flex shrink-0 items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-left outline-none hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-ring",
+        selected && "border-primary/50 bg-primary/10",
+      )}
+    >
+      <FileDiff aria-hidden className={cn("size-3.5 shrink-0", selected ? "text-primary" : "text-muted-foreground")} />
+      <span className="min-w-0">
+        <span className="block truncate text-[12.5px] font-medium">{t("pr.allChanges")}</span>
+        <span className="block truncate text-[11.5px] text-muted-foreground">{t("pr.allChangesHint")}</span>
+      </span>
+    </button>
+  );
+}
+
 export function CommitList({ repoPath }: { repoPath: string }) {
   const t = useT();
-  const { historyRev, selectedCommitHash, selectCommit } = useWorkspaceStore();
+  const { historyRev, selectedCommitHash, selectCommit } = useWorkspaceStore(
+    useShallow((s) => ({
+      historyRev: s.historyRev,
+      selectedCommitHash: s.selectedCommitHash,
+      selectCommit: s.selectCommit,
+    })),
+  );
   const history = useCommits(repoPath, historyRev);
   const [query, setQuery] = useState("");
   const loaded = useMemo(() => history.data?.pages.flat() ?? [], [history.data]);
   const commits = useMemo(() => (query ? loaded.filter((c) => matches(c, query)) : loaded), [loaded, query]);
   const selectedIndex = commits.findIndex((c) => c.hash === selectedCommitHash);
+  // The graph needs the unbroken history: a text filter shows plain dots instead.
+  const { firstParentOnly, hideMerges } = useViewSettings(
+    useShallow((s) => ({ firstParentOnly: s.firstParentOnly, hideMerges: s.hideMerges })),
+  );
+  const graph = useMemo(() => {
+    // Without merges there's no branch shape to draw; first-parent history follows one parent only.
+    if (query || hideMerges) return null;
+    return buildGraph(firstParentOnly ? loaded.map((c) => ({ hash: c.hash, parents: c.parents.slice(0, 1) })) : loaded);
+  }, [loaded, query, hideMerges, firstParentOnly]);
+  const graphWidth = graph ? laneX(Math.min(Math.max(1, ...graph.map((r) => r.lanes)), MAX_LANES)) + 8 : 26;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -210,14 +375,12 @@ export function CommitList({ repoPath }: { repoPath: string }) {
       </PanelToolbar>
       <div className="mt-4" />
       <IncomingCommits repoPath={repoPath} />
+      <PullRequestChanges />
+      <PullRequestStack repoPath={repoPath} />
       {history.isError ? (
-        <PanelMessage
-          icon={<TriangleAlert />}
-          title={t("history.loadError")}
-          hint={toGitError(history.error).message}
-        />
+        <DataUnavailable title={t("history.loadError")} error={history.error} onRetry={() => void history.refetch()} />
       ) : history.isPending ? (
-        <PanelMessage title={t("history.loading")} />
+        <PanelLoading title={t("history.loading")} variant="grid-wave" />
       ) : commits.length === 0 ? (
         query ? (
           <PanelMessage icon={<SearchX />} title={t("history.noMatch")} hint={t("history.noMatchHint")} />
@@ -244,12 +407,17 @@ export function CommitList({ repoPath }: { repoPath: string }) {
                   top={item.start}
                   selected={commit.hash === selectedCommitHash}
                   onSelect={() => selectCommit(commit.hash)}
+                  graph={graph?.[item.index] ?? null}
+                  graphWidth={graphWidth}
                 />
               );
             })}
           </div>
           {isFetchingNextPage && (
-            <p className="py-2 text-center text-xs text-muted-foreground">{t("history.loadingMore")}</p>
+            <p className="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground">
+              <BrailleLoader className="text-primary" label={t("history.loadingMore")} />
+              <span aria-hidden>{t("history.loadingMore")}</span>
+            </p>
           )}
         </div>
       )}

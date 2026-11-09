@@ -1,0 +1,175 @@
+import { useShallow } from "zustand/react/shallow";
+import { useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ChevronRight, Plus, TriangleAlert } from "lucide-react";
+import { ClaudeIcon } from "./agent-icons";
+import { useT } from "@/i18n";
+import { toGitError } from "@/lib/errors";
+import { formatAge } from "@/lib/format-date";
+import { gitBackend } from "@/lib/tauri-git";
+import { cn } from "@/lib/utils";
+import { useAgentsStore, type AgentSelection } from "@/stores/agents-store";
+import { StatusIcon, ghStatus } from "./status";
+
+function Section({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <li className="mb-1.5">
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        onClick={() => setCollapsed((c) => !c)}
+        className="mt-1 flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-[11.5px] font-medium text-muted-foreground outline-none hover:bg-white/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="font-medium">{title}</span>
+        {count !== undefined && <span>{count}</span>}
+        <ChevronRight aria-hidden className={cn("size-3 transition-transform", !collapsed && "rotate-90")} />
+      </button>
+      {!collapsed && <ul className="mt-0.5">{children}</ul>}
+    </li>
+  );
+}
+
+type ItemProps = { selection: AgentSelection; icon: ReactNode; title: string; meta: string; age: string | null };
+
+function Item({ selection, icon, title, meta, age }: ItemProps) {
+  const t = useT();
+  const { selection: current, select } = useAgentsStore(
+    useShallow((s) => ({ selection: s.selection, select: s.select })),
+  );
+  const selected = JSON.stringify(current) === JSON.stringify(selection);
+  return (
+    <li>
+      <button
+        type="button"
+        aria-current={selected ? "true" : undefined}
+        onClick={() => select(selection)}
+        className={cn(
+          "grid w-full grid-cols-[14px_1fr_auto] items-center gap-x-2 rounded-md px-2 py-1.5 text-left outline-none transition-colors hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-ring",
+          selected && "bg-white/[0.08]",
+        )}
+      >
+        {icon}
+        <span className="truncate text-[12.5px]">{title}</span>
+        <span className="text-[11.5px] text-muted-foreground">{age && formatAge(age, undefined, t.locale)}</span>
+        <span className="col-start-2 col-end-4 truncate text-[11.5px] text-muted-foreground">{meta}</span>
+      </button>
+    </li>
+  );
+}
+
+function Empty({ children }: { children: ReactNode }) {
+  return <li className="px-2.5 py-1.5 text-[12px] text-muted-foreground">{children}</li>;
+}
+
+const matches = (query: string, ...texts: (string | null)[]) =>
+  !query || texts.some((text) => text?.toLowerCase().includes(query.toLowerCase()));
+
+function AppRuns({ repoPath, query }: { repoPath: string; query: string }) {
+  const t = useT();
+  // One entry per conversation: its first run.
+  const runs = useAgentsStore((s) => s.runs).filter(
+    (r) => r.repoPath === repoPath && r.thread === r.id && matches(query, r.title),
+  );
+  return (
+    <Section title={t("agents.runs")} count={runs.length}>
+      {runs.length === 0 && <Empty>{t("agents.noRuns")}</Empty>}
+      {runs.map((run) => (
+        <Item
+          key={run.id}
+          selection={{ type: "run", id: run.id }}
+          icon={<StatusIcon status={run.status} />}
+          title={run.title}
+          meta={`${run.agent === "claude" ? "Claude Code" : "Codex"} · ${t.plural("agents.steps", run.steps.length)}`}
+          age={run.startedAt}
+        />
+      ))}
+    </Section>
+  );
+}
+
+function ClaudeSessions({ repoPath, query }: { repoPath: string; query: string }) {
+  const t = useT();
+  const sessions = useQuery({
+    queryKey: ["agent-sessions", repoPath],
+    queryFn: () => gitBackend.listAgentSessions(repoPath),
+    refetchInterval: 30_000,
+  });
+  const visible = (sessions.data ?? []).filter((s) => matches(query, s.title, s.gitBranch));
+  return (
+    <Section title={t("agents.sessions")} count={sessions.data ? visible.length : undefined}>
+      {sessions.isError && <Empty>{toGitError(sessions.error).message}</Empty>}
+      {sessions.data && visible.length === 0 && <Empty>{t("agents.noSessions")}</Empty>}
+      {visible.map((s) => (
+        <Item
+          key={s.id}
+          selection={{ type: "session", id: s.id }}
+          icon={<ClaudeIcon className="size-3.5 text-[#d97757]" />}
+          title={s.title}
+          meta={[s.gitBranch, t.plural("agents.prompts", s.prompts), t.plural("agents.tools", s.toolCalls)]
+            .filter(Boolean)
+            .join(" · ")}
+          age={s.updatedAt}
+        />
+      ))}
+    </Section>
+  );
+}
+
+function WorkflowRuns({ repoPath, query }: { repoPath: string; query: string }) {
+  const t = useT();
+  const runs = useQuery({
+    queryKey: ["workflow-runs", repoPath],
+    queryFn: () => gitBackend.listWorkflowRuns(repoPath),
+    // Poll while something is still running.
+    refetchInterval: (q) => (q.state.data?.some((r) => r.status !== "completed") ? 10_000 : 60_000),
+  });
+  const visible = (runs.data ?? []).filter((r) => matches(query, r.displayTitle, r.workflowName, r.headBranch));
+  return (
+    <Section title={t("agents.actions")} count={runs.data ? visible.length : undefined}>
+      {runs.isError && (
+        <Empty>
+          <TriangleAlert aria-hidden className="mr-1 inline size-3" />
+          {toGitError(runs.error).message}
+        </Empty>
+      )}
+      {runs.data && visible.length === 0 && <Empty>{t("agents.noActions")}</Empty>}
+      {visible.map((run) => (
+        <Item
+          key={run.databaseId}
+          selection={{ type: "workflow", id: run.databaseId }}
+          icon={<StatusIcon status={ghStatus(run.status, run.conclusion)} />}
+          title={run.displayTitle}
+          meta={`${run.workflowName} · ${run.headBranch}`}
+          age={run.createdAt}
+        />
+      ))}
+    </Section>
+  );
+}
+
+/** Sidebar of the Agents view: runs started here, Claude Code sessions, GitHub Actions. */
+export function AgentsList({ repoPath, query }: { repoPath: string; query: string }) {
+  const t = useT();
+  const { selection, select } = useAgentsStore(useShallow((s) => ({ selection: s.selection, select: s.select })));
+  return (
+    <nav aria-label={t("agents.title")} className="mt-3 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <button
+        type="button"
+        onClick={() => select({ type: "new" })}
+        className={cn(
+          "mb-1 flex h-7 w-full items-center gap-2 rounded-md px-2 text-[13px] text-sidebar-foreground outline-none transition-colors hover:bg-white/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+          selection.type === "new" && "bg-white/[0.08] text-foreground",
+        )}
+      >
+        <Plus aria-hidden className="size-3.5 text-primary" />
+        {t("agents.new")}
+      </button>
+      <ul>
+        <AppRuns repoPath={repoPath} query={query} />
+        <ClaudeSessions repoPath={repoPath} query={query} />
+        <WorkflowRuns repoPath={repoPath} query={query} />
+      </ul>
+    </nav>
+  );
+}

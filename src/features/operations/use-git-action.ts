@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { repoKey } from "@/lib/git-queries";
+import { invalidateRepo } from "@/lib/git-queries";
 import { toGitError } from "@/lib/errors";
 import { useNoticesStore } from "@/stores/notices-store";
 import { getT } from "@/i18n";
@@ -22,6 +22,6 @@ export function useGitAction<TArgs = void>(repoPath: string, action: GitAction<T
       const { message, detail } = toGitError(error);
       notify({ tone: "error", title: getT()("action.failed", { action: action.failure, message }), detail });
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: repoKey(repoPath) }),
+    onSettled: () => invalidateRepo(queryClient, repoPath),
   });
 }

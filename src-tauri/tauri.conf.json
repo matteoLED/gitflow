@@ -20,13 +20,16 @@
         "minHeight": 560,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 16, "y": 33 },
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 24
+        },
         "theme": "Dark",
         "backgroundColor": "#1B1C20"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src ipc: http://ipc.localhost; frame-src http://localhost:* http://127.0.0.1:*"
     }
   },
   "bundle": {

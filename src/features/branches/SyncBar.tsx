@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { ArrowDown, ArrowUp, Loader2, RefreshCw } from "lucide-react";
+import { ArrowDown, ArrowUp, RefreshCw } from "lucide-react";
+import { BrailleLoader } from "@/components/braille-loader";
 import { Button } from "@/components/ui/button";
 import { PanelToolbar } from "@/components/layout/panel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -26,9 +27,9 @@ function SyncButton({ label, hint, icon, count, pending, onClick }: SyncButtonPr
           size="sm"
           disabled={pending}
           onClick={onClick}
-          className="h-[22px] flex-1 gap-1 rounded-full border border-white/8 bg-white/[0.05] px-2 text-[10.5px] font-medium hover:bg-white/8 [&_svg]:size-3"
+          className="h-7 flex-1 gap-1.5 rounded-full border border-white/8 bg-white/[0.05] px-2 text-[11.5px] font-medium hover:bg-white/[0.12] [&_svg]:size-3.5"
         >
-          {pending ? <Loader2 aria-hidden className="animate-spin" /> : icon}
+          {pending ? <BrailleLoader variant="grid-syncing" /> : icon}
           {label}
           {!!count && <span className="font-normal opacity-60">{count}</span>}
         </Button>
@@ -60,7 +61,7 @@ export function SyncBar({ repoPath, refs }: { repoPath: string; refs: RefsSnapsh
   const pushHint = current?.upstream ? t("sync.pushTo", { upstream: current.upstream }) : t("sync.publish");
 
   return (
-    <PanelToolbar className="mt-1">
+    <PanelToolbar className="h-auto border-t border-white/[0.06] py-2">
       <SyncButton
         label={t("sync.pull")}
         hint={t("sync.pullHint")}
@@ -85,9 +86,9 @@ export function SyncBar({ repoPath, refs }: { repoPath: string; refs: RefsSnapsh
             aria-label={t("sync.fetch")}
             disabled={fetch.isPending}
             onClick={() => fetch.mutate()}
-            className="size-[22px] rounded-full border border-white/8 bg-white/[0.05] hover:bg-white/8 [&_svg]:size-3"
+            className="size-7 rounded-full border border-white/8 bg-white/[0.05] hover:bg-white/[0.12] [&_svg]:size-3.5"
           >
-            <RefreshCw aria-hidden className={fetch.isPending ? "animate-spin" : undefined} />
+            {fetch.isPending ? <BrailleLoader variant="grid-syncing" /> : <RefreshCw aria-hidden />}
           </Button>
         </TooltipTrigger>
         <TooltipContent>{t("sync.fetch")}</TooltipContent>

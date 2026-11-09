@@ -78,7 +78,15 @@ pub fn list_commits(
     }
     let skip = format!("--skip={skip}");
     let limit = format!("--max-count={}", limit.clamp(1, MAX_COMMITS_PER_PAGE));
-    let mut args = vec!["log", parser::LOG_FORMAT, "--decorate=full", &skip, &limit];
+    // Date order keeps children above their parents, which the commit graph relies on.
+    let mut args = vec![
+        "log",
+        parser::LOG_FORMAT,
+        "--decorate=full",
+        "--date-order",
+        &skip,
+        &limit,
+    ];
     if filters.first_parent {
         args.push("--first-parent");
     }
@@ -112,9 +120,21 @@ fn commit_base(repo: &Path, hash: &str) -> GitResult<String> {
     Ok(String::from_utf8_lossy(&empty_tree).trim().to_string())
 }
 
-pub fn list_commit_files(repo: &Path, hash: &str) -> GitResult<Vec<ChangedFile>> {
+/// The explicit comparison base (e.g. a pull request's merge-base), else the commit's first parent.
+fn diff_base(repo: &Path, hash: &str, base: Option<&str>) -> GitResult<String> {
+    match base {
+        Some(base) => Ok(validate::object_id(base)?.to_string()),
+        None => commit_base(repo, hash),
+    }
+}
+
+pub fn list_commit_files(
+    repo: &Path,
+    hash: &str,
+    base: Option<&str>,
+) -> GitResult<Vec<ChangedFile>> {
     let hash = validate::object_id(hash)?;
-    let base = commit_base(repo, hash)?;
+    let base = diff_base(repo, hash, base)?;
     let mut files = parser::parse_name_status(&git(
         repo,
         &["diff", "-z", "-M", "--name-status", &base, hash],
@@ -128,6 +148,84 @@ pub fn list_commit_files(repo: &Path, hash: &str) -> GitResult<Vec<ChangedFile>>
         }
     }
     Ok(files)
+}
+
+const MAX_FILE_BYTES: usize = 5 * 1024 * 1024;
+const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
+
+/// An image at one side of a diff as a `data:` URL, or None when that side has no such file.
+pub fn image_data_url(
+    repo: &Path,
+    hash: &str,
+    base: Option<&str>,
+    path: &str,
+    old_side: bool,
+) -> GitResult<Option<String>> {
+    let hash = validate::object_id(hash)?;
+    let path = validate::relative_path(path)?;
+    let ext = path
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "ico" => "image/x-icon",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        _ => return Err(GitError::invalid("Not an image.")),
+    };
+    let rev = if old_side {
+        diff_base(repo, hash, base)?
+    } else {
+        hash.to_string()
+    };
+    let spec = format!("{rev}:{path}");
+    let Ok(bytes) = git(repo, &["show", "--no-ext-diff", "--end-of-options", &spec]) else {
+        return Ok(None); // added or deleted: that side doesn't exist
+    };
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(GitError::invalid("This image is too large to preview."));
+    }
+    Ok(Some(format!("data:{mime};base64,{}", base64(&bytes))))
+}
+
+pub(crate) fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(TABLE[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// A file's text at a commit (`git show <hash>:<path>`), for copying to the clipboard.
+pub fn file_contents(repo: &Path, hash: &str, path: &str) -> GitResult<String> {
+    let hash = validate::object_id(hash)?;
+    let spec = format!("{hash}:{}", validate::relative_path(path)?);
+    let out = git(repo, &["show", "--no-ext-diff", "--end-of-options", &spec])?;
+    if out.len() > MAX_FILE_BYTES || out.contains(&0) {
+        return Err(GitError::invalid(
+            "This file is binary or too large to copy.",
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 fn to_file_diff(out: Vec<u8>) -> FileDiff {
@@ -155,9 +253,10 @@ pub fn commit_file_diff(
     hash: &str,
     path: &str,
     previous_path: Option<&str>,
+    base: Option<&str>,
 ) -> GitResult<FileDiff> {
     let hash = validate::object_id(hash)?;
-    let base = commit_base(repo, hash)?;
+    let base = diff_base(repo, hash, base)?;
     let mut args = vec!["diff", "-M", "--no-ext-diff", FULL_CONTEXT, &base, hash];
     args.extend(path_args(path, previous_path)?);
     Ok(to_file_diff(git(repo, &args)?))
@@ -336,7 +435,7 @@ mod tests {
     #[test]
     fn root_commit_files_are_diffed_against_the_empty_tree() {
         let (repo, first, _) = repo_with_history();
-        let statuses: Vec<_> = list_commit_files(repo.path(), &first)
+        let statuses: Vec<_> = list_commit_files(repo.path(), &first, None)
             .unwrap()
             .into_iter()
             .map(|f| f.status)
@@ -347,7 +446,7 @@ mod tests {
     #[test]
     fn renamed_binary_files_keep_their_previous_path() {
         let (repo, _, second) = repo_with_history();
-        let files = list_commit_files(repo.path(), &second).unwrap();
+        let files = list_commit_files(repo.path(), &second, None).unwrap();
         let renamed = files
             .iter()
             .find(|f| f.status == FileStatus::Renamed)
@@ -361,7 +460,7 @@ mod tests {
     #[test]
     fn commit_file_diff_returns_a_unified_patch() {
         let (repo, _, second) = repo_with_history();
-        let diff = commit_file_diff(repo.path(), &second, "src/a.rs", None).unwrap();
+        let diff = commit_file_diff(repo.path(), &second, "src/a.rs", None, None).unwrap();
         assert!(diff.patch.contains("+TWO"));
     }
 
@@ -386,7 +485,7 @@ mod tests {
                 .collect::<String>(),
         );
         let hash = repo.commit_all("One change");
-        let diff = commit_file_diff(repo.path(), &hash, "src/a.rs", None).unwrap();
+        let diff = commit_file_diff(repo.path(), &hash, "src/a.rs", None, None).unwrap();
         assert!(
             diff.patch.contains(
                 " line 1
@@ -398,7 +497,7 @@ mod tests {
     #[test]
     fn binary_diffs_are_flagged_without_patch() {
         let (repo, first, _) = repo_with_history();
-        let diff = commit_file_diff(repo.path(), &first, "logo.png", None).unwrap();
+        let diff = commit_file_diff(repo.path(), &first, "logo.png", None, None).unwrap();
         assert!(diff.binary && diff.patch.is_empty());
     }
 
@@ -412,7 +511,7 @@ mod tests {
         repo.write("main.txt", "y\n");
         repo.commit_all("Main");
         repo.git(&["merge", "-q", "--no-edit", "side"]);
-        let paths: Vec<_> = list_commit_files(repo.path(), &repo.git(&["rev-parse", "HEAD"]))
+        let paths: Vec<_> = list_commit_files(repo.path(), &repo.git(&["rev-parse", "HEAD"]), None)
             .unwrap()
             .into_iter()
             .map(|f| f.path)
@@ -457,5 +556,49 @@ mod tests {
             (refs.branches.len(), refs.tags.clone()),
             (2, vec!["v1.0".to_string()])
         );
+    }
+
+    #[test]
+    fn an_explicit_base_compares_across_several_commits() {
+        let (repo, first, _) = repo_with_history();
+        repo.write("src/b.rs", "new file\n");
+        let head = repo.commit_all("Third");
+        let paths: Vec<_> = list_commit_files(repo.path(), &head, Some(&first))
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert!(paths.contains(&"src/b.rs".to_string()) && paths.len() >= 2);
+    }
+
+    #[test]
+    fn an_explicit_base_must_be_an_object_id() {
+        let (repo, _, second) = repo_with_history();
+        assert!(list_commit_files(repo.path(), &second, Some("--output=/tmp/x")).is_err());
+    }
+
+    #[test]
+    fn file_contents_reads_a_file_at_a_commit() {
+        let (repo, first, _) = repo_with_history();
+        assert_eq!(
+            file_contents(repo.path(), &first, "src/a.rs").unwrap(),
+            "one\ntwo\n"
+        );
+    }
+
+    #[test]
+    fn base64_matches_the_standard_alphabet() {
+        assert_eq!(
+            (base64(b"Man"), base64(b"Ma"), base64(b"M")),
+            ("TWFu".into(), "TWE=".into(), "TQ==".into())
+        );
+    }
+
+    #[test]
+    fn images_read_both_sides_of_a_commit() {
+        let (repo, first, _) = repo_with_history();
+        let new = image_data_url(repo.path(), &first, None, "logo.png", false).unwrap();
+        let old = image_data_url(repo.path(), &first, None, "logo.png", true).unwrap();
+        assert!(new.unwrap().starts_with("data:image/png;base64,") && old.is_none());
     }
 }

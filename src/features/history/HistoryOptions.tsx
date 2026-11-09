@@ -9,12 +9,13 @@ import { useT } from "@/i18n";
 
 function Toggle({ setting, label, hint }: { setting: "firstParentOnly" | "hideMerges"; label: string; hint: string }) {
   const id = useId();
-  const { [setting]: checked, set } = useViewSettings();
+  const checked = useViewSettings((s) => s[setting]);
+  const set = useViewSettings((s) => s.set);
   return (
     <div className="flex items-center justify-between gap-3 py-1">
-      <label htmlFor={id} className="text-[11.5px] text-foreground/85">
+      <label htmlFor={id} className="text-[12.5px] text-foreground/85">
         {label}
-        <span className="block text-[10px] text-muted-foreground">{hint}</span>
+        <span className="block text-[11px] text-muted-foreground">{hint}</span>
       </label>
       <Switch
         id={id}

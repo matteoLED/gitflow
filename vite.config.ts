@@ -10,6 +10,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },
   clearScreen: false,
+  // ES-module workers keep dynamic imports split: Shiki languages still load one by one inside the worker.
+  worker: { format: "es" },
   server: {
     port: 1420,
     strictPort: true,

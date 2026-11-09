@@ -101,31 +101,249 @@ pub struct PullRequest {
     pub is_draft: bool,
     pub updated_at: String,
     pub review_decision: Option<String>,
+    /// OPEN or MERGED.
+    pub state: String,
+    pub url: String,
 }
 
-const PR_FIELDS: &str =
-    "number,title,author,headRefName,baseRefName,headRefOid,isDraft,updatedAt,reviewDecision";
+const PR_FIELDS: &str = "number,title,author,headRefName,baseRefName,headRefOid,isDraft,updatedAt,reviewDecision,state,url";
 
-pub fn list_pull_requests(repo: &Path) -> GitResult<Vec<PullRequest>> {
+fn pull_requests_in(
+    repo: &Path,
+    gh_path: &Path,
+    state: &str,
+    limit: &str,
+) -> GitResult<Vec<PullRequest>> {
     let out = gh(
-        &require_gh()?,
+        gh_path,
         repo,
         &[
-            "pr", "list", "--state", "open", "--limit", "100", "--json", PR_FIELDS,
+            "pr", "list", "--state", state, "--limit", limit, "--json", PR_FIELDS,
         ],
     )?;
     serde_json::from_slice(&out)
         .map_err(|err| GitError::new(ErrorKind::Io, format!("Unexpected answer from gh: {err}")))
 }
 
+/// Open pull requests, then the most recently merged ones.
+pub fn list_pull_requests(repo: &Path) -> GitResult<Vec<PullRequest>> {
+    let gh_path = require_gh()?;
+    // Two gh round trips of a second or more each: run them side by side.
+    let (open, merged) = std::thread::scope(|scope| {
+        let merged = scope.spawn(|| pull_requests_in(repo, &gh_path, "merged", "40"));
+        let open = pull_requests_in(repo, &gh_path, "open", "100");
+        (open, merged.join())
+    });
+    let mut prs = open?;
+    prs.extend(merged.map_err(|_| GitError::new(ErrorKind::Io, "gh pr list crashed"))??);
+    Ok(prs)
+}
+
+fn gh_json(repo: &Path, args: &[&str]) -> GitResult<serde_json::Value> {
+    let out = gh(&require_gh()?, repo, args)?;
+    serde_json::from_slice(&out)
+        .map_err(|err| GitError::new(ErrorKind::Io, format!("Unexpected answer from gh: {err}")))
+}
+
+/// Recent GitHub Actions runs, as `gh run list --json` returns them.
+pub fn list_workflow_runs(repo: &Path) -> GitResult<serde_json::Value> {
+    let fields = "databaseId,displayTitle,workflowName,status,conclusion,headBranch,event,createdAt,startedAt,updatedAt,url,number";
+    // 100 runs: enough for the CI page's two-week trends, still one gh call.
+    gh_json(repo, &["run", "list", "--limit", "100", "--json", fields])
+}
+
+/// One run with its jobs and their steps.
+pub fn workflow_run(repo: &Path, id: u64) -> GitResult<serde_json::Value> {
+    let id = id.to_string();
+    let fields = "databaseId,displayTitle,workflowName,status,conclusion,headBranch,event,createdAt,updatedAt,url,jobs";
+    gh_json(repo, &["run", "view", &id, "--json", fields])
+}
+
+/// Everything the pull request page shows: description, discussion, reviews, checks, files, mergeability.
+pub fn pull_request_details(repo: &Path, number: u32) -> GitResult<serde_json::Value> {
+    let number = number.to_string();
+    let fields = "number,title,body,author,state,isDraft,url,createdAt,headRefName,baseRefName,additions,deletions,\
+changedFiles,commits,comments,reviews,reviewRequests,statusCheckRollup,mergeStateStatus,mergeable,files";
+    gh_json(repo, &["pr", "view", &number, "--json", fields])
+}
+
+/// Adds a comment to the pull request's conversation (`gh pr comment`); the body is one argv entry.
+pub fn comment_pull_request(repo: &Path, number: u32, body: &str) -> GitResult<()> {
+    let body = body.trim();
+    if body.is_empty() || body.len() > 65_536 {
+        return Err(GitError::invalid("Write a comment first."));
+    }
+    let number = number.to_string();
+    let body_arg = format!("--body={body}");
+    gh(&require_gh()?, repo, &["pr", "comment", &number, &body_arg]).map(|_| ())
+}
+
+/// Re-runs the failed jobs of the given GitHub Actions runs (`gh run rerun <id> --failed`).
+pub fn rerun_failed_checks(repo: &Path, run_ids: &[u64]) -> GitResult<()> {
+    if run_ids.is_empty() || run_ids.len() > 50 {
+        return Err(GitError::invalid("No failing run to re-run."));
+    }
+    let gh_path = require_gh()?;
+    for id in run_ids {
+        let id = id.to_string();
+        gh(&gh_path, repo, &["run", "rerun", &id, "--failed"])?;
+    }
+    Ok(())
+}
+
+/// GitHub logins and `org/team` slugs only: they end up as one argv entry, never a shell line.
+fn valid_reviewer(login: &str) -> bool {
+    !login.is_empty()
+        && login.len() <= 80
+        && !login.starts_with('-')
+        && login
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '/' || c == '_')
+}
+
+/// Requests a review from a user or team (`gh pr edit --add-reviewer`).
+pub fn add_reviewer(repo: &Path, number: u32, login: &str) -> GitResult<()> {
+    let login = login.trim().trim_start_matches('@');
+    if !valid_reviewer(login) {
+        return Err(GitError::invalid("That isn't a GitHub login or team."));
+    }
+    let number = number.to_string();
+    let arg = format!("--add-reviewer={login}");
+    gh(&require_gh()?, repo, &["pr", "edit", &number, &arg]).map(|_| ())
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PrState {
+    Draft,
+    Open,
+    Closed,
+}
+
+/// The `gh` commands that move a PR from its current state to `target`, in order.
+fn state_commands(closed: bool, draft: bool, target: PrState) -> Vec<&'static [&'static str]> {
+    let mut steps: Vec<&'static [&'static str]> = Vec::new();
+    if target == PrState::Closed {
+        if !closed {
+            steps.push(&["close"]);
+        }
+        return steps;
+    }
+    if closed {
+        steps.push(&["reopen"]);
+    }
+    match (target, draft) {
+        (PrState::Draft, false) => steps.push(&["ready", "--undo"]),
+        (PrState::Open, true) => steps.push(&["ready"]),
+        _ => {}
+    }
+    steps
+}
+
+/// Draft / open / closed, like Linear's status menu (`gh pr ready [--undo]`, `close`, `reopen`).
+pub fn set_pull_request_state(repo: &Path, number: u32, target: PrState) -> GitResult<()> {
+    let n = number.to_string();
+    let current = gh_json(repo, &["pr", "view", &n, "--json", "state,isDraft"])?;
+    let state = current
+        .get("state")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if state == "MERGED" {
+        return Err(GitError::invalid(
+            "A merged pull request can't change state.",
+        ));
+    }
+    let draft = current
+        .get("isDraft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let gh_path = require_gh()?;
+    for command in state_commands(state == "CLOSED", draft, target) {
+        let mut args = vec!["pr", command[0], n.as_str()];
+        args.extend_from_slice(&command[1..]);
+        gh(&gh_path, repo, &args)?;
+    }
+    Ok(())
+}
+
+const MAX_LOG_CHARS: usize = 400_000;
+
+/// A GitHub Actions job's log (`gh run view --job <id> --log`), keeping its end when it is huge.
+pub fn job_log(repo: &Path, job_id: u64, failed_only: bool) -> GitResult<String> {
+    let id = job_id.to_string();
+    let flag = if failed_only { "--log-failed" } else { "--log" };
+    let out = gh(&require_gh()?, repo, &["run", "view", "--job", &id, flag])?;
+    let text = String::from_utf8_lossy(&out).into_owned();
+    Ok(match text.char_indices().rev().nth(MAX_LOG_CHARS) {
+        Some((cut, _)) => text[cut..].to_string(),
+        None => text,
+    })
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MergeMethod {
+    Squash,
+    Merge,
+    Rebase,
+}
+
+/// Merges on GitHub with the user's own `gh` login. No `--delete-branch`: gh would also switch the local
+/// checkout, and branches are never switched behind the user's back.
+pub fn merge_pull_request(repo: &Path, number: u32, method: MergeMethod) -> GitResult<()> {
+    let flag = match method {
+        MergeMethod::Squash => "--squash",
+        MergeMethod::Merge => "--merge",
+        MergeMethod::Rebase => "--rebase",
+    };
+    let number = number.to_string();
+    gh(&require_gh()?, repo, &["pr", "merge", &number, flag]).map(|_| ())
+}
+
+/// `https://github.com/owner/name` for an `origin` hosted on GitHub.
+pub fn web_url(repo: &Path) -> GitResult<Option<String>> {
+    let remote = git_text(repo, &["remote", "get-url", "origin"]).unwrap_or_default();
+    Ok(
+        github_slug(remote.trim())
+            .map(|(owner, name)| format!("https://github.com/{owner}/{name}")),
+    )
+}
+
+/// Opens a GitHub page in the default browser. Only github.com URLs are accepted.
+pub fn open_in_browser(url: &str) -> GitResult<()> {
+    // Web pages only (links in pull requests and issues point anywhere): never file:, javascript:, app schemes.
+    let allowed = ["https://", "http://localhost:", "http://127.0.0.1:"];
+    let safe = allowed.iter().any(|prefix| url.starts_with(prefix))
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control());
+    if !safe {
+        return Err(GitError::invalid("Only web links can be opened."));
+    }
+    std::process::Command::new("/usr/bin/open")
+        .arg(url)
+        .status()
+        .map_err(|err| GitError::new(ErrorKind::Io, format!("Couldn't open the browser: {err}")))?;
+    Ok(())
+}
+
+/// What the UI needs to show a pull request: its commits and its whole diff.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestRange {
+    /// Revision range of the PR's own commits, for the history list.
+    pub range: String,
+    /// Merge-base with the base branch: the PR's full diff is `merge_base..head`, as on GitHub.
+    pub merge_base: Option<String>,
+    pub head: String,
+}
+
 /// Fetches a PR's head (into FETCH_HEAD only: no local branch is created or moved) and its base,
-/// then returns the revision range of the PR's own commits.
+/// then returns the revision range of the PR's own commits and its merge-base.
 pub fn fetch_pull_request(
     repo: &Path,
     number: u32,
     base: &str,
     head_oid: &str,
-) -> GitResult<String> {
+) -> GitResult<PullRequestRange> {
     let base = validate::revision(base)?;
     let head_oid = validate::object_id(head_oid)?;
     if base.contains("..") {
@@ -136,18 +354,70 @@ pub fn fetch_pull_request(
         timeout: NETWORK_TIMEOUT,
         ..RunOptions::default()
     };
-    git_with(
-        repo,
-        &["fetch", "--no-tags", "origin", &pr_ref, base],
-        &opts,
-    )?;
     let base_ref = format!("refs/remotes/origin/{base}");
+    // A commit id never changes content: when the head and the base are already here (reopening a PR, a
+    // stack neighbour), skip the network round trip.
+    let head_commit = format!("{head_oid}^{{commit}}");
+    let local = git(repo, &["cat-file", "-e", &head_commit]).is_ok()
+        && git(repo, &["rev-parse", "--verify", "--quiet", &base_ref]).is_ok();
+    if !local {
+        git_with(
+            repo,
+            &["fetch", "--no-tags", "origin", &pr_ref, base],
+            &opts,
+        )?;
+    }
     let has_base = git(repo, &["rev-parse", "--verify", "--quiet", &base_ref]).is_ok();
-    Ok(if has_base {
-        format!("origin/{base}..{head_oid}")
-    } else {
-        head_oid.to_string()
+    if !has_base {
+        return Ok(PullRequestRange {
+            range: head_oid.to_string(),
+            merge_base: None,
+            head: head_oid.to_string(),
+        });
+    }
+    let merge_base = git_text(
+        repo,
+        &["merge-base", "--end-of-options", &base_ref, head_oid],
+    )
+    .ok()
+    .map(|out| out.trim().to_string());
+    Ok(PullRequestRange {
+        range: format!("origin/{base}..{head_oid}"),
+        merge_base,
+        head: head_oid.to_string(),
     })
+}
+
+/// The three outcomes of a GitHub review, as `gh pr review` flags.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewEvent {
+    Approve,
+    RequestChanges,
+    Comment,
+}
+
+/// Submits a review with the user's own `gh` login. The body travels as one argv entry (no shell).
+pub fn submit_review(repo: &Path, number: u32, event: ReviewEvent, body: &str) -> GitResult<()> {
+    let body = body.trim();
+    if body.len() > 65_536 {
+        return Err(GitError::invalid("The review is too long."));
+    }
+    let flag = match event {
+        ReviewEvent::Approve => "--approve",
+        ReviewEvent::RequestChanges => "--request-changes",
+        ReviewEvent::Comment => "--comment",
+    };
+    if body.is_empty() && !matches!(event, ReviewEvent::Approve) {
+        return Err(GitError::invalid("Write a comment first."));
+    }
+    let number = number.to_string();
+    let body_arg = format!("--body={body}");
+    let mut args = vec!["pr", "review", number.as_str(), flag];
+    if !body.is_empty() {
+        args.push(&body_arg);
+    }
+    gh(&require_gh()?, repo, &args).map(|_| ())
 }
 
 pub fn github_user(repo: &Path) -> GitResult<GithubUser> {
@@ -199,6 +469,27 @@ pub fn avatar_url(repo: &Path, hash: &str, email: &str) -> GitResult<Option<Stri
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn state_changes_run_the_right_gh_commands() {
+        let closed_to_draft = state_commands(true, false, PrState::Draft);
+        assert_eq!(
+            closed_to_draft,
+            vec![&["reopen"][..], &["ready", "--undo"][..]]
+        );
+        assert_eq!(
+            state_commands(false, true, PrState::Open),
+            vec![&["ready"][..]]
+        );
+        assert!(state_commands(false, false, PrState::Open).is_empty());
+    }
+
+    #[test]
+    fn reviewers_are_logins_or_team_slugs() {
+        assert!(valid_reviewer("octo-cat") && valid_reviewer("org/team_a"));
+        assert!(!valid_reviewer("--repo=x") && !valid_reviewer("a b") && !valid_reviewer(""));
+    }
+
     use super::*;
 
     #[test]
@@ -246,5 +537,13 @@ mod tests {
     #[test]
     fn slugs_reject_path_tricks() {
         assert_eq!(github_slug("https://github.com/a/../../x"), None);
+    }
+
+    #[test]
+    fn only_github_links_open_in_the_browser() {
+        assert!(open_in_browser("javascript:alert(1)").is_err());
+        assert!(open_in_browser("http://example.com/").is_err());
+        assert!(open_in_browser("https://github.com/a b").is_err());
+        assert!(open_in_browser("file:///etc/passwd").is_err());
     }
 }

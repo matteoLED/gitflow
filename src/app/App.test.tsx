@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App, createQueryClient } from "./App";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useNoticesStore } from "@/stores/notices-store";
+import { useUiStore } from "@/stores/ui-store";
 import { gitBackend } from "@/lib/tauri-git";
 import type { ChangedFile, CommitSummary, RefsSnapshot, WorkingTreeEntry } from "@/types/git";
 
@@ -26,6 +27,11 @@ vi.mock("@/lib/tauri-git", () => ({
     fetch: vi.fn(),
     pull: vi.fn(),
     push: vi.fn(),
+    submitReview: vi.fn(),
+    getPullRequestDetails: vi.fn(),
+    watchRepository: vi.fn().mockResolvedValue(null),
+    getGithubWebUrl: vi.fn(),
+    detectAgents: vi.fn(),
   },
 }));
 
@@ -104,10 +110,10 @@ beforeEach(() => {
 });
 
 describe("without a repository", () => {
-  it("offers to open one", () => {
+  it("offers to open one", async () => {
     useWorkspaceStore.setState({ repo: null });
     renderApp();
-    expect(screen.getByRole("button", { name: "Open repository…" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open repository…" })).toBeInTheDocument();
   });
 });
 
@@ -162,7 +168,7 @@ describe("history view", () => {
 describe("operations", () => {
   it("pulls through the backend", async () => {
     renderApp();
-    await userEvent.click(await screen.findByRole("button", { name: /^Pull/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Pull(?! requests)/ }));
     expect(backend.pull).toHaveBeenCalledWith(REPO.path);
   });
 
@@ -200,5 +206,74 @@ describe("changes view", () => {
     await userEvent.keyboard("Fix typo");
     await userEvent.click(await screen.findByRole("button", { name: "Commit 1 file" }));
     expect(backend.createCommit).toHaveBeenCalledWith(REPO.path, "Fix typo");
+  });
+});
+
+describe("settings", () => {
+  beforeEach(() => useUiStore.setState({ settingsOpen: false }));
+
+  it("opens full-window with ⌘,", async () => {
+    renderApp();
+    await userEvent.keyboard("{Meta>},{/Meta}");
+    expect(await screen.findByRole("dialog", { name: "Profile" })).toBeInTheDocument();
+  });
+
+  it("shows the page picked in the sidebar", async () => {
+    useUiStore.setState({ settingsOpen: true });
+    renderApp();
+    await userEvent.click(await screen.findByRole("button", { name: "Keyboard shortcuts" }));
+    expect(screen.getByRole("heading", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+  });
+
+  it("returns to the app with Escape", async () => {
+    useUiStore.setState({ settingsOpen: true });
+    renderApp();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("pull request review", () => {
+  const PR = {
+    number: 42,
+    title: "Add login",
+    author: "ana",
+    base: "b".repeat(40),
+    head: COMMITS[0].hash,
+    url: "https://github.com/o/r/pull/42",
+  };
+
+  beforeEach(() => {
+    useWorkspaceStore.getState().openPullRequest(PR, `origin/main..${PR.head}`);
+    backend.submitReview.mockResolvedValue(null);
+    backend.getGithubWebUrl.mockResolvedValue("https://github.com/o/r");
+    backend.detectAgents.mockResolvedValue([]);
+    backend.listCommitFiles.mockResolvedValue([FILE]);
+    backend.getPullRequestDetails.mockReturnValue(new Promise(() => {}));
+  });
+
+  /** The page opens on its overview; the review happens on the Diff tab. */
+  const renderDiff = async () => {
+    renderApp();
+    await userEvent.click(await screen.findByRole("tab", { name: "Diff" }));
+  };
+
+  it("folds a file once it is marked as reviewed", async () => {
+    await renderDiff();
+    await userEvent.click(await screen.findByRole("checkbox"));
+    expect(await screen.findByText("1/1 reviewed")).toBeInTheDocument();
+  });
+
+  it("compares the pull request head with its merge-base", async () => {
+    await renderDiff();
+    await waitFor(() => expect(backend.listCommitFiles).toHaveBeenCalledWith(REPO.path, PR.head, PR.base));
+  });
+
+  it("approves the pull request through gh", async () => {
+    await renderDiff();
+    await userEvent.click(await screen.findByRole("button", { name: "Review" }));
+    await userEvent.click(screen.getByRole("radio", { name: /Approve/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Submit review" }));
+    expect(backend.submitReview).toHaveBeenCalledWith(REPO.path, 42, "approve", "");
   });
 });

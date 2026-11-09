@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useEffect, useId, type ReactNode } from "react";
 import { Columns2, Rows2, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,7 @@ type BooleanSetting = { [K in keyof ViewSettings]: ViewSettings[K] extends boole
 
 function Kbd({ children }: { children: ReactNode }) {
   return (
-    <kbd className="rounded border border-white/15 px-1 font-sans text-[10px] text-muted-foreground">{children}</kbd>
+    <kbd className="rounded border border-white/15 px-1 font-sans text-[11px] text-muted-foreground">{children}</kbd>
   );
 }
 
@@ -25,7 +26,7 @@ const LAYOUTS: { layout: DiffLayout; label: MessageKey; tooltip: MessageKey; Ico
 /** Segmented Split / Unified control, shared by the popover and the Settings page. */
 export function LayoutSwitch() {
   const t = useT();
-  const { layout: current, set } = useViewSettings();
+  const { layout: current, set } = useViewSettings(useShallow((s) => ({ layout: s.layout, set: s.set })));
   return (
     <div
       role="radiogroup"
@@ -41,7 +42,7 @@ export function LayoutSwitch() {
               aria-checked={current === layout}
               onClick={() => set("layout", layout)}
               className={cn(
-                "flex h-7 items-center justify-center gap-1.5 rounded-md text-[11.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                "flex h-7 items-center justify-center gap-1.5 rounded-md text-[12.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
                 current === layout && "bg-white/10 text-foreground shadow-sm",
               )}
             >
@@ -61,14 +62,15 @@ export function LayoutSwitch() {
 
 type ToggleProps = { setting: BooleanSetting; label: string; hint?: string; disabled?: boolean };
 
-export function Toggle({ setting, label, hint, disabled }: ToggleProps) {
+function Toggle({ setting, label, hint, disabled }: ToggleProps) {
   const id = useId();
-  const { [setting]: checked, set } = useViewSettings();
+  const checked = useViewSettings((s) => s[setting]);
+  const set = useViewSettings((s) => s.set);
   return (
     <div className="flex min-h-8 items-center justify-between gap-3 py-1">
-      <label htmlFor={id} className={cn("text-[11.5px] leading-tight text-foreground/80", disabled && "opacity-50")}>
+      <label htmlFor={id} className={cn("text-[12.5px] leading-tight text-foreground/90", disabled && "opacity-50")}>
         {label}
-        {hint && <span className="mt-0.5 block text-[10px] text-muted-foreground">{hint}</span>}
+        {hint && <span className="mt-0.5 block text-[11px] text-muted-foreground">{hint}</span>}
       </label>
       <Switch
         id={id}
@@ -84,25 +86,26 @@ export function Toggle({ setting, label, hint, disabled }: ToggleProps) {
 type Choice<V extends string> = { value: V; label: string };
 type ChooseProps<K extends "fileList" | "grouping"> = { setting: K; label: string; choices: Choice<ViewSettings[K]>[] };
 
-export function Choose<K extends "fileList" | "grouping">({ setting, label, choices }: ChooseProps<K>) {
+function Choose<K extends "fileList" | "grouping">({ setting, label, choices }: ChooseProps<K>) {
   const id = useId();
-  const { [setting]: value, set } = useViewSettings();
+  const value = useViewSettings((s) => s[setting]);
+  const set = useViewSettings((s) => s.set);
   return (
     <div className="flex min-h-8 items-center justify-between gap-3 py-1">
-      <label htmlFor={id} className="text-[11.5px] text-foreground/80">
+      <label htmlFor={id} className="text-[12.5px] text-foreground/90">
         {label}
       </label>
       <Select value={value} onValueChange={(next) => set(setting, next as ViewSettings[K])}>
         <SelectTrigger
           id={id}
           size="sm"
-          className="h-6 w-[7.5rem] border-0 bg-white/[0.06] px-2 text-[11px] shadow-none hover:bg-white/10 data-[size=sm]:h-6 dark:bg-white/[0.06]"
+          className="h-6 w-[7.5rem] border-0 bg-white/[0.06] px-2 text-[12px] shadow-none hover:bg-white/[0.14] data-[size=sm]:h-6 dark:bg-white/[0.06]"
         >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           {choices.map((choice) => (
-            <SelectItem key={choice.value} value={choice.value} className="text-[11.5px]">
+            <SelectItem key={choice.value} value={choice.value} className="text-[12.5px]">
               {choice.label}
             </SelectItem>
           ))}
@@ -115,14 +118,14 @@ export function Choose<K extends "fileList" | "grouping">({ setting, label, choi
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="border-t border-white/[0.07] px-3 pt-2 pb-1.5">
-      <p className="pb-0.5 text-[9.5px] font-medium tracking-wider text-muted-foreground/80 uppercase">{title}</p>
+      <p className="pb-0.5 text-[10.5px] font-medium tracking-wider text-muted-foreground uppercase">{title}</p>
       {children}
     </div>
   );
 }
 
 /** Every diff/file-list option, so the popover and the Settings page stay identical. */
-export function DiffOptionRows() {
+function DiffOptionRows() {
   const t = useT();
   const split = useViewSettings((s) => s.layout === "split");
   return (

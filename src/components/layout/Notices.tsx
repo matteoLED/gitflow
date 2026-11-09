@@ -24,11 +24,11 @@ export function Notices() {
             <CheckCircle2 aria-hidden className="mt-0.5 size-4 shrink-0 text-added-foreground" />
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-[13px] break-words">{notice.title}</p>
+            <p className="text-[14px] break-words">{notice.title}</p>
             {notice.detail && (
               <details className="mt-1 text-xs text-muted-foreground">
                 <summary className="cursor-default">{t("common.gitOutput")}</summary>
-                <pre className="mt-1 max-h-40 overflow-auto font-mono text-[11px] whitespace-pre-wrap select-text">
+                <pre className="mt-1 max-h-40 overflow-auto font-mono text-[12px] whitespace-pre-wrap select-text">
                   {notice.detail}
                 </pre>
               </details>
