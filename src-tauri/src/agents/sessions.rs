@@ -37,12 +37,16 @@ fn encode(repo: &Path) -> String {
         .collect()
 }
 
-fn projects_dir(repo: &Path) -> Option<PathBuf> {
+pub(super) fn projects_root() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
-    Some(Path::new(&home).join(".claude/projects").join(encode(repo)))
+    Some(Path::new(&home).join(".claude/projects"))
 }
 
-fn session_file(repo: &Path, id: &str) -> GitResult<PathBuf> {
+fn projects_dir(repo: &Path) -> Option<PathBuf> {
+    Some(projects_root()?.join(encode(repo)))
+}
+
+pub(super) fn session_file(repo: &Path, id: &str) -> GitResult<PathBuf> {
     let valid = !id.is_empty()
         && id.len() <= 64
         && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
@@ -53,9 +57,16 @@ fn session_file(repo: &Path, id: &str) -> GitResult<PathBuf> {
     Ok(dir.join(format!("{id}.jsonl")))
 }
 
+fn read_from(path: &Path, offset: u64) -> (Vec<Value>, u64) {
+    read_lines(path, offset)
+}
+
 /// Parses the complete lines appended since `offset`; returns the events and the new offset.
 /// A line still being written (no trailing newline yet) is left for the next read.
-fn read_from(path: &Path, offset: u64) -> (Vec<Value>, u64) {
+pub(super) fn read_lines<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    offset: u64,
+) -> (Vec<T>, u64) {
     let Ok(mut file) = File::open(path) else {
         return (Vec::new(), offset);
     };

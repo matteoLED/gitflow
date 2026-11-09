@@ -5,12 +5,15 @@ import {
   Activity,
   ChevronLeft,
   ChevronRight,
+  GitBranch,
   GitCommitVertical,
   GitPullRequest,
+  Globe,
   History,
   House,
   Layers,
   MonitorSmartphone,
+  Network,
   PanelLeft,
   Plus,
   Sparkles,
@@ -31,7 +34,7 @@ import { useWorkspaceStore, type View } from "@/stores/workspace-store";
 
 type IconType = ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
 
-const VIEW_ICONS: Record<View, IconType> = {
+export const VIEW_ICONS: Record<View, IconType> = {
   home: House,
   history: GitCommitVertical,
   changes: Layers,
@@ -40,9 +43,12 @@ const VIEW_ICONS: Record<View, IconType> = {
   linear: LinearIcon,
   preview: MonitorSmartphone,
   agents: Sparkles,
+  browser: Globe,
+  graph: Network,
+  work: GitBranch,
 };
 
-const VIEW_LABELS = {
+export const VIEW_LABELS = {
   home: "view.home",
   history: "view.history",
   changes: "view.changes",
@@ -51,6 +57,9 @@ const VIEW_LABELS = {
   linear: "Linear",
   preview: "view.preview",
   agents: "view.agents",
+  browser: "view.browser",
+  graph: "view.graph",
+  work: "view.work",
 } as const;
 
 function PlaceIcon({ place, className }: { place: TabPlace; className?: string }) {

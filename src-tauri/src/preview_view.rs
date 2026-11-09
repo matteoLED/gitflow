@@ -16,6 +16,33 @@ pub struct Bounds {
     pub height: f64,
     /// Page zoom, to fit a phone-sized layout into a smaller panel.
     pub zoom: f64,
+    /// Corner radius of the box it sits in: a native view isn't clipped by CSS.
+    #[serde(default)]
+    pub radius: f64,
+}
+
+/// Rounds the native view's corners (its layer clips the page), like the CSS box around it.
+pub(crate) fn round(view: &tauri::Webview, radius: f64) {
+    #[cfg(target_os = "macos")]
+    let _ = view.with_webview(move |wv| {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyObject, Bool};
+        let web_view = wv.inner().cast::<AnyObject>();
+        if web_view.is_null() {
+            return;
+        }
+        // SAFETY: `inner()` is the live WKWebView (an NSView); this closure runs on the main thread.
+        unsafe {
+            let _: () = msg_send![web_view, setWantsLayer: Bool::YES];
+            let layer: *mut AnyObject = msg_send![web_view, layer];
+            if !layer.is_null() {
+                let _: () = msg_send![layer, setCornerRadius: radius];
+                let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
+            }
+        }
+    });
+    #[cfg(not(target_os = "macos"))]
+    let _ = (view, radius);
 }
 
 /// Only local dev servers can be previewed.
@@ -48,6 +75,7 @@ pub fn show(app: &AppHandle, url: &str, bounds: Bounds) -> GitResult<()> {
         view.set_position(position).map_err(err)?;
         view.set_size(size).map_err(err)?;
         view.set_zoom(bounds.zoom).map_err(err)?;
+        round(&view, bounds.radius);
         return view.show().map_err(err);
     }
     let window = app
@@ -60,6 +88,7 @@ pub fn show(app: &AppHandle, url: &str, bounds: Bounds) -> GitResult<()> {
             size,
         )
         .map_err(err)?;
+    round(&view, bounds.radius);
     view.set_zoom(bounds.zoom).map_err(err)
 }
 
@@ -73,6 +102,33 @@ pub fn hide(app: &AppHandle) {
 pub fn reload(app: &AppHandle) {
     if let Some(view) = app.get_webview(LABEL) {
         let _ = view.eval("location.reload()");
+    }
+}
+
+/// Browser history inside the preview: `back` or `forward`.
+pub fn go(app: &AppHandle, forward: bool) {
+    if let Some(view) = app.get_webview(LABEL) {
+        let _ = view.eval(if forward {
+            "history.forward()"
+        } else {
+            "history.back()"
+        });
+    }
+}
+
+/// Opens another page of the local app typed in the address bar.
+pub fn navigate(app: &AppHandle, url: &str) -> GitResult<()> {
+    let url = local_url(url)?;
+    let view = app
+        .get_webview(LABEL)
+        .ok_or_else(|| err("preview not open"))?;
+    view.navigate(url).map_err(err)
+}
+
+/// Safari's Web Inspector, docked on the page.
+pub fn inspect(app: &AppHandle) {
+    if let Some(view) = app.get_webview(LABEL) {
+        view.open_devtools();
     }
 }
 

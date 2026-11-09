@@ -8,8 +8,8 @@ import { startAgentRun, useInstalledAgents } from "@/features/agents/use-agents"
 import { finalAnswer, useAgentsStore } from "@/stores/agents-store";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { PanelHeader, PanelLoading, PanelMessage } from "@/components/layout/panel";
-import { useRefs, useWorkingTree } from "@/lib/git-queries";
+import { PanelHeader, PanelLoading } from "@/components/layout/panel";
+import { useWorkingTree } from "@/lib/git-queries";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspace-store";
@@ -17,6 +17,7 @@ import { useGitAction } from "@/features/operations/use-git-action";
 import { FILE_STATUS } from "@/features/changed-files/file-status";
 import { groupChanges, pathsOf, type ChangeItem } from "./group-changes";
 import { useT } from "@/i18n";
+import { BranchStatus, RecentCommits } from "./BranchContext";
 
 type ChangeRowProps = { item: ChangeItem; action: "stage" | "unstage" | null; onAction: () => void; busy: boolean };
 
@@ -46,8 +47,10 @@ function ChangeRow({ item, action, onAction, busy }: ChangeRowProps) {
         >
           {status.letter}
         </span>
-        <span className="truncate">{item.path.slice(slash + 1)}</span>
-        <span className="truncate text-xs text-muted-foreground">{item.path.slice(0, Math.max(slash, 0))}</span>
+        <span className="truncate font-mono text-[12.5px]">{item.path.slice(slash + 1)}</span>
+        <span className="truncate font-mono text-[11.5px] text-muted-foreground">
+          {item.path.slice(0, Math.max(slash, 0))}
+        </span>
       </button>
       {action && (
         <Button
@@ -78,12 +81,12 @@ function Group({ title, items, action, run, busy }: GroupProps) {
   if (items.length === 0) return null;
   return (
     <section aria-label={title} className="mb-3">
-      <header className="flex h-7 items-center justify-between px-2 text-[12px] font-medium tracking-wide text-muted-foreground uppercase">
+      <header className="flex h-7 items-center justify-between px-2 text-[12px] font-medium text-muted-foreground">
         <span>
           {title} <span className="font-mono">{items.length}</span>
         </span>
         {action && (
-          <Button variant="ghost" size="xs" disabled={busy} onClick={() => run(pathsOf(items))} className="normal-case">
+          <Button variant="ghost" size="xs" disabled={busy} onClick={() => run(pathsOf(items))}>
             {action === "stage" ? t("changes.stageAll") : t("changes.unstageAll")}
           </Button>
         )}
@@ -188,7 +191,6 @@ function CommitForm({ repoPath, stagedCount }: { repoPath: string; stagedCount: 
 export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const t = useT();
   const tree = useWorkingTree(repoPath);
-  const branch = useRefs(repoPath).data?.head.branch;
   const groups = useMemo(() => groupChanges(tree.data ?? []), [tree.data]);
   const stage = useGitAction<string[]>(repoPath, {
     run: (paths) => gitBackend.stageFiles(repoPath, paths),
@@ -204,21 +206,23 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   return (
     <section aria-label={t("changes.title")} className="flex h-full flex-col bg-panel">
       <PanelHeader>
-        <div data-tauri-drag-region className="min-w-0">
-          <h2 className="text-sm font-semibold">{t("changes.title")}</h2>
-          <p className="truncate text-[12px] text-muted-foreground">
-            {t("changes.on", { branch: branch ?? t("changes.detached") })}
-          </p>
-        </div>
+        <h2 data-tauri-drag-region className="text-sm font-semibold">
+          {t("changes.title")}
+        </h2>
       </PanelHeader>
+      <BranchStatus repoPath={repoPath} />
       {tree.isError ? (
         <DataUnavailable title={t("changes.readError")} error={tree.error} onRetry={() => void tree.refetch()} />
       ) : !tree.data ? (
         <PanelLoading title={t("changes.reading")} variant="grid-searching" />
-      ) : empty ? (
-        <PanelMessage icon={<CircleCheck />} title={t("changes.clean")} hint={t("changes.cleanHint")} />
       ) : (
-        <div className="mt-5 min-h-0 flex-1 overflow-y-auto px-2">
+        <div className="mt-3 min-h-0 flex-1 overflow-y-auto px-2">
+          {empty && (
+            <p className="mx-1 mb-2 flex items-center gap-2 rounded-md px-2 py-2 text-[12.5px] text-muted-foreground">
+              <CircleCheck aria-hidden className="size-3.5 text-added-foreground" />
+              {t("changes.clean")} · {t("changes.cleanHint")}
+            </p>
+          )}
           {groups.conflicted.length > 0 && (
             <p
               role="alert"
@@ -236,6 +240,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
           />
           <Group title={t("changes.staged")} items={groups.staged} action="unstage" run={unstage.mutate} busy={busy} />
           <Group title={t("changes.unstaged")} items={groups.unstaged} action="stage" run={stage.mutate} busy={busy} />
+          <RecentCommits repoPath={repoPath} />
         </div>
       )}
       <CommitForm repoPath={repoPath} stagedCount={groups.staged.length} />

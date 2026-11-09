@@ -23,6 +23,7 @@ import { usePreviewTargets } from "@/features/preview/PreviewList";
 import { pickAgent } from "./AgentButton";
 import { LinearIcon } from "@/features/linear/LinearIcon";
 import { useOpenIssue } from "@/features/linear/linear-queries";
+import { ContextMeter } from "./ContextMeter";
 import { RunSettingsBar } from "./RunSettingsBar";
 import { ChatThread, CONTEXT_SEPARATOR } from "./ChatThread";
 import { startAgentRun, useInstalledAgents } from "./use-agents";
@@ -190,7 +191,14 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
           steps={thread.flatMap((r) => r.steps)}
           running={!!live || sending}
           agentLabel={agentName}
-          settings={agent && <RunSettingsBar agent={agent} />}
+          settings={
+            agent && (
+              <>
+                <RunSettingsBar agent={agent} />
+                <ContextMeter runs={thread} agent={agent} />
+              </>
+            )
+          }
           onStop={live ? () => void gitBackend.cancelAgentRun(live.id) : undefined}
           onSend={agent ? (m, images) => void send(m, images) : undefined}
           empty={

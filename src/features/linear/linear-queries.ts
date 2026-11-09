@@ -53,6 +53,74 @@ export function useWorkspaceIssues() {
   });
 }
 
+export function useProjects(orgId: string | undefined) {
+  return useQuery({
+    queryKey: ["linear", "projects", orgId],
+    queryFn: () => gitBackend.linearProjects(orgId ?? ""),
+    enabled: !!orgId,
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** The current cycle of each team of the workspace that runs cycles. */
+export function useActiveCycles(orgId: string | undefined) {
+  return useQuery({
+    queryKey: ["linear", "cycles", orgId],
+    queryFn: () => gitBackend.linearActiveCycles(orgId ?? ""),
+    enabled: !!orgId,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+  });
+}
+
+/** The project picked in the list, if any (in the active workspace). */
+export function useOpenProject() {
+  // Only on the Projects page: a project remembered from before doesn't leak into "My issues".
+  const id = useLinearStore((s) => (s.page === "projects" ? s.project : null));
+  const account = useActiveAccount();
+  const project = useProjects(account?.id).data?.find((p) => p.id === id) ?? null;
+  return id ? { id, project, orgId: account?.id } : null;
+}
+
+/** What the board shows: a project's issues (anyone's), or the user's own across workspaces. */
+export function useBoardIssues() {
+  const open = useOpenProject();
+  const account = useActiveAccount();
+  const mine = useWorkspaceIssues();
+  const project = useQuery({
+    queryKey: ["linear", "project-issues", open?.orgId, open?.id],
+    queryFn: () => gitBackend.linearProjectIssues(open?.orgId ?? "", open?.id ?? ""),
+    enabled: !!open?.orgId,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+  });
+  const page = useLinearStore((s) => s.page);
+  const cycles = useActiveCycles(page === "cycle" ? account?.id : undefined);
+  if (page === "cycle")
+    return {
+      data: cycles.data?.flatMap((c) =>
+        c.issues.map((issue) => ({ ...issue, orgId: account?.id ?? "", orgName: account?.name ?? "" })),
+      ),
+      error: cycles.error,
+      refetch: () => void cycles.refetch(),
+    };
+  if (!open) return mine;
+  return {
+    data: project.data?.map((issue) => ({ ...issue, orgId: open.orgId ?? "", orgName: account?.name ?? "" })),
+    error: project.error,
+    refetch: () => void project.refetch(),
+  };
+}
+
+export function useTeamStates(orgId: string | undefined) {
+  return useQuery({
+    queryKey: ["linear", "states", orgId],
+    queryFn: () => gitBackend.linearTeamStates(orgId ?? ""),
+    enabled: !!orgId,
+    staleTime: 10 * 60_000,
+  });
+}
+
 export function useIssue(orgId: string | undefined, id: string | null) {
   return useQuery({
     queryKey: ["linear", "issue", orgId, id],

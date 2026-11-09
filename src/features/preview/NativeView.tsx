@@ -16,13 +16,26 @@ function useOverlayOpen() {
   return open;
 }
 
-type NativeViewProps = { url: string; zoom: number; className?: string; style?: React.CSSProperties };
+export type ViewBounds = { x: number; y: number; width: number; height: number; zoom: number; radius: number };
+
+type NativeViewProps = {
+  url: string;
+  zoom: number;
+  className?: string;
+  style?: React.CSSProperties;
+  /** Places the native view (the preview's by default); called again whenever the box moves. */
+  show?: (url: string, bounds: ViewBounds) => Promise<unknown>;
+  hide?: () => Promise<unknown>;
+};
+
+const showPreview = (url: string, bounds: ViewBounds) => gitBackend.previewViewShow(url, bounds);
+const hidePreview = () => gitBackend.previewViewHide();
 
 /**
  * Reserves a box in the layout and lays the native preview webview exactly over it, following it while
  * panels resize. Positions only cross to Rust when they change.
  */
-export function NativeView({ url, zoom, className, style }: NativeViewProps) {
+export function NativeView({ url, zoom, className, style, show = showPreview, hide = hidePreview }: NativeViewProps) {
   const box = useRef<HTMLDivElement>(null);
   const uiScale = useAppearance((s) => s.uiScale);
   const settingsOpen = useUiStore((s) => s.settingsOpen);
@@ -31,7 +44,7 @@ export function NativeView({ url, zoom, className, style }: NativeViewProps) {
 
   useEffect(() => {
     if (hidden) {
-      void gitBackend.previewViewHide();
+      void hide();
       return;
     }
     let frame = 0;
@@ -40,6 +53,7 @@ export function NativeView({ url, zoom, className, style }: NativeViewProps) {
       const el = box.current;
       if (el) {
         const r = el.getBoundingClientRect();
+        const radius = parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0;
         // CSS pixels → window points: the whole app may itself be zoomed (Settings › Interface size).
         const bounds = {
           x: r.left * uiScale,
@@ -47,11 +61,12 @@ export function NativeView({ url, zoom, className, style }: NativeViewProps) {
           width: r.width * uiScale,
           height: r.height * uiScale,
           zoom: zoom * uiScale,
+          radius: radius * uiScale,
         };
         const key = JSON.stringify(bounds) + url;
         if (key !== last && r.width > 0) {
           last = key;
-          void gitBackend.previewViewShow(url, bounds).catch(() => undefined);
+          void show(url, bounds).catch(() => undefined);
         }
       }
       frame = requestAnimationFrame(follow);
@@ -59,9 +74,9 @@ export function NativeView({ url, zoom, className, style }: NativeViewProps) {
     follow();
     return () => {
       cancelAnimationFrame(frame);
-      void gitBackend.previewViewHide();
+      void hide();
     };
-  }, [url, zoom, uiScale, hidden]);
+  }, [url, zoom, uiScale, hidden, show, hide]);
 
   return <div ref={box} className={className} style={style} />;
 }

@@ -26,8 +26,8 @@ import { useLinearStore } from "@/stores/linear-store";
 import { useNoticesStore } from "@/stores/notices-store";
 import { useUiStore } from "@/stores/ui-store";
 import { useAgentsStore } from "@/stores/agents-store";
-import { useWorkspaceStore } from "@/stores/workspace-store";
-import { startAgentRun, useInstalledAgents } from "@/features/agents/use-agents";
+import { useInstalledAgents } from "@/features/agents/use-agents";
+import { startIssueAgent } from "./issue-agent";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,6 +39,7 @@ import { LinearIcon } from "./LinearIcon";
 import { PriorityIcon, StateDot } from "./LinearList";
 import { useLinearAccounts, useLinearImage, useOpenIssue } from "./linear-queries";
 import { LinearBoard } from "./LinearBoard";
+import { LinearProjects } from "./LinearProjects";
 
 const Markdown = lazy(() => import("@/features/agents/Markdown"));
 
@@ -98,19 +99,6 @@ function useCreateBranch(repoPath: string) {
   });
 }
 
-/** What the agent is asked to do with an issue: implement it, with everything Linear knows. */
-function issuePrompt(issue: LinearIssueDetail): string {
-  return [
-    `Implement the Linear issue ${issue.identifier}: "${issue.title}".`,
-    issue.description ? `Description:\n${issue.description}` : null,
-    issue.labels.nodes.length ? `Labels: ${issue.labels.nodes.map((l) => l.name).join(", ")}.` : null,
-    `Linear's branch name for it is \`${issue.branchName}\`; work on the current branch.`,
-    "Start by reading the relevant code, then make the change with tests, and end with a short summary of what changed.",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
 /** Starts Claude Code or Codex on the issue, in the composer's mode, and shows the run. */
 function StartAgent({ repoPath, issue }: { repoPath: string; issue: LinearIssueDetail }) {
   const t = useT();
@@ -119,16 +107,8 @@ function StartAgent({ repoPath, issue }: { repoPath: string; issue: LinearIssueD
   const [starting, setStarting] = useState(false);
   const start = async (agent: AgentKind) => {
     setStarting(true);
-    const id = await startAgentRun(
-      repoPath,
-      agent,
-      { kind: "custom", prompt: issuePrompt(issue) },
-      `${issue.identifier} ${issue.title}`,
-    );
+    await startIssueAgent(repoPath, agent, issue);
     setStarting(false);
-    if (!id) return;
-    useAgentsStore.getState().select({ type: "run", id });
-    useWorkspaceStore.getState().setView("agents");
   };
   const available = (kind: AgentKind) => installed?.find((a) => a.kind === kind)?.installed ?? false;
   const main: AgentKind = available(preferred) ? preferred : available("claude") ? "claude" : "codex";
@@ -177,12 +157,14 @@ function StartAgent({ repoPath, issue }: { repoPath: string; issue: LinearIssueD
 export function LinearIssueView({ repoPath }: { repoPath: string }) {
   const t = useT();
   const id = useLinearStore((s) => s.issue);
+  const page = useLinearStore((s) => s.page);
+  const project = useLinearStore((s) => s.project);
   const issue = useOpenIssue();
   const org = useLinearAccounts().data?.find((a) => a.id === issue.orgId);
   const createBranch = useCreateBranch(repoPath);
   const notify = useNoticesStore((s) => s.notify);
 
-  if (!id) return <LinearBoard />;
+  if (!id) return page === "projects" && !project ? <LinearProjects /> : <LinearBoard />;
   if (issue.isError)
     return <DataUnavailable title={t("linear.issueError")} error={issue.error} onRetry={() => void issue.refetch()} />;
   if (!issue.data) return <PanelLoading title={t("common.loading")} variant="grid-orbit" />;

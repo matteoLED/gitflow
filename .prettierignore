@@ -2,3 +2,4 @@ pnpm-lock.yaml
 dist
 src-tauri/target
 src-tauri/gen
+src/routeTree.gen.ts

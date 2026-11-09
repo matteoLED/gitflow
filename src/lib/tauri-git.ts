@@ -18,6 +18,14 @@ import type {
   AgentKind,
   AgentTask,
   AgentSession,
+  SessionUsage,
+  AgentDefinition,
+  AgentScope,
+  CodeGraphStatus,
+  CodeHotspot,
+  CodeFileMap,
+  CodeImpact,
+  UsageStats,
   AgentStep,
   RunSettings,
   LinearAccount,
@@ -25,6 +33,11 @@ import type {
   LinearIssueDetail,
   LinearOrganization,
   LinearTeamStates,
+  LinearProject,
+  LinearCycle,
+  GithubStatus,
+  CreatedLinearIssue,
+  NewLinearIssue,
   MergeMethod,
   PullRequestDetails,
   PreviewTarget,
@@ -75,6 +88,12 @@ export const gitBackend = {
   rerunFailedChecks: (repoPath: string, runIds: number[]) => invoke<null>("rerun_failed_checks", { repoPath, runIds }),
   addReviewer: (repoPath: string, number: number, login: string) =>
     invoke<null>("add_reviewer", { repoPath, number, login }),
+  /** Commits on HEAD past `base` (default: the remote's default branch); null without a base. */
+  compareWithBase: (repoPath: string, base: string | null) =>
+    invoke<{ base: string; ahead: number } | null>("compare_with_base", { repoPath, base }),
+  /** `gh pr create` from the checked-out branch; returns the new PR's URL. */
+  createPullRequest: (repoPath: string, base: string, title: string, body: string, draft: boolean) =>
+    invoke<string>("create_pull_request", { repoPath, base, title, body, draft }),
   commentPullRequest: (repoPath: string, number: number, body: string) =>
     invoke<null>("comment_pull_request", { repoPath, number, body }),
   /** `gh pr merge` with the user's login; never deletes or switches branches. */
@@ -83,6 +102,7 @@ export const gitBackend = {
   getGithubWebUrl: (repoPath: string) => invoke<string | null>("get_github_web_url", { repoPath }),
   /** Opens a github.com page in the default browser (other URLs are refused by the backend). */
   openGithubUrl: (url: string) => invoke<null>("open_github_url", { url }),
+  githubStatus: () => invoke<GithubStatus>("github_status"),
   getFileContents: (repoPath: string, hash: string, path: string) =>
     invoke<string>("get_file_contents", { repoPath, hash, path }),
   listWorkflowRuns: (repoPath: string) => invoke<WorkflowRun[]>("list_workflow_runs", { repoPath }),
@@ -103,15 +123,49 @@ export const gitBackend = {
   cancelAgentRun: (runId: string) => invoke<null>("cancel_agent_run", { runId }),
   listAgentSessions: (repoPath: string) => invoke<AgentSession[]>("list_agent_sessions", { repoPath }),
   getAgentSession: (repoPath: string, id: string) => invoke<AgentStep[]>("get_agent_session", { repoPath, id }),
+  getSessionUsage: (repoPath: string, id: string) => invoke<SessionUsage>("get_session_usage", { repoPath, id }),
+  listAgentDefinitions: (repoPath: string) => invoke<AgentDefinition[]>("list_agent_definitions", { repoPath }),
+  /** Writes the agent's file; `previous` is its old name when renamed. */
+  saveAgentDefinition: (repoPath: string, definition: AgentDefinition, previous: string | null) =>
+    invoke<null>("save_agent_definition", { repoPath, definition, previous }),
+  deleteAgentDefinition: (repoPath: string, scope: AgentScope, name: string) =>
+    invoke<null>("delete_agent_definition", { repoPath, scope, name }),
+  codeGraphStatus: (repoPath: string) => invoke<CodeGraphStatus>("code_graph_status", { repoPath }),
+  codeGraphHotspots: (repoPath: string) => invoke<CodeHotspot[]>("code_graph_hotspots", { repoPath }),
+  codeGraphMap: (repoPath: string) => invoke<CodeFileMap>("code_graph_map", { repoPath }),
+  codeGraphImpact: (repoPath: string, base: string) => invoke<CodeImpact>("code_graph_impact", { repoPath, base }),
+  codeGraphUpdate: (repoPath: string) => invoke<null>("code_graph_update", { repoPath }),
+  /** Every Claude Code session on this machine, by day, project and model. */
+  getUsageStats: () => invoke<UsageStats>("get_usage_stats"),
   listPreviewTargets: (repoPath: string) => invoke<PreviewTarget[]>("list_preview_targets", { repoPath }),
   /** Runs a detected app's dev server; its URL and logs arrive as `preview` events. */
   startPreview: (repoPath: string, id: string) => invoke<null>("start_preview", { repoPath, id }),
   stopPreview: (id: string) => invoke<null>("stop_preview", { id }),
   /** Native preview webview (first-party cookies, unlike an iframe), placed in window coordinates. */
-  previewViewShow: (url: string, bounds: { x: number; y: number; width: number; height: number; zoom: number }) =>
-    invoke<null>("preview_view_show", { url, bounds }),
+  previewViewShow: (
+    url: string,
+    bounds: { x: number; y: number; width: number; height: number; zoom: number; radius: number },
+  ) => invoke<null>("preview_view_show", { url, bounds }),
   previewViewHide: () => invoke<null>("preview_view_hide"),
   previewViewReload: () => invoke<null>("preview_view_reload"),
+  /** Shows browser tab `tab` (created on `url` the first time) at `bounds`; other tabs are hidden. */
+  browserShow: (
+    tab: string,
+    url: string,
+    bounds: { x: number; y: number; width: number; height: number; zoom: number; radius: number },
+  ) => invoke<null>("browser_show", { tab, url, bounds }),
+  browserHide: () => invoke<null>("browser_hide"),
+  browserClose: (tab: string) => invoke<null>("browser_close", { tab }),
+  browserNavigate: (tab: string, url: string) => invoke<null>("browser_navigate", { tab, url }),
+  browserCommand: (tab: string, action: "back" | "forward" | "reload") =>
+    invoke<null>("browser_command", { tab, action }),
+  /** The tab's address right now, route included. */
+  browserUrl: (tab: string) => invoke<string | null>("browser_url", { tab }),
+  browserInspect: (tab: string) => invoke<null>("browser_inspect", { tab }),
+  previewViewGo: (forward: boolean) => invoke<null>("preview_view_go", { forward }),
+  /** Another page of the local app; anything not on localhost is refused. */
+  previewViewNavigate: (url: string) => invoke<null>("preview_view_navigate", { url }),
+  previewViewInspect: () => invoke<null>("preview_view_inspect"),
   previewViewClose: () => invoke<null>("preview_view_close"),
   /** Current address inside the preview, route included; null when none is shown. */
   previewViewUrl: () => invoke<string | null>("preview_view_url"),
@@ -139,6 +193,12 @@ export const gitBackend = {
   linearTeamStates: (orgId: string) => invoke<LinearTeamStates[]>("linear_team_states", { orgId }),
   linearSetIssueState: (orgId: string, issueId: string, stateId: string) =>
     invoke<null>("linear_set_issue_state", { orgId, issueId, stateId }),
+  linearCreateIssue: (orgId: string, issue: NewLinearIssue) =>
+    invoke<CreatedLinearIssue>("linear_create_issue", { orgId, issue }),
+  linearProjects: (orgId: string) => invoke<LinearProject[]>("linear_projects", { orgId }),
+  linearActiveCycles: (orgId: string) => invoke<LinearCycle[]>("linear_active_cycles", { orgId }),
+  linearProjectIssues: (orgId: string, projectId: string) =>
+    invoke<LinearIssue[]>("linear_project_issues", { orgId, projectId }),
   linearImage: (orgId: string, url: string) => invoke<string>("linear_image", { orgId, url }),
   getGithubUser: (repoPath: string) => invoke<GithubUser>("get_github_user", { repoPath }),
   getGitIdentity: () => invoke<GitIdentity>("get_git_identity"),
@@ -147,6 +207,9 @@ export const gitBackend = {
   unstageFiles: (repoPath: string, paths: string[]) => invoke<null>("unstage_files", { repoPath, paths }),
   createCommit: (repoPath: string, message: string) => invoke<string>("create_commit", { repoPath, message }),
   switchBranch: (repoPath: string, name: string) => invoke<null>("switch_branch", { repoPath, name }),
+  /** Checks out `origin/x` as a local tracking branch (or switches to it if it exists); returns its name. */
+  checkoutRemoteBranch: (repoPath: string, remoteRef: string) =>
+    invoke<string>("checkout_remote_branch", { repoPath, remoteRef }),
   createBranch: (repoPath: string, name: string, switchTo: boolean) =>
     invoke<null>("create_branch", { repoPath, name, switch: switchTo }),
   fetch: (repoPath: string) => invoke<null>("fetch", { repoPath }),

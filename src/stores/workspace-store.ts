@@ -3,7 +3,8 @@ import { persist } from "zustand/middleware";
 import type { RepositoryInfo, WorkingSide } from "@/types/git";
 
 /** history: branches + commits; github: pull requests + their commits; changes: working tree; agents: AI runs. */
-export type View = "home" | "history" | "github" | "changes" | "ci" | "agents" | "preview" | "linear";
+export type View =
+  "home" | "work" | "history" | "github" | "changes" | "ci" | "agents" | "preview" | "linear" | "browser" | "graph";
 
 /** The pull request being reviewed: `base` is its merge-base, so `base..head` is its whole diff. */
 export type ActivePullRequest = {
@@ -44,7 +45,8 @@ type WorkspaceState = {
   forgetRecent: (path: string) => void;
   setView: (view: View) => void;
   showHistoryOf: (rev: string | null, label?: string) => void;
-  openPullRequest: (pr: ActivePullRequest, range: string) => void;
+  /** Opens a pull request in the GitHub view, or in `view` (the Work page shows it in place). */
+  openPullRequest: (pr: ActivePullRequest, range: string, view?: View) => void;
   /** Selects the active pull request's whole diff. */
   showPullRequestChanges: () => void;
   selectCommit: (hash: string) => void;
@@ -134,7 +136,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (!next) return { repos, sessions, repo: null, ...freshSession() };
           return { repos, ...activate({ ...state, repo: null, sessions }, next) };
         }),
-      setView: (view) => set({ view }),
+      // A pull request is reviewed in the GitHub view: the History page always shows the branch again,
+      // never a PR opened earlier (whose commits aren't the ones just made).
+      setView: (view) =>
+        set(({ pullRequest }) =>
+          view === "history" && pullRequest
+            ? {
+                view,
+                historyRev: null,
+                historyLabel: null,
+                pullRequest: null,
+                selectedCommitHash: null,
+                compareBase: null,
+                selectedFilePath: null,
+              }
+            : { view },
+        ),
       // Keeps the GitHub view when opening a pull request's commits; anything else shows branch history.
       showHistoryOf: (rev, label) =>
         set(({ view }) => ({
@@ -147,9 +164,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           selectedFilePath: null,
         })),
       // Opening a pull request lands on its whole diff, ready to review; its commits stay one click away.
-      openPullRequest: (pr, range) =>
+      openPullRequest: (pr, range, view = "github") =>
         set({
-          view: "github",
+          view,
           historyRev: range,
           historyLabel: `#${pr.number} ${pr.title}`,
           pullRequest: pr,

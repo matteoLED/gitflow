@@ -1,8 +1,9 @@
 //! Linear: the user's issues across their organizations, read with personal API keys.
 //! Keys live in the macOS Keychain (one entry per organization); only names and ids are stored on disk.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -53,10 +54,80 @@ fn keychain(org_id: &str) -> GitResult<keyring::Entry> {
     keyring::Entry::new(KEYCHAIN_SERVICE, org_id).map_err(io)
 }
 
+/// Keys read this launch: the Keychain is asked once per organization, not on every request.
+fn cached_keys() -> &'static Mutex<HashMap<String, String>> {
+    static KEYS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    KEYS.get_or_init(Default::default)
+}
+
+/// Debug builds are re-signed on every rebuild, so macOS forgets "Always allow" and asks for the
+/// Keychain password at each launch. In development only, keys also go to a 0600 file next to the
+/// account list; release builds use the Keychain alone.
+#[cfg(debug_assertions)]
+mod dev_store {
+    use std::collections::HashMap;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    fn path() -> Option<std::path::PathBuf> {
+        Some(
+            super::ACCOUNTS_FILE
+                .get()?
+                .with_file_name("linear-keys.dev.json"),
+        )
+    }
+    fn read() -> HashMap<String, String> {
+        path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default()
+    }
+    pub fn get(org_id: &str) -> Option<String> {
+        read().remove(org_id)
+    }
+    pub fn set(org_id: &str, key: Option<&str>) {
+        let Some(path) = path() else { return };
+        let mut keys = read();
+        match key {
+            Some(k) => keys.insert(org_id.to_string(), k.to_string()),
+            None => keys.remove(org_id),
+        };
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path);
+        if let (Ok(mut file), Ok(json)) = (file, serde_json::to_vec(&keys)) {
+            let _ = std::io::Write::write_all(&mut file, &json);
+        }
+    }
+}
+
 fn key_of(org_id: &str) -> GitResult<String> {
-    keychain(org_id)?.get_password().map_err(|_| {
-        GitError::invalid("This Linear account is no longer connected. Add its API key again.")
-    })
+    if let Some(key) = cached_keys()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(org_id)
+    {
+        return Ok(key.clone());
+    }
+    #[cfg(debug_assertions)]
+    let stored = dev_store::get(org_id);
+    #[cfg(not(debug_assertions))]
+    let stored: Option<String> = None;
+    let key = match stored {
+        Some(key) => key,
+        None => keychain(org_id)?.get_password().map_err(|_| {
+            GitError::invalid("This Linear account is no longer connected. Add its API key again.")
+        })?,
+    };
+    #[cfg(debug_assertions)]
+    dev_store::set(org_id, Some(&key));
+    cached_keys()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(org_id.to_string(), key.clone());
+    Ok(key)
 }
 
 /// Personal API keys look like `lin_api_…`; anything else is refused before it leaves the machine.
@@ -128,6 +199,12 @@ pub fn add_account(key: &str) -> GitResult<Account> {
             .to_string(),
     };
     keychain(&account.id)?.set_password(key).map_err(io)?;
+    #[cfg(debug_assertions)]
+    dev_store::set(&account.id, Some(key));
+    cached_keys()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(account.id.clone(), key.to_string());
     let mut accounts: Vec<Account> = read_accounts()
         .into_iter()
         .filter(|a| a.id != account.id)
@@ -145,6 +222,12 @@ pub fn remove_account(org_id: &str) -> GitResult<()> {
     if let Ok(entry) = keychain(org_id) {
         let _ = entry.delete_credential();
     }
+    #[cfg(debug_assertions)]
+    dev_store::set(org_id, None);
+    cached_keys()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(org_id);
     let accounts: Vec<Account> = read_accounts()
         .into_iter()
         .filter(|a| a.id != org_id)
@@ -153,14 +236,20 @@ pub fn remove_account(org_id: &str) -> GitResult<()> {
 }
 
 const ISSUE_FIELDS: &str = "id identifier title priority priorityLabel url branchName updatedAt
-    state { name type color } team { id key name } project { name } cycle { number }
-    labels { nodes { name color } }";
+    state { id name type color position } team { id key name } project { id name icon color } cycle { number }
+    labels { nodes { name color } } assignee { name avatarUrl }";
 
-/// Open issues assigned to the user, most recently updated first.
+/// Open issues, plus those closed in the last two weeks (the Done and Canceled columns).
+const OPEN_OR_RECENT: &str = "{ or: [
+    { state: { type: { nin: [\"completed\", \"canceled\"] } } },
+    { completedAt: { gt: \"-P2W\" } },
+    { canceledAt: { gt: \"-P2W\" } } ] }";
+
+/// Issues assigned to the user (open, or closed recently), most recently updated first.
 pub fn my_issues(org_id: &str) -> GitResult<Value> {
     let query = format!(
-        "query {{ viewer {{ assignedIssues(first: 150, orderBy: updatedAt,
-           filter: {{ state: {{ type: {{ nin: [\"completed\", \"canceled\"] }} }} }}) {{ nodes {{ {ISSUE_FIELDS} }} }} }} }}"
+        "query {{ viewer {{ assignedIssues(first: 200, orderBy: updatedAt,
+           filter: {OPEN_OR_RECENT}) {{ nodes {{ {ISSUE_FIELDS} }} }} }} }}"
     );
     let data = graphql(&key_of(org_id)?, &query, json!({}))?;
     Ok(data
@@ -189,9 +278,77 @@ pub fn issue(org_id: &str, id: &str) -> GitResult<Value> {
         .ok_or_else(|| GitError::invalid("Issue not found."))
 }
 
+/// The workspace's projects with their icon, color, status and progress.
+pub fn projects(org_id: &str) -> GitResult<Value> {
+    let query = "query { projects(first: 100, orderBy: updatedAt) { nodes {
+        id name icon color progress targetDate url
+        status { name type color } lead { name avatarUrl } teams { nodes { id key } } } } }";
+    let data = graphql(&key_of(org_id)?, query, json!({}))?;
+    Ok(data
+        .pointer("/projects/nodes")
+        .cloned()
+        .unwrap_or(json!([])))
+}
+
+/// Every issue of a project (anyone's), open or closed recently.
+pub fn project_issues(org_id: &str, project_id: &str) -> GitResult<Value> {
+    if !valid_id(project_id) {
+        return Err(GitError::invalid("Invalid project id."));
+    }
+    let query = format!(
+        "query($id: String!) {{ project(id: $id) {{ issues(first: 250, orderBy: updatedAt,
+           filter: {OPEN_OR_RECENT}) {{ nodes {{ {ISSUE_FIELDS} }} }} }} }}"
+    );
+    let data = graphql(&key_of(org_id)?, &query, json!({ "id": project_id }))?;
+    Ok(data
+        .pointer("/project/issues/nodes")
+        .cloned()
+        .unwrap_or(json!([])))
+}
+
+/// The current cycle of each team that runs cycles, with all of its issues (anyone's).
+pub fn active_cycles(org_id: &str) -> GitResult<Value> {
+    let key = key_of(org_id)?;
+    // Two steps: asking every team for its cycle *and* its issues at once is "too complex" for Linear.
+    let teams = "query { teams(first: 50) { nodes { id key name
+        activeCycle { id number name startsAt endsAt progress } } } }";
+    let mut cycles = cycles_of(&graphql(&key, teams, json!({}))?);
+    let query = format!(
+        "query($id: String!) {{ cycle(id: $id) {{ issues(first: 250) {{ nodes {{ {ISSUE_FIELDS} }} }} }} }}"
+    );
+    for cycle in &mut cycles {
+        let id = cycle["id"]
+            .as_str()
+            .filter(|id| valid_id(id))
+            .map(str::to_owned);
+        let Some(id) = id else { continue };
+        let data = graphql(&key, &query, json!({ "id": id }))?;
+        cycle["issues"] = data
+            .pointer("/cycle/issues/nodes")
+            .cloned()
+            .unwrap_or(json!([]));
+    }
+    Ok(Value::Array(cycles))
+}
+
+/// One entry per team with an active cycle: the cycle and its team (its issues come next).
+fn cycles_of(data: &Value) -> Vec<Value> {
+    let teams = data.pointer("/teams/nodes").and_then(Value::as_array);
+    teams
+        .into_iter()
+        .flatten()
+        .filter_map(|team| {
+            let mut cycle = team.get("activeCycle").filter(|c| !c.is_null())?.clone();
+            cycle["issues"] = json!([]);
+            cycle["team"] = json!({ "id": team["id"], "key": team["key"], "name": team["name"] });
+            Some(cycle)
+        })
+        .collect()
+}
+
 /// Workflow states of every team, to move an issue to another column.
 pub fn team_states(org_id: &str) -> GitResult<Value> {
-    let query = "query { teams(first: 100) { nodes { id states { nodes { id name type color position } } } } }";
+    let query = "query { teams(first: 100) { nodes { id key name states { nodes { id name type color position } } } } }";
     let data = graphql(&key_of(org_id)?, query, json!({}))?;
     Ok(data.pointer("/teams/nodes").cloned().unwrap_or(json!([])))
 }
@@ -220,6 +377,63 @@ pub fn set_issue_state(org_id: &str, issue_id: &str, state_id: &str) -> GitResul
     } else {
         Err(io("the issue wasn't updated"))
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewIssue {
+    pub team_id: String,
+    pub title: String,
+    pub description: String,
+    /// 0 none, 1 urgent … 4 low, as in Linear.
+    pub priority: u8,
+    pub state_id: Option<String>,
+    pub assign_to_me: bool,
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
+/// Creates an issue; returns it with what an agent needs to work on it.
+pub fn create_issue(org_id: &str, issue: &NewIssue) -> GitResult<Value> {
+    let title = issue.title.trim();
+    if title.is_empty() || title.chars().count() > 255 {
+        return Err(GitError::invalid(
+            "An issue needs a title (255 characters at most).",
+        ));
+    }
+    let state_ok = issue.state_id.as_deref().is_none_or(valid_id)
+        && issue.project_id.as_deref().is_none_or(valid_id);
+    if !valid_id(&issue.team_id) || !state_ok || issue.priority > 4 {
+        return Err(GitError::invalid("Invalid team, state or priority."));
+    }
+    let key = key_of(org_id)?;
+    let mut input = json!({
+        "teamId": issue.team_id,
+        "title": title,
+        "description": issue.description,
+        "priority": issue.priority,
+    });
+    if let Some(state) = &issue.state_id {
+        input["stateId"] = json!(state);
+    }
+    if let Some(project) = &issue.project_id {
+        input["projectId"] = json!(project);
+    }
+    if issue.assign_to_me {
+        let me = graphql(&key, "query { viewer { id } }", json!({}))?;
+        input["assigneeId"] = me.pointer("/viewer/id").cloned().unwrap_or(Value::Null);
+    }
+    let query = "mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success
+        issue { id identifier title description url branchName } } }";
+    let data = graphql(&key, query, json!({ "input": input }))?;
+    data.pointer("/issueCreate/issue")
+        .filter(|_| {
+            data.pointer("/issueCreate/success")
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+        .cloned()
+        .ok_or_else(|| io("the issue wasn't created"))
 }
 
 /// Every workspace the user belongs to, connected or not (best effort: Linear may refuse it to API keys).
@@ -288,6 +502,28 @@ fn upload_url(url: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn draft(title: &str, priority: u8) -> NewIssue {
+        NewIssue {
+            team_id: "team-1".into(),
+            title: title.into(),
+            description: String::new(),
+            priority,
+            state_id: None,
+            assign_to_me: false,
+            project_id: None,
+        }
+    }
+
+    #[test]
+    fn an_issue_needs_a_title() {
+        assert!(create_issue("org", &draft("   ", 0)).is_err());
+    }
+
+    #[test]
+    fn priorities_stop_at_low() {
+        assert!(create_issue("org", &draft("Fix it", 5)).is_err());
+    }
+
     #[test]
     fn only_personal_api_keys_are_accepted() {
         assert!(valid_key("lin_api_ABCdef123"));
@@ -305,6 +541,20 @@ mod tests {
             !upload_url("https://uploads.linear.app.evil.com/x")
                 && !upload_url("https://evil.com/?u=https://uploads.linear.app/")
                 && !upload_url("http://uploads.linear.app/x")
+        );
+    }
+
+    #[test]
+    fn only_teams_running_a_cycle_have_one() {
+        let data = json!({ "teams": { "nodes": [
+            { "id": "a", "key": "A", "name": "A", "activeCycle": null },
+            { "id": "b", "key": "B", "name": "B", "activeCycle": { "number": 4 } }
+        ] } });
+        assert_eq!(
+            cycles_of(&data),
+            vec![
+                json!({ "number": 4, "issues": [], "team": { "id": "b", "key": "B", "name": "B" } })
+            ]
         );
     }
 }

@@ -9,8 +9,7 @@ use super::model::*;
 pub const LOG_FORMAT: &str = "--format=%H%x00%P%x00%an%x00%ae%x00%aI%x00%D%x00%(trailers:key=Co-authored-by,valueonly,separator=%x1f)%x00%s%x1e";
 
 /// `git for-each-ref` format consumed by [`parse_refs`].
-pub const REF_FORMAT: &str =
-    "--format=%(refname)%00%(upstream:short)%00%(upstream:track,nobracket)";
+pub const REF_FORMAT: &str = "--format=%(refname)%00%(upstream:short)%00%(upstream:track,nobracket)%00%(committerdate:iso-strict)%00%(contents:subject)";
 
 fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
@@ -110,8 +109,15 @@ pub fn parse_refs(text: &str) -> RefsSnapshot {
         let refname = fields.next().unwrap_or_default();
         let upstream = fields.next().unwrap_or_default();
         let track = fields.next().unwrap_or_default();
+        let (date, subject) = (
+            fields.next().unwrap_or_default(),
+            fields.next().unwrap_or_default(),
+        );
         if let Some(name) = refname.strip_prefix("refs/heads/") {
-            snapshot.branches.push(local_branch(name, upstream, track));
+            let mut branch = local_branch(name, upstream, track);
+            branch.committed_at = date.into();
+            branch.subject = subject.into();
+            snapshot.branches.push(branch);
         } else if let Some(rest) = refname.strip_prefix("refs/remotes/") {
             if let Some((remote, name)) = rest.split_once('/').filter(|(_, n)| *n != "HEAD") {
                 snapshot.remotes.push(RemoteBranch {
@@ -139,6 +145,8 @@ fn local_branch(name: &str, upstream: &str, track: &str) -> LocalBranch {
         upstream_gone: track == "gone",
         ahead: count("ahead "),
         behind: count("behind "),
+        committed_at: String::new(),
+        subject: String::new(),
     }
 }
 
@@ -321,6 +329,16 @@ mod tests {
                 snapshot.branches[1].upstream_gone
             ),
             (2, 5, true)
+        );
+    }
+
+    #[test]
+    fn refs_read_the_last_commit_of_a_branch() {
+        let branch =
+            &parse_refs("refs/heads/a\0\0\x002026-11-09T10:00:00+01:00\0fix: x\n").branches[0];
+        assert_eq!(
+            (branch.committed_at.as_str(), branch.subject.as_str()),
+            ("2026-11-09T10:00:00+01:00", "fix: x")
         );
     }
 

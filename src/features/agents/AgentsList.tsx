@@ -1,14 +1,16 @@
 import { useShallow } from "zustand/react/shallow";
 import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Plus, TriangleAlert } from "lucide-react";
+import { BarChart3, ChevronRight, Plus, TriangleAlert } from "lucide-react";
 import { ClaudeIcon } from "./agent-icons";
+import { AgentDefinitionsSection } from "./AgentDefinitions";
 import { useT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { formatAge } from "@/lib/format-date";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
-import { useAgentsStore, type AgentSelection } from "@/stores/agents-store";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAgentsStore, type AgentSelection, type AgentsListTab } from "@/stores/agents-store";
 import { StatusIcon, ghStatus } from "./status";
 
 function Section({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
@@ -95,7 +97,11 @@ function ClaudeSessions({ repoPath, query }: { repoPath: string; query: string }
     queryFn: () => gitBackend.listAgentSessions(repoPath),
     refetchInterval: 30_000,
   });
-  const visible = (sessions.data ?? []).filter((s) => matches(query, s.title, s.gitBranch));
+  // Conversations started from the app are already under Runs: listed once, there.
+  const fromApp = useAgentsStore(
+    useShallow((s) => s.runs.filter((r) => r.repoPath === repoPath && r.sessionId).map((r) => r.sessionId)),
+  );
+  const visible = (sessions.data ?? []).filter((s) => !fromApp.includes(s.id) && matches(query, s.title, s.gitBranch));
   return (
     <Section title={t("agents.sessions")} count={sessions.data ? visible.length : undefined}>
       {sessions.isError && <Empty>{toGitError(sessions.error).message}</Empty>}
@@ -151,25 +157,52 @@ function WorkflowRuns({ repoPath, query }: { repoPath: string; query: string }) 
 /** Sidebar of the Agents view: runs started here, Claude Code sessions, GitHub Actions. */
 export function AgentsList({ repoPath, query }: { repoPath: string; query: string }) {
   const t = useT();
-  const { selection, select } = useAgentsStore(useShallow((s) => ({ selection: s.selection, select: s.select })));
+  const { selection, select, listTab, setListTab } = useAgentsStore(
+    useShallow((s) => ({ selection: s.selection, select: s.select, listTab: s.listTab, setListTab: s.setListTab })),
+  );
+  const item =
+    "mb-1 flex h-7 w-full items-center gap-2 rounded-md px-2 text-[13px] text-sidebar-foreground outline-none transition-colors hover:bg-white/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
   return (
-    <nav aria-label={t("agents.title")} className="mt-3 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-      <button
-        type="button"
-        onClick={() => select({ type: "new" })}
-        className={cn(
-          "mb-1 flex h-7 w-full items-center gap-2 rounded-md px-2 text-[13px] text-sidebar-foreground outline-none transition-colors hover:bg-white/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
-          selection.type === "new" && "bg-white/[0.08] text-foreground",
-        )}
-      >
-        <Plus aria-hidden className="size-3.5 text-primary" />
-        {t("agents.new")}
-      </button>
-      <ul>
-        <AppRuns repoPath={repoPath} query={query} />
-        <ClaudeSessions repoPath={repoPath} query={query} />
-        <WorkflowRuns repoPath={repoPath} query={query} />
-      </ul>
-    </nav>
+    <Tabs value={listTab} onValueChange={(v) => setListTab(v as AgentsListTab)} className="mt-2 min-h-0 flex-1 gap-3">
+      <TabsList aria-label={t("agents.title")} className="mx-2">
+        <TabsTrigger value="runs">{t("agents.tabRuns")}</TabsTrigger>
+        <TabsTrigger value="agents">{t("agents.tabAgents")}</TabsTrigger>
+        <TabsTrigger value="actions">{t("agents.tabActions")}</TabsTrigger>
+      </TabsList>
+      <nav aria-label={t("agents.title")} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        <TabsContent value="runs">
+          <button
+            type="button"
+            onClick={() => select({ type: "new" })}
+            className={cn(item, selection.type === "new" && "bg-white/[0.08] text-foreground")}
+          >
+            <Plus aria-hidden className="size-3.5 text-primary" />
+            {t("agents.new")}
+          </button>
+          <button
+            type="button"
+            onClick={() => select({ type: "usage" })}
+            className={cn(item, selection.type === "usage" && "bg-white/[0.08] text-foreground")}
+          >
+            <BarChart3 aria-hidden className="size-3.5 text-muted-foreground" />
+            {t("usage.open")}
+          </button>
+          <ul>
+            <AppRuns repoPath={repoPath} query={query} />
+            <ClaudeSessions repoPath={repoPath} query={query} />
+          </ul>
+        </TabsContent>
+        <TabsContent value="agents">
+          <ul>
+            <AgentDefinitionsSection repoPath={repoPath} query={query} />
+          </ul>
+        </TabsContent>
+        <TabsContent value="actions">
+          <ul>
+            <WorkflowRuns repoPath={repoPath} query={query} />
+          </ul>
+        </TabsContent>
+      </nav>
+    </Tabs>
   );
 }

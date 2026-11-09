@@ -71,4 +71,11 @@ describe("open repositories", () => {
     state().selectCommit("c");
     expect(state().compareBase).toBeNull();
   });
+
+  it("shows the branch again when going back to History from a pull request", () => {
+    openAll("a");
+    state().openPullRequest({ number: 1, title: "t", author: "x", base: "b", head: "h", url: "u" }, "origin/main..h");
+    state().setView("history");
+    expect(state().historyRev).toBeNull();
+  });
 });

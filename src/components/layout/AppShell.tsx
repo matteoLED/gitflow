@@ -1,4 +1,7 @@
 import { lazy, Suspense, useEffect, type ReactNode } from "react";
+import { CommandPalette } from "@/features/command/CommandPalette";
+import { WorkList } from "@/features/work/WorkList";
+import { WorkPage } from "@/features/work/WorkPage";
 import { Group, Panel, useDefaultLayout } from "react-resizable-panels";
 import { GitPullRequest, PanelLeftOpen } from "lucide-react";
 import { useLayoutStore } from "@/stores/layout-store";
@@ -12,6 +15,7 @@ import { PullRequestList } from "@/features/github/PullRequestList";
 import { AgentsList } from "@/features/agents/AgentsList";
 import { PreviewList } from "@/features/preview/PreviewList";
 import { LinearList } from "@/features/linear/LinearList";
+import { CreateIssueButton } from "@/features/linear/CreateIssue";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { CommitList } from "@/features/history/CommitList";
@@ -34,6 +38,10 @@ const PullRequestPage = lazy(() => import("@/features/github/PullRequestPage"));
 const CiPage = lazy(() => import("@/features/ci/CiPage").then((m) => ({ default: m.CiPage })));
 const CiList = lazy(() => import("@/features/ci/CiPage").then((m) => ({ default: m.CiList })));
 const AssistantPanel = lazy(() => import("@/features/agents/AssistantPanel"));
+const CodeGraphPage = lazy(() => import("@/features/code-graph/CodeGraph").then((m) => ({ default: m.CodeGraphPage })));
+const CodeGraphList = lazy(() => import("@/features/code-graph/CodeGraph").then((m) => ({ default: m.CodeGraphList })));
+const BrowserPanel = lazy(() => import("@/features/browser/Browser").then((m) => ({ default: m.BrowserPanel })));
+const BrowserTabs = lazy(() => import("@/features/browser/Browser").then((m) => ({ default: m.BrowserTabs })));
 const PreviewPanel = lazy(() => import("@/features/preview/PreviewPanel").then((m) => ({ default: m.PreviewPanel })));
 import { useWorkspaceStore, type View } from "@/stores/workspace-store";
 import type { RepositoryInfo } from "@/types/git";
@@ -190,7 +198,7 @@ function PageList({ repo, view }: { repo: RepositoryInfo; view: View }) {
     );
   if (view === "linear")
     return (
-      <ListPanel title="Linear" filterLabel={t("common.filter")}>
+      <ListPanel title="Linear" filterLabel={t("common.filter")} actions={<CreateIssueButton />}>
         {(query) => <LinearList query={query} />}
       </ListPanel>
     );
@@ -198,6 +206,27 @@ function PageList({ repo, view }: { repo: RepositoryInfo; view: View }) {
     return (
       <ListPanel title={t("view.agents")} filterLabel={t("agents.filter")}>
         {(query) => <AgentsList repoPath={repo.path} query={query} />}
+      </ListPanel>
+    );
+  if (view === "work") return <ListPanel title={t("view.work")}>{() => <WorkList repoPath={repo.path} />}</ListPanel>;
+  if (view === "graph")
+    return (
+      <ListPanel title={t("view.graph")}>
+        {() => (
+          <Suspense fallback={null}>
+            <CodeGraphList repoPath={repo.path} />
+          </Suspense>
+        )}
+      </ListPanel>
+    );
+  if (view === "browser")
+    return (
+      <ListPanel title={t("view.browser")} filterLabel={t("common.filter")}>
+        {(query) => (
+          <Suspense fallback={null}>
+            <BrowserTabs query={query} />
+          </Suspense>
+        )}
       </ListPanel>
     );
   return <ListPanel title={t("view.preview")}>{() => <PreviewList repoPath={repo.path} />}</ListPanel>;
@@ -216,7 +245,16 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
       </Frame>
     );
   }
-  if (view === "github" || view === "ci" || view === "agents" || view === "preview" || view === "linear") {
+  if (
+    view === "github" ||
+    view === "ci" ||
+    view === "agents" ||
+    view === "preview" ||
+    view === "linear" ||
+    view === "browser" ||
+    view === "graph" ||
+    view === "work"
+  ) {
     return (
       <Frame
         key={`${repo.path}:${view}`}
@@ -229,7 +267,17 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
               ? "CI"
               : view === "linear"
                 ? "Linear"
-                : t(view === "agents" ? "view.agents" : "view.preview")
+                : t(
+                    view === "agents"
+                      ? "view.agents"
+                      : view === "browser"
+                        ? "view.browser"
+                        : view === "graph"
+                          ? "view.graph"
+                          : view === "work"
+                            ? "view.work"
+                            : "view.preview",
+                  )
         }
         list={<PageList repo={repo} view={view} />}
       >
@@ -246,6 +294,12 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
             <AgentDetail repoPath={repo.path} />
           ) : view === "linear" ? (
             <LinearIssueView repoPath={repo.path} />
+          ) : view === "browser" ? (
+            <BrowserPanel />
+          ) : view === "work" ? (
+            <WorkPage repoPath={repo.path} />
+          ) : view === "graph" ? (
+            <CodeGraphPage repoPath={repo.path} />
           ) : (
             <PreviewPanel repoPath={repo.path} />
           )}
@@ -299,6 +353,7 @@ function Workspace({ repo, view }: { repo: RepositoryInfo; view: View }) {
         )}
       </div>
       <TerminalDock key={repo.path} repoPath={repo.path} />
+      <CommandPalette repo={repo} />
     </div>
   );
 }

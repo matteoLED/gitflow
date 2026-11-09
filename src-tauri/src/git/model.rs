@@ -26,6 +26,9 @@ pub struct LocalBranch {
     pub upstream_gone: bool,
     pub ahead: u32,
     pub behind: u32,
+    /// Date of the branch's last commit (ISO 8601), and its subject.
+    pub committed_at: String,
+    pub subject: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

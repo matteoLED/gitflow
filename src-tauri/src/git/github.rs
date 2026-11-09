@@ -300,6 +300,120 @@ pub fn merge_pull_request(repo: &Path, number: u32, method: MergeMethod) -> GitR
     gh(&require_gh()?, repo, &["pr", "merge", &number, flag]).map(|_| ())
 }
 
+/// The branch a new pull request targets and how far HEAD is past it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchComparison {
+    pub base: String,
+    pub ahead: u32,
+}
+
+fn ref_exists(repo: &Path, name: &str) -> bool {
+    git(
+        repo,
+        &["rev-parse", "--verify", "--quiet", "--end-of-options", name],
+    )
+    .is_ok()
+}
+
+/// The remote's default branch (`origin/HEAD`), else `main` or `master` when they exist.
+fn default_base(repo: &Path) -> Option<String> {
+    let remote_head = git_text(
+        repo,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+    )
+    .ok();
+    if let Some(name) = remote_head
+        .as_deref()
+        .and_then(|r| r.trim().strip_prefix("origin/"))
+    {
+        return Some(name.to_string());
+    }
+    ["main", "master"]
+        .into_iter()
+        .find(|b| ref_exists(repo, b) || ref_exists(repo, &format!("origin/{b}")))
+        .map(String::from)
+}
+
+/// Commits on HEAD that `base` doesn't have, counted against the remote copy of base when there is one
+/// (a stale local main would overcount).
+pub fn compare_with_base(repo: &Path, base: Option<&str>) -> GitResult<Option<BranchComparison>> {
+    let base = match base {
+        Some(b) => super::write::checked_branch_name(repo, b)?,
+        None => match default_base(repo) {
+            Some(b) => b,
+            None => return Ok(None),
+        },
+    };
+    let remote = format!("origin/{base}");
+    let target = if ref_exists(repo, &remote) {
+        remote
+    } else {
+        base.clone()
+    };
+    if !ref_exists(repo, &target) {
+        return Ok(None);
+    }
+    let range = format!("{target}..HEAD");
+    let ahead = git_text(repo, &["rev-list", "--count", &range])?
+        .trim()
+        .parse()
+        .unwrap_or(0);
+    Ok(Some(BranchComparison { base, ahead }))
+}
+
+/// Opens a pull request from the checked-out branch (already pushed) into `base`; returns its URL.
+/// Every value is a single `--flag=value` argv entry: nothing can be read as another option.
+pub fn create_pull_request(
+    repo: &Path,
+    base: &str,
+    title: &str,
+    body: &str,
+    draft: bool,
+) -> GitResult<String> {
+    let base = super::write::checked_branch_name(repo, base)?;
+    let title = title.trim();
+    if title.is_empty() || title.chars().count() > 256 || title.chars().any(char::is_control) {
+        return Err(GitError::invalid("Give the pull request a one-line title."));
+    }
+    if body.len() > 65_536 {
+        return Err(GitError::invalid("The description is too long."));
+    }
+    let head = git_text(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .map_err(|_| GitError::invalid("Check out a branch to open a pull request."))?;
+    let head = head.trim();
+    if head == base {
+        return Err(GitError::invalid(
+            "Pick a base other than the branch itself.",
+        ));
+    }
+    let args = [
+        format!("--base={base}"),
+        format!("--head={head}"),
+        format!("--title={title}"),
+        format!("--body={body}"),
+    ];
+    let mut argv: Vec<&str> = vec!["pr", "create"];
+    argv.extend(args.iter().map(String::as_str));
+    if draft {
+        argv.push("--draft");
+    }
+    let out = gh(&require_gh()?, repo, &argv)?;
+    let text = String::from_utf8_lossy(&out);
+    Ok(text
+        .lines()
+        .rev()
+        .find(|l| l.starts_with("https://"))
+        .unwrap_or("")
+        .trim()
+        .to_string())
+}
+
 /// `https://github.com/owner/name` for an `origin` hosted on GitHub.
 pub fn web_url(repo: &Path) -> GitResult<Option<String>> {
     let remote = git_text(repo, &["remote", "get-url", "origin"]).unwrap_or_default();
@@ -469,6 +583,30 @@ pub fn avatar_url(repo: &Path, hash: &str, email: &str) -> GitResult<Option<Stri
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn branch_counts_commits_past_main() {
+        let repo = crate::git::test_repo::TestRepo::new();
+        repo.write("a.txt", "a");
+        repo.commit_all("first");
+        repo.git(&["branch", "-M", "main"]);
+        repo.git(&["switch", "-c", "feature"]);
+        repo.write("b.txt", "b");
+        repo.commit_all("second");
+        let found = super::compare_with_base(repo.path(), None).unwrap();
+        assert_eq!(
+            found,
+            Some(super::BranchComparison {
+                base: "main".into(),
+                ahead: 1
+            })
+        );
+    }
+
+    #[test]
+    fn pull_request_base_cannot_be_an_option() {
+        let repo = crate::git::test_repo::TestRepo::new();
+        assert!(super::create_pull_request(repo.path(), "--help", "t", "", false).is_err());
+    }
 
     #[test]
     fn state_changes_run_the_right_gh_commands() {

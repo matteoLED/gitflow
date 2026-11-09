@@ -77,7 +77,9 @@ function usePullRequestDetails(repoPath: string, number: number) {
     queryKey: ["pull-request", repoPath, number],
     queryFn: () => gitBackend.getPullRequestDetails(repoPath, number),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    // While checks run, follow them closely; otherwise a slow refresh is enough.
+    refetchInterval: (q) =>
+      q.state.data?.statusCheckRollup.some((c) => checkOutcome(c) === "pending") ? 10_000 : 60_000,
   });
 }
 

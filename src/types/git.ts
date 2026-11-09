@@ -15,6 +15,9 @@ export type LocalBranch = {
   upstreamGone: boolean;
   ahead: number;
   behind: number;
+  /** Date of the branch's last commit (ISO 8601), and its subject. */
+  committedAt: string;
+  subject: string;
 };
 
 export type RemoteBranch = { remote: string; name: string };
@@ -156,10 +159,30 @@ export type LinearWorkflowState = {
   color: string;
   position: number;
 };
-export type LinearTeamStates = { id: string; states: { nodes: LinearWorkflowState[] } };
+/** A just-created issue, enough to open it or hand it to an agent. */
+export type CreatedLinearIssue = {
+  id: string;
+  identifier: string;
+  title: string;
+  description: string | null;
+  url: string;
+  branchName: string;
+};
+export type NewLinearIssue = {
+  teamId: string;
+  title: string;
+  description: string;
+  priority: number;
+  stateId: string | null;
+  assignToMe: boolean;
+  projectId: string | null;
+};
+export type LinearTeamStates = { id: string; key: string; name: string; states: { nodes: LinearWorkflowState[] } };
 /** A workspace the user belongs to, connected here or not. */
 export type LinearOrganization = { id: string; name: string; urlKey: string; logoUrl: string | null };
 export type LinearState = {
+  id?: string;
+  position?: number;
   name: string;
   type: "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled";
   color: string;
@@ -175,11 +198,47 @@ export type LinearIssue = {
   updatedAt: string;
   state: LinearState;
   team: { id: string; key: string; name: string };
-  project: { name: string } | null;
+  project: { id: string; name: string; icon: string | null; color: string } | null;
   cycle: { number: number } | null;
   labels: { nodes: { name: string; color: string }[] };
+  assignee?: LinearPerson | null;
 };
 type LinearPerson = { name: string; avatarUrl: string | null };
+export type LinearProject = {
+  id: string;
+  name: string;
+  /** Linear icon name ("Rocket") or an emoji. */
+  icon: string | null;
+  color: string;
+  /** 0 to 1. */
+  progress: number;
+  targetDate: string | null;
+  url: string;
+  status: {
+    name: string;
+    type: "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
+    color: string;
+  } | null;
+  lead: LinearPerson | null;
+  teams: { nodes: { id: string; key: string }[] };
+};
+/** githubstatus.com: incidents not resolved yet, and services not fully operational. */
+export type GithubStatus = {
+  incidents: { name: string; impact: "none" | "minor" | "major" | "critical"; url: string }[];
+  degraded: string[];
+};
+/** A team's current cycle (sprint) with all of its issues. */
+export type LinearCycle = {
+  id: string;
+  number: number;
+  name: string | null;
+  startsAt: string;
+  endsAt: string;
+  /** 0 to 1. */
+  progress: number;
+  team: { id: string; key: string; name: string };
+  issues: LinearIssue[];
+};
 export type LinearIssueDetail = LinearIssue & {
   description: string | null;
   createdAt: string;
@@ -206,9 +265,20 @@ export type AgentStep = { kind: StepKind; title: string; detail: string | null; 
 export type AgentRunEvent =
   | { type: "step"; runId: string; step: AgentStep }
   | { type: "session"; runId: string; sessionId: string }
-  | { type: "finished"; runId: string; status: "done" | "failed" | "cancelled" };
+  | { type: "finished"; runId: string; status: "done" | "failed" | "cancelled" }
+  | { type: "usage"; runId: string; usage: AgentUsage };
+
+/** Context fill and cost reported by the agent; null when it didn't say. */
+export type AgentUsage = { contextTokens: number | null; contextWindow: number | null; costUsd: number | null };
 
 export type TerminalEvent = { type: "output"; id: string; data: string } | { type: "exited"; id: string };
+
+/** Raw token counts of Claude replies (see `pricing.ts` for what they cost). */
+export type Tokens = { input: number; output: number; cacheWrite5m: number; cacheWrite1h: number; cacheRead: number };
+export type ModelTokens = { model: string; tokens: Tokens };
+export type SessionUsage = { contextTokens: number | null; model: string | null; byModel: ModelTokens[] };
+export type UsageRow = { day: string; project: string; model: string; messages: number; tokens: Tokens };
+export type UsageStats = { rows: UsageRow[]; sessions: { project: string; day: string }[] };
 
 export type AgentSession = {
   id: string;
@@ -268,3 +338,56 @@ export type ReviewEvent = "approve" | "request-changes" | "comment";
 export type GithubUser = { login: string; name: string | null; avatarUrl: string | null };
 
 export type GitIdentity = { name: string | null; email: string | null };
+
+/** A Claude Code sub-agent (`.claude/agents/<name>.md`). */
+export type AgentScope = "user" | "project";
+export type AgentDefinition = {
+  name: string;
+  description: string;
+  model: string;
+  tools: string;
+  prompt: string;
+  scope: AgentScope;
+};
+
+/** The repository's code-review-graph. */
+export type CodeGraphStatus = {
+  cli: boolean;
+  built: boolean;
+  nodes: number;
+  edges: number;
+  files: number;
+  lastUpdated: string | null;
+  commit: string | null;
+  branch: string | null;
+};
+export type CodeHotspot = {
+  name: string;
+  kind: string;
+  file: string;
+  line: number;
+  risk: number;
+  callers: number;
+  coverage: string;
+  security: number;
+};
+export type CodeFileMap = {
+  files: { path: string; symbols: number; test: number }[];
+  links: { source: string; target: string; weight: number }[];
+};
+type GraphSymbol = {
+  name: string;
+  kind?: string;
+  file_path?: string;
+  file?: string;
+  line_start: number;
+  risk_score?: number;
+};
+export type CodeImpact = {
+  summary: string;
+  risk_score: number;
+  changed_functions: GraphSymbol[];
+  test_gaps: GraphSymbol[];
+  review_priorities: GraphSymbol[];
+  affected_flows: unknown[];
+};

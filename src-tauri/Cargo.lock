@@ -1107,6 +1107,7 @@ version = "0.1.0"
 dependencies = [
  "keyring",
  "notify",
+ "objc2",
  "portable-pty",
  "serde",
  "serde_json",

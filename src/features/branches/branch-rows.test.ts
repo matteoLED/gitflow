@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { LocalBranch, RefsSnapshot } from "@/types/git";
 import { branchRows } from "./branch-rows";
 
-const branch = (name: string): LocalBranch => ({ name, upstream: null, upstreamGone: false, ahead: 0, behind: 0 });
+const branch = (name: string): LocalBranch => ({ name, upstream: null, upstreamGone: false, ahead: 0, behind: 0, committedAt: "", subject: "" });
 const refs = (names: string[], remotes = 0): RefsSnapshot =>
   ({
     head: { branch: "main" },

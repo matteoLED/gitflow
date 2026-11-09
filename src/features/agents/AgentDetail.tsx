@@ -33,6 +33,10 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { AgentKind, AgentTask, WorkflowJob } from "@/types/git";
 import { ClaudeIcon, CodexIcon } from "./agent-icons";
 import { StatusIcon, ghStatus } from "./status";
+import { ContextMeter, UsageRing, threadUsage } from "./ContextMeter";
+import { contextWindowOf, costOf } from "./pricing";
+import { UsageView } from "./UsageView";
+import { AgentDefinitionEditor } from "./AgentDefinitions";
 import { RunSettingsBar } from "./RunSettingsBar";
 import { ChatThread } from "./ChatThread";
 import { startAgentRun, useInstalledAgents } from "./use-agents";
@@ -288,13 +292,34 @@ function RunView({ repoPath, run }: { repoPath: string; run: AgentRun }) {
         steps={runs.flatMap((r) => r.steps)}
         running={!!live}
         agentLabel={agentName}
-        settings={<RunSettingsBar agent={run.agent} />}
+        settings={
+          <>
+            <RunSettingsBar agent={run.agent} />
+            <ContextMeter runs={runs} agent={run.agent} />
+          </>
+        }
         onStop={live ? () => void gitBackend.cancelAgentRun(live.id) : undefined}
         onSend={resume ? continueIn(repoPath, run.agent, run.thread, resume) : undefined}
       />
       {!resume && !live && <p className="sr-only">{t("agents.cannotContinue")}</p>}
     </>
   );
+}
+
+/** Context and cost of an imported session, from its transcript (follow-ups are appended to it). */
+function useSessionUsage(repoPath: string, id: string, followUps: AgentRun[]) {
+  const data = useQuery({
+    queryKey: ["session-usage", repoPath, id],
+    queryFn: () => gitBackend.getSessionUsage(repoPath, id),
+    refetchInterval: 15_000,
+  }).data;
+  const live = threadUsage(followUps, "claude"); // fresher while a follow-up runs
+  const costs = data?.byModel.map((m) => costOf(m.model, m.tokens)).filter((c): c is number => c !== null) ?? [];
+  return {
+    tokens: live.tokens ?? data?.contextTokens ?? null,
+    window: contextWindowOf(data?.model ?? null) ?? live.window,
+    cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null,
+  };
 }
 
 function SessionView({ repoPath, id }: { repoPath: string; id: string }) {
@@ -313,6 +338,7 @@ function SessionView({ repoPath, id }: { repoPath: string; id: string }) {
     enabled: false,
     queryFn: () => gitBackend.listAgentSessions(repoPath),
   }).data?.find((s) => s.id === id)?.title;
+  const usage = useSessionUsage(repoPath, id, followUps);
   if (steps.isError)
     return (
       <DataUnavailable title={t("agents.sessionError")} error={steps.error} onRetry={() => void steps.refetch()} />
@@ -330,7 +356,12 @@ function SessionView({ repoPath, id }: { repoPath: string; id: string }) {
         steps={[...steps.data, ...followUps.flatMap((r) => r.steps)]}
         running={!!live}
         agentLabel="Claude Code"
-        settings={<RunSettingsBar agent="claude" />}
+        settings={
+          <>
+            <RunSettingsBar agent="claude" />
+            <UsageRing {...usage} />
+          </>
+        }
         onStop={live ? () => void gitBackend.cancelAgentRun(live.id) : undefined}
         onSend={continueIn(repoPath, "claude", thread, resume)}
       />
@@ -422,6 +453,12 @@ export function AgentDetail({ repoPath }: { repoPath: string }) {
         <RunView repoPath={repoPath} run={run} />
       ) : selection.type === "session" ? (
         <SessionView key={selection.id} repoPath={repoPath} id={selection.id} />
+      ) : selection.type === "definition" ? (
+        <AgentDefinitionEditor key={`${selection.scope}:${selection.name}`} repoPath={repoPath} target={selection} />
+      ) : selection.type === "new-definition" ? (
+        <AgentDefinitionEditor key="new" repoPath={repoPath} target={null} />
+      ) : selection.type === "usage" ? (
+        <UsageView repoPath={repoPath} />
       ) : selection.type === "workflow" ? (
         <WorkflowView key={selection.id} repoPath={repoPath} id={selection.id} />
       ) : (

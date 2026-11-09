@@ -66,6 +66,14 @@ function CheckBody({ repoPath, check }: { repoPath: string; check: PullRequestCh
     refetchInterval: (q) => (q.state.data?.status === "completed" ? false : 5_000),
   });
   const job = run.data?.jobs?.find((j) => jobIdOf(j) === jobId);
+  // A running Actions job shows its steps ticking along (the run is polled every 5 s); queued or external
+  // checks have nothing to show yet.
+  if (outcome === "pending" && job && job.steps.length > 0)
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <JobSteps repoPath={repoPath} job={job} />
+      </div>
+    );
   if (outcome === "pending")
     return (
       <Centered check={check}>

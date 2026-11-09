@@ -1,6 +1,16 @@
 import { DataUnavailable } from "@/components/states";
 import { useState } from "react";
-import { Check, ChevronRight, GitMerge, GitPullRequest, GitPullRequestDraft, Layers, X } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  GitBranch,
+  GitMerge,
+  GitPullRequest,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
+  Layers,
+  X,
+} from "lucide-react";
 import { AuthorAvatar } from "@/components/author-avatar";
 import { BrailleLoader } from "@/components/braille-loader";
 import { PanelLoading, PanelMessage } from "@/components/layout/panel";
@@ -10,7 +20,7 @@ import { toGitError } from "@/lib/errors";
 import { formatAge } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import { useNoticesStore } from "@/stores/notices-store";
-import { useWorkspaceStore } from "@/stores/workspace-store";
+import { useWorkspaceStore, type View } from "@/stores/workspace-store";
 import type { PullRequest } from "@/types/git";
 import { buildStacks } from "./stacks";
 import { useT, type MessageKey } from "@/i18n";
@@ -43,9 +53,26 @@ export function StateIcon({ pr }: { pr: PullRequest }) {
   const className = "size-3.5 shrink-0";
   if (pr.state === "MERGED")
     return <GitMerge aria-label={t("github.merged")} className={cn(className, "text-[#a48ff0]")} />;
+  if (pr.state === "CLOSED")
+    return (
+      <GitPullRequestClosed aria-label={t("github.closed")} className={cn(className, "text-removed-foreground")} />
+    );
   if (pr.isDraft)
     return <GitPullRequestDraft aria-label={t("github.draft")} className={cn(className, "text-muted-foreground")} />;
   return <GitPullRequest aria-label={t("github.open")} className={cn(className, "text-added-foreground")} />;
+}
+
+/** The pull request opened from a branch: the open one first, else the latest merged or closed. */
+export function pullRequestOf(prs: PullRequest[] | undefined, branch: string | null | undefined) {
+  if (!prs || !branch) return null;
+  const mine = prs.filter((p) => p.headRefName === branch);
+  return mine.find((p) => p.state === "OPEN") ?? mine[0] ?? null;
+}
+
+/** A branch shows where its work stands: its PR's state (open, draft, merged, closed), or a plain branch. */
+export function BranchStateIcon({ pr }: { pr: PullRequest | null }) {
+  if (pr) return <StateIcon pr={pr} />;
+  return <GitBranch aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />;
 }
 
 export function ReviewBadge({ pr }: { pr: PullRequest }) {
@@ -80,13 +107,14 @@ export function useOpenPullRequest(repoPath: string) {
   const openPullRequest = useWorkspaceStore((s) => s.openPullRequest);
   const notify = useNoticesStore((s) => s.notify);
   const [loading, setLoading] = useState<number | null>(null);
-  const open = async (pr: PullRequest) => {
+  const open = async (pr: PullRequest, view?: View) => {
     setLoading(pr.number);
     try {
       const { range, mergeBase, head } = await gitBackend.fetchPullRequest(repoPath, pr);
       openPullRequest(
         { number: pr.number, title: pr.title, author: pr.author.login, base: mergeBase, head, url: pr.url },
         range,
+        view,
       );
     } catch (error) {
       const { message, detail } = toGitError(error);

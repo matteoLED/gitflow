@@ -53,8 +53,8 @@ const COMMITS = [1, 2, 3].map(commit);
 const REFS: RefsSnapshot = {
   head: { branch: "main", unborn: false },
   branches: [
-    { name: "main", upstream: "origin/main", upstreamGone: false, ahead: 1, behind: 0 },
-    { name: "feature/login", upstream: null, upstreamGone: false, ahead: 0, behind: 0 },
+    { name: "main", upstream: "origin/main", upstreamGone: false, ahead: 1, behind: 0, committedAt: "", subject: "" },
+    { name: "feature/login", upstream: null, upstreamGone: false, ahead: 0, behind: 0, committedAt: "", subject: "" },
   ],
   remotes: [{ remote: "origin", name: "main" }],
   tags: [],

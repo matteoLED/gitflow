@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, ExternalLink, MousePointer2, RefreshCw } from "lucide-react";
+import { Check, ChevronRight, Copy, ExternalLink, MousePointer2, RefreshCw } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { PanelLoading } from "@/components/layout/panel";
 import { DataUnavailable, EmptyState } from "@/components/states";
@@ -29,7 +29,9 @@ export function logByStep(log: string): { step: string; lines: string[] }[] {
   for (const raw of log.split("\n")) {
     if (!raw) continue;
     const [, step = "", rest = raw] = raw.split("\t");
-    const line = rest.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z ?/, "");
+    // Timestamps and ANSI colors (ESC[36;1m…) are noise once rendered.
+    // eslint-disable-next-line no-control-regex
+    const line = rest.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z ?/, "").replace(/\x1b\[[\d;]*[A-Za-z]/g, "");
     const last = groups[groups.length - 1];
     if (last?.step === step) last.lines.push(line);
     else groups.push({ step, lines: [line] });
@@ -54,6 +56,14 @@ function JobLog({ repoPath, job }: { repoPath: string; job: WorkflowJob }) {
     <div className="border-t border-white/[0.06]">
       <div className="flex items-center gap-2 px-4 py-2 text-[12.5px] text-muted-foreground">
         {t("ci.logs")}
+        {log.data && (
+          <CopyButton
+            text={logByStep(log.data)
+              .flatMap((g) => g.lines.map(cleanLine))
+              .join("\n")}
+            label={t("ci.copyAllLogs")}
+          />
+        )}
         <div className="ml-auto flex rounded-full border border-white/[0.08] p-0.5">
           {[true, false].map((value) => (
             <button
@@ -87,25 +97,55 @@ function JobLog({ repoPath, job }: { repoPath: string; job: WorkflowJob }) {
   );
 }
 
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={() => void copy()}
+      className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-white/[0.08] hover:text-foreground"
+    >
+      {copied ? (
+        <Check aria-hidden className="size-3.5 text-added-foreground" />
+      ) : (
+        <Copy aria-hidden className="size-3.5" />
+      )}
+    </button>
+  );
+}
+
+const cleanLine = (line: string) => line.replace(/##\[(error|warning|group|endgroup)\]/, "");
+
 function StepLog({ step, lines, open: initiallyOpen }: { step: string; lines: string[]; open: boolean }) {
+  const t = useT();
   const [open, setOpen] = useState(initiallyOpen);
   const errorLine = (line: string) => /##\[error\]|\berror\b|✗|FAIL/i.test(line);
   return (
     <div className="rounded-lg bg-black/25">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] text-muted-foreground hover:text-foreground"
-      >
-        <ChevronRight aria-hidden className={cn("size-3.5 transition-transform", open && "rotate-90")} />
-        <span className="min-w-0 flex-1 truncate">{step || "—"}</span>
-        <span className="text-[11.5px]">{lines.length}</span>
-      </button>
+      <div className="flex items-center gap-1 pr-1.5">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] text-muted-foreground hover:text-foreground"
+        >
+          <ChevronRight aria-hidden className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+          <span className="min-w-0 flex-1 truncate">{step || "—"}</span>
+          <span className="text-[11.5px]">{lines.length}</span>
+        </button>
+        <CopyButton text={lines.map(cleanLine).join("\n")} label={t("ci.copyLog")} />
+      </div>
       {open && (
         <pre className="max-h-[480px] overflow-auto px-3 pb-2.5 font-mono text-[11.5px] leading-relaxed select-text">
           {lines.map((line, i) => (
             <div key={i} className={cn("whitespace-pre-wrap", errorLine(line) && "text-removed-foreground")}>
-              {line.replace(/##\[(error|warning|group|endgroup)\]/, "")}
+              {cleanLine(line)}
             </div>
           ))}
         </pre>

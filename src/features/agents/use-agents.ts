@@ -7,6 +7,7 @@ import { useAgentsStore } from "@/stores/agents-store";
 import { useNoticesStore } from "@/stores/notices-store";
 import type { AgentKind, AgentRunEvent, AgentTask, PreviewEvent } from "@/types/git";
 import { usePreviewStore } from "@/stores/preview-store";
+import { useBrowserStore, type BrowserEvent } from "@/stores/browser-store";
 
 function useBackendEvent<T>(name: string, handle: (payload: T) => void) {
   useEffect(() => {
@@ -25,11 +26,13 @@ function useBackendEvent<T>(name: string, handle: (payload: T) => void) {
 
 const applyAgentEvent = (event: AgentRunEvent) => useAgentsStore.getState().applyEvent(event);
 const applyPreviewEvent = (event: PreviewEvent) => usePreviewStore.getState().apply(event);
+const applyBrowserEvent = (event: BrowserEvent) => useBrowserStore.getState().apply(event);
 
 /** Feeds backend events (agent runs, preview servers) into their stores, for the whole app lifetime. */
 export function useAgentEvents() {
   useBackendEvent("agent-run", applyAgentEvent);
   useBackendEvent("preview", applyPreviewEvent);
+  useBackendEvent("browser", applyBrowserEvent);
 }
 
 export function useInstalledAgents() {

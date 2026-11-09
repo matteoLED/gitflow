@@ -1,7 +1,18 @@
 import { useShallow } from "zustand/react/shallow";
 import { Link } from "@tanstack/react-router";
 import { VIEW_PATHS } from "@/app/routes";
-import { Activity, GitCommitVertical, House, Layers, MonitorSmartphone, Sparkles, SquareTerminal } from "lucide-react";
+import {
+  Activity,
+  GitBranch,
+  GitCommitVertical,
+  Globe,
+  House,
+  Layers,
+  MonitorSmartphone,
+  Network,
+  Sparkles,
+  SquareTerminal,
+} from "lucide-react";
 import type { ComponentType } from "react";
 import { GithubIcon } from "@/components/github-icon";
 import { LinearIcon } from "@/features/linear/LinearIcon";
@@ -40,7 +51,8 @@ function RowContent({ Icon, label, hint }: Omit<RowProps, "active">) {
 
 /** A page of the app: a router link. Tools (Linear, Preview, Agents) lead back to the history when active. */
 function PageRow({ view, ...props }: RowProps & { view: View }) {
-  const toggles = view === "linear" || view === "preview" || view === "agents";
+  const toggles =
+    view === "linear" || view === "preview" || view === "agents" || view === "browser" || view === "graph";
   const to = props.active && toggles ? VIEW_PATHS.history : VIEW_PATHS[view];
   return (
     <li>
@@ -66,6 +78,7 @@ export function SidebarNav({ repoPath }: { repoPath: string }) {
     <nav aria-label={t("view.tabs")} className="px-2">
       <ul className="space-y-px">
         {row("home", House, t("view.home"))}
+        {row("work", GitBranch, t("view.work"))}
         {row("history", GitCommitVertical, t("view.history"))}
         {row("changes", Layers, t("view.changes"), changes > 99 ? "99+" : changes)}
         {row("github", GithubIcon, t("view.github"))}
@@ -76,6 +89,8 @@ export function SidebarNav({ repoPath }: { repoPath: string }) {
         {row("linear", LinearIcon, "Linear", "⌘⇧L")}
         {row("preview", MonitorSmartphone, t("view.preview"), "⌘⇧P")}
         {row("agents", Sparkles, t("view.agents"))}
+        {row("graph", Network, t("view.graph"))}
+        {row("browser", Globe, t("view.browser"))}
         <li>
           <button
             type="button"

@@ -236,7 +236,10 @@ function typedText(prompt: string): string {
   const afterContext = prompt.includes(CONTEXT_SEPARATOR)
     ? prompt.slice(prompt.lastIndexOf(CONTEXT_SEPARATOR) + CONTEXT_SEPARATOR.length)
     : prompt;
-  return afterContext.replace(/\n\nDo not modify, create or delete any file[\s\S]*$/, "");
+  return afterContext.replace(
+    /\n\n(Do not modify, create or delete any file|Answer in (French|English)\.)[\s\S]*$/,
+    "",
+  );
 }
 
 type ChatThreadProps = {
@@ -397,7 +400,10 @@ export function ChatThread({
           />
           <div className="flex items-center gap-1.5 px-2 pb-2">
             {onSend && <AttachButton attachments={attachments} />}
-            {settings ?? <span className="text-[11.5px] text-muted-foreground">{agentLabel}</span>}
+            {/* Grows so a trailing item of `settings` (the context ring) can sit by the send button. */}
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              {settings ?? <span className="text-[11.5px] text-muted-foreground">{agentLabel}</span>}
+            </div>
             {running && onStop ? (
               <Button
                 size="icon-sm"

@@ -300,10 +300,89 @@ pub fn from_codex(event: &Value) -> Vec<AgentStep> {
     found.into_iter().collect()
 }
 
+/// How full the conversation is and what it cost so far; any field may be unknown.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Usage {
+    pub context_tokens: Option<u64>,
+    pub context_window: Option<u64>,
+    pub cost_usd: Option<f64>,
+}
+
+fn sum(usage: &Value, keys: &[&str]) -> u64 {
+    keys.iter()
+        .filter_map(|k| usage.get(*k).and_then(Value::as_u64))
+        .sum()
+}
+
+/// Claude: the last assistant message's prompt size is the context in use; the result has the cost and
+/// the model's window. Codex: each finished turn reports its input size.
+pub fn usage_of(event: &Value) -> Option<Usage> {
+    match event.get("type").and_then(Value::as_str)? {
+        "assistant" => {
+            let usage = event.pointer("/message/usage")?;
+            let keys = [
+                "input_tokens",
+                "cache_creation_input_tokens",
+                "cache_read_input_tokens",
+                "output_tokens",
+            ];
+            Some(Usage {
+                context_tokens: Some(sum(usage, &keys)),
+                ..Usage::default()
+            })
+        }
+        "result" => {
+            let window = event
+                .get("modelUsage")
+                .and_then(Value::as_object)
+                .and_then(|models| {
+                    models
+                        .values()
+                        .filter_map(|m| m.get("contextWindow")?.as_u64())
+                        .max()
+                });
+            let cost = event.get("total_cost_usd").and_then(Value::as_f64);
+            (window.is_some() || cost.is_some()).then_some(Usage {
+                context_window: window,
+                cost_usd: cost,
+                ..Usage::default()
+            })
+        }
+        "turn.completed" => {
+            let usage = event.get("usage")?;
+            Some(Usage {
+                context_tokens: Some(sum(usage, &["input_tokens", "output_tokens"])),
+                ..Usage::default()
+            })
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn claude_context_counts_cached_prompt_tokens() {
+        let event = json!({"type": "assistant", "message": {"usage": {
+            "input_tokens": 10, "cache_creation_input_tokens": 200, "cache_read_input_tokens": 5000, "output_tokens": 40
+        }}});
+        assert_eq!(usage_of(&event).unwrap().context_tokens, Some(5250));
+    }
+
+    #[test]
+    fn claude_result_reports_window_and_cost() {
+        let event = json!({"type": "result", "total_cost_usd": 1.5,
+            "modelUsage": {"claude-opus": {"contextWindow": 1000000}, "claude-haiku": {"contextWindow": 200000}}});
+        let usage = usage_of(&event).unwrap();
+        assert_eq!(
+            (usage.context_window, usage.cost_usd),
+            (Some(1_000_000), Some(1.5))
+        );
+    }
 
     #[test]
     fn claude_tool_calls_name_their_target() {

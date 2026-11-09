@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, CircleDashed, Grip, ListChecks, MousePointer2, RefreshCw, X } from "lucide-react";
+import { Check, CircleDashed, ListChecks, MousePointer2, RefreshCw, X } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useT } from "@/i18n";
@@ -50,7 +50,11 @@ export function CheckIcon({ check, className }: { check: PullRequestCheck; class
   if (outcome === "pass") return <Check aria-hidden className={cn(base, "text-added-foreground")} />;
   if (outcome === "fail") return <X aria-hidden className={cn(base, "text-removed-foreground")} />;
   if (check.status === "IN_PROGRESS" || check.state === "PENDING")
-    return <Grip aria-hidden className={cn(base, "text-muted-foreground")} />;
+    return (
+      <span className={cn("grid size-3.5 shrink-0 place-items-center text-primary", className)}>
+        <BrailleLoader variant="grid" />
+      </span>
+    );
   return <CircleDashed aria-hidden className={cn(base, "text-muted-foreground")} />;
 }
 
@@ -145,6 +149,8 @@ export function ChecksMenu({ repoPath, pr }: { repoPath: string; pr: PullRequest
     },
     onError: (error) => notify({ tone: "error", title: t("checks.rerunFailed"), detail: toGitError(error).message }),
   });
+  // The dialog follows the live check (the PR is re-polled), not the snapshot taken when it was opened.
+  const current = viewed && (checks.find((c) => checkLabel(c) === checkLabel(viewed)) ?? viewed);
   if (checks.length === 0) return <p className="text-muted-foreground">{t("pr.noChecks")}</p>;
   const needle = query.toLowerCase();
   const match = (c: PullRequestCheck) =>
@@ -207,7 +213,7 @@ export function ChecksMenu({ repoPath, pr }: { repoPath: string; pr: PullRequest
           </div>
         </PopoverContent>
       </Popover>
-      <CheckDialog repoPath={repoPath} pr={pr} checks={checks} check={viewed} onChange={setViewed} />
+      <CheckDialog repoPath={repoPath} pr={pr} checks={checks} check={current} onChange={setViewed} />
       {failing.map((check, i) => (
         <p key={i} className="flex items-center gap-2.5 px-1.5 text-[13px]">
           <span className="mx-1 size-2 shrink-0 rounded-full bg-removed-foreground" />

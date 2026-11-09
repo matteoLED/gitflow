@@ -52,7 +52,50 @@ pub fn switch_branch(repo: &Path, name: &str) -> GitResult<()> {
     git(repo, &["switch", "--no-guess", name]).map(drop)
 }
 
-fn checked_branch_name(repo: &Path, name: &str) -> GitResult<String> {
+/// Checks out a remote branch (`origin/feature`): switches to the local `feature` when it exists, else creates
+/// it tracking the remote one. Like `switch`, it refuses to overwrite uncommitted work.
+pub fn checkout_remote_branch(repo: &Path, remote_ref: &str) -> GitResult<String> {
+    let remote_ref = validate::revision(remote_ref.trim())?;
+    let (_, local) = remote_ref
+        .split_once('/')
+        .filter(|(remote, name)| !remote.is_empty() && !name.is_empty())
+        .ok_or_else(|| GitError::invalid("Pick a remote branch like origin/feature."))?;
+    let local = checked_branch_name(repo, local)?;
+    let full = format!("refs/remotes/{remote_ref}");
+    git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &full,
+        ],
+    )
+    .map_err(|_| GitError::invalid(format!("“{remote_ref}” isn't a remote branch.")))?;
+    let exists = git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &format!("refs/heads/{local}"),
+        ],
+    )
+    .is_ok();
+    if exists {
+        git(repo, &["switch", "--no-guess", &local])?;
+    } else {
+        git(
+            repo,
+            &["switch", "--no-guess", "--track", "-c", &local, &full],
+        )?;
+    }
+    Ok(local)
+}
+
+pub(crate) fn checked_branch_name(repo: &Path, name: &str) -> GitResult<String> {
     let name = validate::revision(name.trim())?;
     git_text(repo, &["check-ref-format", "--branch", name])
         .map(|n| n.trim().to_string())
@@ -206,6 +249,25 @@ mod tests {
     fn empty_commit_message_is_rejected() {
         let repo = committed_repo();
         assert!(commit(repo.path(), "   ").is_err());
+    }
+
+    #[test]
+    fn remote_checkout_creates_a_tracking_branch() {
+        let origin = committed_repo();
+        origin.git(&["switch", "-q", "-c", "feature"]);
+        let clone = crate::git::test_repo::TestRepo::new();
+        clone.git(&["remote", "add", "origin", origin.path().to_str().unwrap()]);
+        clone.git(&["fetch", "-q", "origin"]);
+        assert_eq!(
+            checkout_remote_branch(clone.path(), "origin/feature").unwrap(),
+            "feature"
+        );
+        assert_eq!(
+            clone
+                .git(&["rev-parse", "--abbrev-ref", "feature@{upstream}"])
+                .trim(),
+            "origin/feature"
+        );
     }
 
     #[test]

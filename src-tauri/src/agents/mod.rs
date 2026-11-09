@@ -1,8 +1,10 @@
 //! AI agents through the user's own CLIs and subscriptions (Claude Code, Codex): the app never sees a
 //! token. Runs are read-only: Claude runs in plan mode, Codex in its read-only sandbox.
 
+pub mod definitions;
 pub mod sessions;
 pub mod steps;
+pub mod usage;
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -19,7 +21,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::git::errors::{ErrorKind, GitError, GitResult};
 use crate::git::validate;
-use steps::{AgentStep, StepKind, from_claude, from_codex, step};
+use steps::{AgentStep, StepKind, Usage, from_claude, from_codex, step, usage_of};
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const EXTRA_PATH: [&str; 3] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
@@ -220,11 +222,12 @@ fn build_prompt(task: &AgentTask, locale: &str, mode: Mode) -> GitResult<String>
                     "Write a request for the agent (20,000 characters at most).",
                 ));
             }
+            // The user's own words, sent as typed: the agent answers in the language they wrote in.
             // Reviews and explanations always read; a free request may act when the mode allows it.
             if mode == Mode::Plan {
-                format!("{prompt}\n\n{READ_ONLY} {lang}")
+                format!("{prompt}\n\n{READ_ONLY}")
             } else {
-                format!("{prompt}\n\n{lang}")
+                prompt.to_string()
             }
         }
     })
@@ -332,6 +335,11 @@ pub enum RunEvent {
     Finished {
         run_id: String,
         status: RunStatus,
+    },
+    /// Context fill and cost so far; unknown fields are null and keep their previous value in the UI.
+    Usage {
+        run_id: String,
+        usage: Usage,
     },
 }
 
@@ -461,6 +469,15 @@ pub fn start(
                         RunEvent::Session {
                             run_id: run_id.clone(),
                             session_id: session_id.to_string(),
+                        },
+                    );
+                }
+                if let Some(usage) = usage_of(&event) {
+                    emit(
+                        &app,
+                        RunEvent::Usage {
+                            run_id: run_id.clone(),
+                            usage,
                         },
                     );
                 }

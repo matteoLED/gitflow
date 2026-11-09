@@ -1,7 +1,13 @@
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
+  ArrowLeft,
+  ArrowRight,
   ExternalLink,
+  SquareTerminal,
+  Maximize2,
+  Minimize2,
   Globe,
   Monitor,
   Play,
@@ -220,6 +226,77 @@ function HeaderButton({
   );
 }
 
+/** "localhost:3006/coach/page" from what's typed: a path, a host or a full address. */
+export function resolveAddress(typed: string, base: string): string | null {
+  const text = typed.trim();
+  if (!text) return null;
+  try {
+    if (text.startsWith("/")) return new URL(text, base).toString();
+    return new URL(/^https?:\/\//.test(text) ? text : `http://${text}`).toString();
+  } catch {
+    return null;
+  }
+}
+
+/** Arc/Dia-style bar: history buttons and an address that follows the page and can be typed into. */
+function AddressBar({ base, live }: { base: string | null; live: boolean }) {
+  const t = useT();
+  const [page, setPage] = useState<string | null>(null);
+  const [draft, setDraft] = useState<string | null>(null); // non-null while the user types
+  useEffect(() => {
+    if (!live) return;
+    const poll = () =>
+      void gitBackend
+        .previewViewUrl()
+        .then(setPage)
+        .catch(() => undefined);
+    poll();
+    const timer = setInterval(poll, 800);
+    return () => clearInterval(timer);
+  }, [live]);
+  const shown = ((live ? page : null) ?? base ?? "").replace(/^https?:\/\//, "");
+  const go = () => {
+    const url = draft !== null && base ? resolveAddress(draft, base) : null;
+    setDraft(null);
+    if (url) void gitBackend.previewViewNavigate(url).catch(() => undefined);
+  };
+  return (
+    <div className="mx-1 flex min-w-0 flex-1 items-center gap-0.5">
+      <HeaderButton label={t("preview.back")} onClick={() => void gitBackend.previewViewGo(false)}>
+        <ArrowLeft />
+      </HeaderButton>
+      <HeaderButton label={t("preview.forward")} onClick={() => void gitBackend.previewViewGo(true)}>
+        <ArrowRight />
+      </HeaderButton>
+      <HeaderButton label={t("preview.reload")} onClick={() => void gitBackend.previewViewReload()}>
+        <RotateCw />
+      </HeaderButton>
+      <label className="ml-1 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-lg bg-white/[0.05] px-3 text-[12.5px] focus-within:bg-white/[0.08] focus-within:ring-1 focus-within:ring-ring">
+        <Globe aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        <input
+          value={draft ?? shown}
+          disabled={!live}
+          spellCheck={false}
+          aria-label={t("preview.address")}
+          onFocus={(e) => {
+            setDraft(shown);
+            e.currentTarget.select();
+          }}
+          onBlur={() => setDraft(null)}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              go();
+              e.currentTarget.blur();
+            } else if (e.key === "Escape") e.currentTarget.blur();
+          }}
+          className="min-w-0 flex-1 truncate bg-transparent text-foreground outline-none disabled:text-muted-foreground"
+        />
+      </label>
+    </div>
+  );
+}
+
 /** Main panel of the Preview view: the running app in a desktop, tablet or phone frame. */
 export function PreviewPanel({ repoPath }: { repoPath: string }) {
   const t = useT();
@@ -228,6 +305,13 @@ export function PreviewPanel({ repoPath }: { repoPath: string }) {
   const target = targets.find((x) => x.id === selected) ?? targets[0];
   const run = runOf(runs, target?.id ?? null);
   const [showLogs, setShowLogs] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFullscreen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fullscreen]);
   const { assistantOpen, setAssistantOpen } = useUiStore(
     useShallow((s) => ({ assistantOpen: s.assistantOpen, setAssistantOpen: s.setAssistantOpen })),
   );
@@ -235,14 +319,22 @@ export function PreviewPanel({ repoPath }: { repoPath: string }) {
   if (!target) return <EmptyState icon={<Globe />} title={t("preview.noApps")} description={t("preview.noAppsHint")} />;
   const failed = run.status === "failed" || run.status === "stopped";
 
-  return (
-    <section aria-label={t("view.preview")} className="flex h-full flex-col">
-      <PanelHeader className="gap-2">
+  const panel = (
+    <section
+      aria-label={t("view.preview")}
+      className={cn("flex h-full flex-col", fullscreen && "fixed inset-0 z-40 bg-background")}
+    >
+      {/* Full screen covers the title bar: leave room for the traffic lights and keep the window draggable. */}
+      <PanelHeader className={cn("gap-2", fullscreen && "pl-20")} data-tauri-drag-region={fullscreen || undefined}>
         <DeviceSwitch />
-        <div className="mx-2 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-full bg-white/[0.05] px-3 text-[12.5px] text-muted-foreground">
-          <Globe aria-hidden className="size-3.5 shrink-0" />
-          <span className="truncate select-text">{run.url ?? `${target.name} · ${target.command}`}</span>
-        </div>
+        {target.kind === "server" || !run.url ? (
+          <div className="mx-2 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-lg bg-white/[0.05] px-3 text-[12.5px] text-muted-foreground">
+            <Globe aria-hidden className="size-3.5 shrink-0" />
+            <span className="truncate select-text">{run.url ?? `${target.name} · ${target.command}`}</span>
+          </div>
+        ) : (
+          <AddressBar base={run.url} live={run.status === "ready"} />
+        )}
         {run.inWorkspace ? (
           <span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-[12px] text-muted-foreground">
             {t("preview.viaMonorepo")}
@@ -267,8 +359,8 @@ export function PreviewPanel({ repoPath }: { repoPath: string }) {
             {t("preview.start")}
           </Button>
         )}
-        <HeaderButton label={t("preview.reload")} onClick={() => void gitBackend.previewViewReload()}>
-          <RotateCw />
+        <HeaderButton label={t("preview.inspect")} onClick={() => void gitBackend.previewViewInspect()}>
+          <SquareTerminal />
         </HeaderButton>
         <HeaderButton
           label={t("preview.openBrowser")}
@@ -285,6 +377,13 @@ export function PreviewPanel({ repoPath }: { repoPath: string }) {
         </HeaderButton>
         <HeaderButton label={t("preview.logs")} pressed={showLogs} onClick={() => setShowLogs((s) => !s)}>
           <ScrollText />
+        </HeaderButton>
+        <HeaderButton
+          label={fullscreen ? `${t("preview.exitFullscreen")} Esc` : t("preview.fullscreen")}
+          pressed={fullscreen}
+          onClick={() => setFullscreen((f) => !f)}
+        >
+          {fullscreen ? <Minimize2 /> : <Maximize2 />}
         </HeaderButton>
       </PanelHeader>
       {target.kind === "workspace" && (run.status === "ready" || run.logs.length > 0) ? (
@@ -327,4 +426,6 @@ export function PreviewPanel({ repoPath }: { repoPath: string }) {
       )}
     </section>
   );
+  // Portaled so no panel around it can clip or offset a fixed layer.
+  return fullscreen ? createPortal(panel, document.body) : panel;
 }

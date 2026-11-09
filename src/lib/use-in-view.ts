@@ -18,10 +18,10 @@ export function useInView<T extends Element>(rootMargin = "400px") {
  * lists render far items as empty blocks of that height, so scrolling stays smooth whatever their length.
  */
 export function useNearViewport<T extends HTMLElement>(rootMargin = "1500px") {
-  const ref = useRef<T>(null);
+  // A callback ref: the element can mount later (a diff card opened after being collapsed) and still be watched.
+  const [el, ref] = useState<T | null>(null);
   const [state, setState] = useState({ near: typeof IntersectionObserver === "undefined", height: 0 });
   useEffect(() => {
-    const el = ref.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(
       ([entry]) =>
@@ -32,6 +32,6 @@ export function useNearViewport<T extends HTMLElement>(rootMargin = "1500px") {
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [rootMargin]);
+  }, [el, rootMargin]);
   return [ref, state] as const;
 }

@@ -1,7 +1,10 @@
 mod agents;
 mod attachments;
+mod browser;
+mod code_graph;
 mod commands;
 mod git;
+mod github_status;
 mod linear;
 mod preview;
 mod preview_view;
@@ -50,6 +53,16 @@ pub fn run() {
             commands::cancel_agent_run,
             commands::list_agent_sessions,
             commands::get_agent_session,
+            commands::get_session_usage,
+            commands::get_usage_stats,
+            commands::list_agent_definitions,
+            commands::save_agent_definition,
+            commands::delete_agent_definition,
+            commands::code_graph_status,
+            commands::code_graph_hotspots,
+            commands::code_graph_map,
+            commands::code_graph_impact,
+            commands::code_graph_update,
             commands::list_preview_targets,
             commands::start_preview,
             commands::stop_preview,
@@ -57,6 +70,16 @@ pub fn run() {
             commands::preview_view_show,
             commands::preview_view_hide,
             commands::preview_view_reload,
+            commands::preview_view_go,
+            commands::browser_show,
+            commands::browser_hide,
+            commands::browser_close,
+            commands::browser_navigate,
+            commands::browser_command,
+            commands::browser_inspect,
+            commands::browser_url,
+            commands::preview_view_navigate,
+            commands::preview_view_inspect,
             commands::preview_view_close,
             commands::preview_view_url,
             commands::linear_add_account,
@@ -67,10 +90,17 @@ pub fn run() {
             commands::linear_organizations,
             commands::linear_image,
             commands::linear_team_states,
+            commands::linear_create_issue,
+            commands::linear_projects,
+            commands::linear_project_issues,
+            commands::linear_active_cycles,
+            commands::github_status,
             commands::linear_set_issue_state,
             commands::get_pull_request_details,
             commands::merge_pull_request,
             commands::comment_pull_request,
+            commands::compare_with_base,
+            commands::create_pull_request,
             commands::rerun_failed_checks,
             commands::add_reviewer,
             commands::set_pull_request_state,
@@ -83,6 +113,7 @@ pub fn run() {
             commands::unstage_files,
             commands::create_commit,
             commands::switch_branch,
+            commands::checkout_remote_branch,
             commands::create_branch,
             commands::fetch,
             commands::pull,

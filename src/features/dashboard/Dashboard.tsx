@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, GitBranch, Layers, MonitorSmartphone, PlayCircle, Sparkles } from "lucide-react";
+import { ArrowRight, FolderGit2, Layers, MonitorSmartphone, PlayCircle, Sparkles } from "lucide-react";
 import { GithubIcon } from "@/components/github-icon";
 import { PanelHeader } from "@/components/layout/panel";
 import { BrailleLoader } from "@/components/braille-loader";
@@ -15,12 +15,19 @@ import { runOf, usePreviewStore } from "@/stores/preview-store";
 import { useWorkspaceStore, type View } from "@/stores/workspace-store";
 import { ClaudeIcon } from "@/features/agents/agent-icons";
 import { StatusIcon, ghStatus } from "@/features/agents/status";
-import { ReviewBadge, StateIcon, useOpenPullRequest } from "@/features/github/PullRequestList";
+import {
+  BranchStateIcon,
+  pullRequestOf,
+  ReviewBadge,
+  StateIcon,
+  useOpenPullRequest,
+} from "@/features/github/PullRequestList";
 import { LinearIcon } from "@/features/linear/LinearIcon";
 import { PriorityIcon, StateDot } from "@/features/linear/LinearList";
 import { useActiveAccount, useMyIssues } from "@/features/linear/linear-queries";
 import { usePreviewTargets } from "@/features/preview/PreviewList";
 import type { RepositoryInfo } from "@/types/git";
+import { Kpis } from "./Kpis";
 
 const go = (view: View) => useWorkspaceStore.getState().setView(view);
 
@@ -176,12 +183,14 @@ function RepoCard({ repo }: { repo: RepositoryInfo }) {
   const refs = useRefs(repo.path).data;
   const changes = useWorkingTree(repo.path).data?.length ?? 0;
   const head = refs?.branches.find((b) => b.name === refs.head.branch);
+  const pr = pullRequestOf(usePullRequests(repo.path).data, refs?.head.branch);
+  const upstream = head?.upstream ?? t("dashboard.noUpstream");
   return (
-    <Card icon={<GitBranch />} title={t("dashboard.repo")} view="history">
+    <Card icon={<FolderGit2 />} title={t("dashboard.repo")} view="history">
       <Row
-        lead={<GitBranch aria-hidden className="size-3.5 text-primary" />}
+        lead={<BranchStateIcon pr={pr} />}
         title={refs?.head.branch ?? t("branches.detached")}
-        meta={head?.upstream ?? t("dashboard.noUpstream")}
+        meta={pr ? `#${pr.number} · ${upstream}` : upstream}
         trail={head && (head.ahead || head.behind) ? `↑${head.ahead} ↓${head.behind}` : undefined}
         onClick={() => go("history")}
       />
@@ -343,7 +352,8 @@ export function Dashboard({ repo }: { repo: RepositoryInfo }) {
           <p className="mt-1 text-[13.5px] text-muted-foreground">
             {now.toLocaleDateString(t.locale, { weekday: "long", day: "numeric", month: "long" })}
           </p>
-          <div className="mt-8 grid items-start gap-4 lg:grid-cols-2">
+          <Kpis repo={repo} />
+          <div className="mt-4 grid items-start gap-4 lg:grid-cols-2">
             <LinearCard />
             <PullRequestsCard repo={repo} />
             <RepoCard repo={repo} />

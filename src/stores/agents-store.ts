@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { AgentKind, AgentRunEvent, AgentStep, AgentTask, RunSettings } from "@/types/git";
+import type { AgentScope, AgentKind, AgentRunEvent, AgentStep, AgentTask, AgentUsage, RunSettings } from "@/types/git";
 
 export type RunStatus = "running" | "done" | "failed" | "cancelled";
 
@@ -17,11 +17,27 @@ export type AgentRun = {
   sessionId: string | null;
   /** Runs of one conversation share a thread: the first run's id, or `session:<id>` for a Claude Code session. */
   thread: string;
+  /** Latest known context fill and cost of this run. */
+  usage?: Partial<AgentUsage>;
 };
+
+/** Null fields mean "not reported this time": the previous value stays. */
+function mergeUsage(previous: Partial<AgentUsage> | undefined, next: AgentUsage): Partial<AgentUsage> {
+  const known = Object.fromEntries(Object.entries(next).filter(([, v]) => v !== null));
+  return { ...previous, ...known };
+}
 
 /** What the Agents view shows: a run started here, a saved Claude Code session, a GitHub Actions run. */
 export type AgentSelection =
-  { type: "new" } | { type: "run"; id: string } | { type: "session"; id: string } | { type: "workflow"; id: number };
+  | { type: "new" }
+  | { type: "usage" }
+  | { type: "definition"; scope: AgentScope; name: string }
+  | { type: "new-definition" }
+  | { type: "run"; id: string }
+  | { type: "session"; id: string }
+  | { type: "workflow"; id: number };
+
+export type AgentsListTab = "runs" | "agents" | "actions";
 
 type AgentsState = {
   runs: AgentRun[];
@@ -36,6 +52,9 @@ type AgentsState = {
   addRun: (run: Omit<AgentRun, "status" | "steps" | "sessionId">) => void;
   applyEvent: (event: AgentRunEvent) => void;
   select: (selection: AgentSelection) => void;
+  /** Tab of the Agents list: runs and sessions, sub-agent definitions, or GitHub Actions. */
+  listTab: AgentsListTab;
+  setListTab: (tab: AgentsListTab) => void;
   setPreferredAgent: (agent: AgentKind) => void;
 };
 
@@ -90,18 +109,22 @@ export const useAgentsStore = create<AgentsState>()(
               if (r.id !== event.runId) return r;
               if (event.type === "step") return { ...r, steps: [...r.steps, event.step] };
               if (event.type === "session") return { ...r, sessionId: event.sessionId };
+              if (event.type === "usage") return { ...r, usage: mergeUsage(r.usage, event.usage) };
               return { ...r, status: event.status };
             }),
           };
         }),
       select: (selection) => set({ selection }),
+      listTab: "runs",
+      setListTab: (listTab) => set({ listTab }),
       setPreferredAgent: (agent) => set({ preferredAgent: agent }),
     }),
     {
       name: "gitflow.agents",
       // Finished runs survive a restart (capped); a run still going when the app quit can't resume.
-      partialize: ({ runs, preferredAgent, runSettings }) => ({
+      partialize: ({ runs, preferredAgent, runSettings, listTab }) => ({
         preferredAgent,
+        listTab,
         runSettings,
         runs: runs.slice(0, 30).map((r) => (r.status === "running" ? { ...r, status: "cancelled" as const } : r)),
       }),

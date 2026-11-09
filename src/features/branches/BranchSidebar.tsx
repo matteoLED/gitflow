@@ -1,16 +1,13 @@
 import { useShallow } from "zustand/react/shallow";
 import { DataUnavailable } from "@/components/states";
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowRightLeft, ChevronDown, ChevronRight, GitBranch, Plus, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PanelLoading } from "@/components/layout/panel";
-import { invalidateRepo, useRefs } from "@/lib/git-queries";
-import { toGitError } from "@/lib/errors";
-import { useNoticesStore } from "@/stores/notices-store";
+import { useRefs } from "@/lib/git-queries";
 import { branchRows, type BranchListRow } from "./branch-rows";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
@@ -18,9 +15,12 @@ import { useWorkspaceStore, type View } from "@/stores/workspace-store";
 import { useGitAction } from "@/features/operations/use-git-action";
 import type { LocalBranch, RefsSnapshot, RepositoryInfo } from "@/types/git";
 import { SyncBar } from "./SyncBar";
+import { GithubIncident } from "@/features/github/GithubIncident";
 import { SidebarNav } from "./SidebarNav";
 import { AppMenu } from "./AppMenu";
 import { RepoSwitcher } from "@/features/repositories/RepoSwitcher";
+import { useCheckout } from "./use-checkout";
+import { BranchSwitcher } from "./BranchSwitcher";
 import { useT } from "@/i18n";
 
 const ROW =
@@ -176,26 +176,6 @@ function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
-/** Switches branch: one mutation for the whole list instead of one per row. */
-function useSwitchBranch(repoPath: string) {
-  const t = useT();
-  const client = useQueryClient();
-  const notify = useNoticesStore((s) => s.notify);
-  return useMutation({
-    mutationFn: (name: string) => gitBackend.switchBranch(repoPath, name),
-    onSuccess: (_, name) => notify({ tone: "success", title: t("branches.switched", { name }) }),
-    onError: (error, name) => {
-      const { message, detail } = toGitError(error);
-      notify({
-        tone: "error",
-        title: t("action.failed", { action: t("branches.switchFailed", { name }), message }),
-        detail,
-      });
-    },
-    onSettled: () => invalidateRepo(client, repoPath),
-  });
-}
-
 const SECTION_LABEL = { remotes: "branches.remotes", tags: "branches.tags", stashes: "branches.stashes" } as const;
 const EMPTY_LABEL = { none: "common.none", noMatch: "branches.noMatch", noOther: "branches.noOther" } as const;
 const ROW_HEIGHT = 28;
@@ -207,9 +187,10 @@ export function BranchesList({ repo, query }: { repo: RepositoryInfo; query: str
   const { historyRev, showHistoryOf } = useWorkspaceStore(
     useShallow((s) => ({ historyRev: s.historyRev, showHistoryOf: s.showHistoryOf })),
   );
-  const switchBranch = useSwitchBranch(repo.path);
-  // mutate is stable across renders: memoized rows don't re-render when the list does.
-  const onSwitch = switchBranch.mutate;
+  const switchBranch = useCheckout(repo.path);
+  const checkout = switchBranch.mutate;
+  // Stable across renders: memoized rows don't re-render when the list does.
+  const onSwitch = useCallback((name: string) => checkout({ kind: "local", name }), [checkout]);
   const [creating, setCreating] = useState(false);
   const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set());
   const rows = useMemo(() => (refs.data ? branchRows(refs.data, query, toggled) : []), [refs.data, query, toggled]);
@@ -279,6 +260,7 @@ export function BranchesList({ repo, query }: { repo: RepositoryInfo; query: str
             title={row.rev}
             aria-current={historyRev === row.rev ? "true" : undefined}
             onClick={() => showHistoryOf(row.rev)}
+            onDoubleClick={() => row.key.startsWith("r:") && checkout({ kind: "remote", name: row.rev })}
             className={cn(ROW, "text-sidebar-foreground", historyRev === row.rev && "bg-white/[0.08]")}
           >
             <span className="truncate">{row.rev}</span>
@@ -346,8 +328,10 @@ export function BranchSidebar({ repo }: { repo: RepositoryInfo }) {
         </div>
         <AppMenu repo={repo} />
       </div>
+      <BranchSwitcher repoPath={repo.path} />
       <SidebarNav repoPath={repo.path} />
       <div className="min-h-0 flex-1" />
+      <GithubIncident />
       {refs.data && <SyncBar repoPath={repo.path} refs={refs.data} />}
     </aside>
   );
