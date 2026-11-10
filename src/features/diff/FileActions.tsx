@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { ChevronsDownUp, ChevronsUpDown, Copy, Ellipsis, ExternalLink, Link, MessageCircle } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, Code2, Copy, Ellipsis, ExternalLink, Link, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -17,6 +17,7 @@ import { gitBackend } from "@/lib/tauri-git";
 import { useNoticesStore } from "@/stores/notices-store";
 import { reviewKey, useReviewStore } from "@/stores/review-store";
 import { useUiStore } from "@/stores/ui-store";
+import { openInEditor } from "@/stores/editor-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { ChangedFile } from "@/types/git";
 
@@ -137,6 +138,12 @@ export function FileActions(props: FileActionsProps) {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" sideOffset={4} className="w-56 rounded-xl p-1 shadow-xl">
           {pr && <Item icon={<MessageCircle />} label={t("file.comment")} onSelect={() => commentOnFile(file.path)} />}
+          <Item
+            icon={<Code2 />}
+            label={t("editor.openInEditor")}
+            disabled={file.status === "deleted"}
+            onSelect={() => openInEditor(repoPath, file.path)}
+          />
           <Item
             icon={<ExternalLink />}
             label={t("file.openGithub")}

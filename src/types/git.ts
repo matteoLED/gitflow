@@ -20,7 +20,8 @@ export type LocalBranch = {
   subject: string;
 };
 
-export type RemoteBranch = { remote: string; name: string };
+/** `committedAt`: date of the branch's last commit (ISO 8601). */
+export type RemoteBranch = { remote: string; name: string; committedAt: string };
 
 export type Stash = { index: number; message: string };
 
@@ -72,7 +73,7 @@ export type WorkingSide = "staged" | "unstaged" | "untracked";
 export type FileDiff = { patch: string; binary: boolean };
 
 export type GitErrorKind =
-  "gitNotFound" | "notARepository" | "invalidInput" | "commandFailed" | "timeout" | "outputTooLarge" | "io";
+  "gitNotFound" | "notARepository" | "invalidInput" | "commandFailed" | "timeout" | "outputTooLarge" | "io" | "changedOnDisk";
 
 export type GitErrorPayload = { kind: GitErrorKind; message: string; detail: string | null };
 
@@ -320,7 +321,7 @@ export type PullRequestDetails = {
   additions: number;
   deletions: number;
   changedFiles: number;
-  commits: { oid: string }[];
+  commits: { oid: string; messageHeadline?: string; committedDate?: string }[];
   comments: { author: GhActor; body: string; createdAt: string; url: string }[];
   reviews: { author: GhActor; body: string; state: string; submittedAt: string }[];
   reviewRequests: { login?: string; name?: string; slug?: string }[];
@@ -391,3 +392,40 @@ export type CodeImpact = {
   review_priorities: GraphSymbol[];
   affected_flows: unknown[];
 };
+
+export type Reaction = "THUMBS_UP" | "THUMBS_DOWN" | "LAUGH" | "HOORAY" | "CONFUSED" | "HEART" | "ROCKET" | "EYES";
+
+/** One comment of a code thread, as GitHub's GraphQL API returns it. */
+export type ThreadComment = {
+  id: string;
+  databaseId: number;
+  url: string;
+  body: string;
+  createdAt: string;
+  viewerCanUpdate: boolean;
+  viewerCanDelete: boolean;
+  author: { login: string; avatarUrl: string } | null;
+  reactionGroups: { content: Reaction; viewerHasReacted: boolean; reactors: { totalCount: number } }[];
+};
+
+/** A discussion on one line of a pull request's diff. */
+export type ReviewThread = {
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  path: string;
+  /** The line in the current diff; null once outdated. */
+  line: number | null;
+  originalLine: number | null;
+  diffSide: "LEFT" | "RIGHT";
+  comments: { nodes: ThreadComment[] };
+};
+
+/** A working-tree file opened in the editor; no content when binary or too large. */
+export type EditorFile = { content: string | null; mtime: number; binary: boolean; tooLarge: boolean };
+
+/** Lines differing from HEAD, 1-based, for the editor's gutter. */
+export type LineChange = { kind: "added" | "modified" | "deleted"; start: number; end: number };
+
+export type SearchMatch = { path: string; line: number; column: number; text: string };
+export type SearchResults = { matches: SearchMatch[]; truncated: boolean };

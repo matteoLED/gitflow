@@ -1,0 +1,502 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { EditorState, type Text } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { openSearchPanel } from "@codemirror/search";
+import { Code2, FileWarning, Search, Sparkles, X } from "lucide-react";
+import { FileIcon } from "@/components/file-icon";
+import { PanelMessage } from "@/components/layout/panel";
+import { useT } from "@/i18n";
+import { toGitError } from "@/lib/errors";
+import { invalidateRepo } from "@/lib/git-queries";
+import { gitBackend } from "@/lib/tauri-git";
+import { cn } from "@/lib/utils";
+import { editorOf, useEditorStore } from "@/stores/editor-store";
+import { useNoticesStore } from "@/stores/notices-store";
+import { useUiStore } from "@/stores/ui-store";
+import { LIGHT_SYNTAX_THEMES, useAppearance } from "@/stores/appearance-store";
+import { useThemeKind } from "@/features/settings/use-apply-appearance";
+import {
+  editorExtensions,
+  languageFor,
+  languageName,
+  languageSlot,
+  lspSlot,
+  setCurrentSyntax,
+  setLineChanges,
+  syncSyntax,
+} from "./codemirror";
+import { loadEditorSyntaxTheme } from "./syntax-theme";
+import { fileUri, lspClient, lspLanguageOf, registerDisplay } from "./lsp";
+import { AskAgent, selectionOf, type Selection } from "./AskAgent";
+import { QuickOpen } from "./QuickOpen";
+
+/**
+ * One open file. Its EditorState (text, undo history, selection, folds) lives here while another tab is in
+ * front, so switching tabs is instant and keeps everything; only one EditorView exists.
+ */
+type Buffer = { state: EditorState; saved: Text; mtime: number };
+type Notice = "binary" | "tooLarge" | "error";
+
+const buffers = new Map<string, Buffer>();
+const keyOf = (repo: string, path: string) => `${repo}\0${path}`;
+/** Buffers are replaced, never mutated: the React compiler can trust what it has seen. */
+const patchBuffer = (key: string, patch: Partial<Buffer>) => {
+  const buffer = buffers.get(key);
+  if (buffer) buffers.set(key, { ...buffer, ...patch });
+};
+
+export function useRepoFiles(repoPath: string) {
+  return useQuery({
+    queryKey: ["files", repoPath],
+    queryFn: () => gitBackend.listFiles(repoPath),
+    staleTime: 30_000,
+  });
+}
+
+const isDirty = (state: EditorState, saved: Text) => state.doc.length !== saved.length || !state.doc.eq(saved);
+
+/** Above the code, as in Zed: where the file sits, and the search and AI chat toggles. */
+function EditorToolbar({ path, view }: { path: string; view: React.RefObject<EditorView | null> }) {
+  const t = useT();
+  const assistantOpen = useUiStore((s) => s.assistantOpen);
+  const parts = path.split("/");
+  return (
+    <div className="flex h-8 shrink-0 items-center gap-1 border-b border-white/[0.06] pr-2 pl-3 text-[12px]">
+      <span className="min-w-0 flex-1 truncate text-muted-foreground" title={path}>
+        {parts.slice(0, -1).map((part, i) => (
+          <span key={i}>
+            {part}
+            <span className="mx-1 opacity-50">/</span>
+          </span>
+        ))}
+        <span className="text-foreground">{parts[parts.length - 1]}</span>
+      </span>
+      <button
+        type="button"
+        aria-label={t("editor.find")}
+        title={`${t("editor.find")} ⌘F`}
+        onClick={() => view.current && openSearchPanel(view.current)}
+        className="grid size-6 place-items-center rounded text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
+      >
+        <Search aria-hidden className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        aria-label={t("editor.aiChat")}
+        title={`${t("editor.aiChat")} ⌘I`}
+        aria-pressed={assistantOpen}
+        onClick={() => useUiStore.getState().setAssistantOpen(!assistantOpen)}
+        className="grid size-6 place-items-center rounded text-muted-foreground hover:bg-white/[0.06] hover:text-foreground aria-pressed:bg-primary/20 aria-pressed:text-primary"
+      >
+        <Sparkles aria-hidden className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+/** A Zed-like code editor: tabs over one CodeMirror view, saved atomically with ⌘S. */
+export function EditorPage({ repoPath }: { repoPath: string }) {
+  const t = useT();
+  const client = useQueryClient();
+  const notify = useNoticesStore((s) => s.notify);
+  const { tabs, active } = useEditorStore((s) => editorOf(s, repoPath));
+  const { open, close } = useEditorStore.getState();
+  const hostRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const shownRef = useRef<string | null>(null);
+  // Edits survive leaving the page (buffers outlive it): their dots come back with it.
+  const [dirty, setDirty] = useState<ReadonlySet<string>>(
+    () =>
+      new Set(
+        [...buffers]
+          .filter(([key, b]) => key.startsWith(`${repoPath}\0`) && isDirty(b.state, b.saved))
+          .map(([key]) => key.split("\0")[1]),
+      ),
+  );
+  const [cursor, setCursor] = useState({ line: 1, col: 1 });
+  const [notice, setNotice] = useState<{ kind: Notice; message?: string } | null>(null);
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [selected, setSelected] = useState(false);
+  const [asking, setAsking] = useState<Selection | null>(null);
+  const reveal = useEditorStore((s) => s.reveal);
+  // ⌘L: hand the selection (or the current line) to an agent, with where it comes from.
+  const askRef = useRef(() => {});
+  useEffect(() => {
+    askRef.current = () => {
+      const view = viewRef.current;
+      const path = shownRef.current;
+      if (view && path) setAsking(selectionOf(view, path));
+    };
+  });
+
+  const markDirty = useCallback((path: string, value: boolean) => {
+    setDirty((d) => {
+      if (d.has(path) === value) return d;
+      const next = new Set(d);
+      if (value) next.add(path);
+      else next.delete(path);
+      return next;
+    });
+  }, []);
+
+  const refreshGutter = useCallback(
+    (path: string) => {
+      gitBackend
+        .lineChanges(repoPath, path)
+        .then((changes) => {
+          if (shownRef.current === path) viewRef.current?.dispatch({ effects: setLineChanges.of(changes) });
+        })
+        .catch(() => undefined); // the gutter is a hint: no marks is a fine fallback
+    },
+    [repoPath],
+  );
+
+  // Read by CodeMirror's ⌘S binding and the "Overwrite" action, which outlive any one render.
+  const saveRef = useRef<(force?: boolean) => Promise<void>>(async () => undefined);
+  const save = useCallback(
+    async (force = false) => {
+      const path = shownRef.current;
+      const view = viewRef.current;
+      const buffer = path && buffers.get(keyOf(repoPath, path));
+      if (!path || !view || !buffer) return;
+      const doc = view.state.doc;
+      try {
+        const mtime = await gitBackend.writeFile(repoPath, path, doc.toString(), force ? null : buffer.mtime);
+        patchBuffer(keyOf(repoPath, path), { mtime, saved: doc });
+        markDirty(path, isDirty(view.state, doc));
+        refreshGutter(path);
+        void invalidateRepo(client, repoPath, ["working-tree", "working-diff"]);
+      } catch (error) {
+        const e = toGitError(error);
+        notify({
+          tone: "error",
+          title: e.kind === "changedOnDisk" ? t("editor.changedOnDisk") : t("editor.saveFailed"),
+          detail: e.message,
+          action:
+            e.kind === "changedOnDisk"
+              ? { label: t("editor.overwrite"), run: () => void saveRef.current(true) }
+              : undefined,
+        });
+      }
+    },
+    [client, markDirty, notify, refreshGutter, repoPath, t],
+  );
+  useEffect(() => {
+    saveRef.current = save;
+  }, [save]);
+
+  const stateFor = useCallback(
+    (path: string, doc: string, readOnly: boolean) =>
+      EditorState.create({
+        doc,
+        extensions: [
+          editorExtensions(
+            () => void saveRef.current(),
+            () => askRef.current(),
+            readOnly,
+          ),
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) {
+              const buffer = buffers.get(keyOf(repoPath, path));
+              if (buffer) markDirty(path, isDirty(update.state, buffer.saved));
+            }
+            if (update.docChanged || update.selectionSet) {
+              const head = update.state.selection.main.head;
+              const line = update.state.doc.lineAt(head);
+              setCursor({ line: line.number, col: head - line.from + 1 });
+              setSelected(!update.state.selection.main.empty);
+            }
+          }),
+        ],
+      }),
+    [markDirty, repoPath],
+  );
+
+  // The single view, created once and handed each tab's state in turn.
+  useEffect(() => {
+    if (!hostRef.current) return;
+    const view = new EditorView({ parent: hostRef.current });
+    viewRef.current = view;
+    return () => {
+      const shown = shownRef.current;
+      const buffer = shown && buffers.get(keyOf(repoPath, shown));
+      if (buffer && shown) patchBuffer(keyOf(repoPath, shown), { state: view.state });
+      view.destroy();
+      viewRef.current = null;
+      shownRef.current = null;
+    };
+  }, [repoPath]);
+
+  // Code colors follow the syntax theme setting, like the diffs (a dark one falls back on a light interface).
+  const chosen = useAppearance((st) => st.syntaxTheme);
+  const kind = useThemeKind();
+  const syntaxTheme = kind === "light" && !LIGHT_SYNTAX_THEMES.has(chosen) ? "github-light" : chosen;
+  useEffect(() => {
+    let cancelled = false;
+    void loadEditorSyntaxTheme(syntaxTheme).then((syntax) => {
+      if (cancelled) return;
+      setCurrentSyntax(syntax);
+      if (viewRef.current) syncSyntax(viewRef.current);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [syntaxTheme]);
+
+  /** Hooks the shown file to its language server (completion, hover, diagnostics, go to definition). */
+  const connectServer = useCallback(
+    async (path: string) => {
+      const language = lspLanguageOf(path);
+      if (!language) return;
+      const client = await lspClient(repoPath, language.server);
+      const view = viewRef.current;
+      if (!client || !view || shownRef.current !== path) return;
+      view.dispatch({ effects: lspSlot.reconfigure(client.plugin(fileUri(repoPath, path), language.languageId)) });
+    },
+    [repoPath],
+  );
+
+  // A jump to a definition in another file: bring its tab forward, then hand back the view showing it.
+  const displayed = useRef(new Map<string, (view: EditorView | null) => void>());
+  useEffect(
+    () =>
+      registerDisplay(repoPath, (path) => {
+        if (shownRef.current === path) return Promise.resolve(viewRef.current);
+        return new Promise((resolve) => {
+          displayed.current.set(path, resolve);
+          useEditorStore.getState().open(repoPath, path);
+        });
+      }),
+    [repoPath],
+  );
+  const settleDisplay = useCallback((path: string) => {
+    const resolve = displayed.current.get(path);
+    if (!resolve) return;
+    displayed.current.delete(path);
+    resolve(viewRef.current);
+  }, []);
+
+  /** Selects and centers the pending place (search result, diff line) once its file is in front. */
+  const applyReveal = useCallback(() => {
+    const target = useEditorStore.getState().reveal;
+    const view = viewRef.current;
+    if (!target || !view || target.repo !== repoPath || target.path !== shownRef.current) return;
+    const doc = view.state.doc;
+    const line = doc.line(Math.min(Math.max(target.line, 1), doc.lines));
+    const at = Math.min(line.from + Math.max(target.column - 1, 0), line.to);
+    view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: "center" }) });
+    view.focus();
+    useEditorStore.getState().clearReveal();
+  }, [repoPath]);
+  // A new place in the file already in front.
+  useEffect(() => {
+    if (reveal) applyReveal();
+  }, [reveal, applyReveal]);
+
+  // Bring the active tab forward: from memory when it was open before, from disk otherwise.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const previous = shownRef.current;
+    const previousBuffer = previous && buffers.get(keyOf(repoPath, previous));
+    if (previousBuffer && previous) patchBuffer(keyOf(repoPath, previous), { state: view.state });
+    shownRef.current = active;
+    setNotice(null);
+    if (!active) return;
+    const cached = buffers.get(keyOf(repoPath, active));
+    if (cached) {
+      view.setState(cached.state);
+      syncSyntax(view);
+      refreshGutter(active);
+      view.focus();
+      applyReveal();
+      settleDisplay(active);
+      return;
+    }
+    view.setState(EditorState.create({ doc: "" }));
+    let cancelled = false;
+    gitBackend
+      .readFile(repoPath, active)
+      .then(async (file) => {
+        if (cancelled) return;
+        if (file.content === null) {
+          setNotice({ kind: file.tooLarge ? "tooLarge" : "binary" });
+          return;
+        }
+        const state = stateFor(active, file.content, false);
+        buffers.set(keyOf(repoPath, active), { state, saved: state.doc, mtime: file.mtime });
+        if (shownRef.current !== active) return;
+        view.setState(state);
+        syncSyntax(view);
+        view.focus();
+        refreshGutter(active);
+        applyReveal();
+        settleDisplay(active);
+        const language = await languageFor(active);
+        if (shownRef.current === active) view.dispatch({ effects: languageSlot.reconfigure(language) });
+        await connectServer(active);
+      })
+      .catch((error) => !cancelled && setNotice({ kind: "error", message: toGitError(error).message }));
+    return () => {
+      cancelled = true;
+    };
+  }, [active, applyReveal, connectServer, refreshGutter, repoPath, settleDisplay, stateFor]);
+
+  // Files changed on disk (an agent, a checkout): clean tabs follow, edited ones keep the user's text.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<{ repoPath: string; worktree: boolean }>("repo-changed", ({ payload }) => {
+          if (payload.repoPath !== repoPath || !payload.worktree) return;
+          void client.invalidateQueries({ queryKey: ["files", repoPath] });
+          for (const [key, buffer] of buffers) {
+            const [repo, path] = key.split("\0");
+            if (repo !== repoPath) continue;
+            const shown = shownRef.current === path ? viewRef.current : null;
+            const state = shown ? shown.state : buffer.state;
+            if (isDirty(state, buffer.saved)) continue;
+            void gitBackend
+              .readFile(repoPath, path)
+              .then((file) => {
+                if (file.mtime === buffer.mtime || file.content === null) return;
+                patchBuffer(key, { mtime: file.mtime });
+                const view = viewRef.current;
+                if (shownRef.current === path && view) {
+                  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: file.content } });
+                  patchBuffer(key, { saved: view.state.doc });
+                  markDirty(path, false);
+                  refreshGutter(path);
+                } else buffers.delete(key); // reloaded from disk when brought forward
+              })
+              .catch(() => buffers.delete(key)); // deleted or moved: the tab shows why when opened
+          }
+        }),
+      )
+      .then((stop) => (disposed ? stop() : (unlisten = stop)))
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [client, markDirty, refreshGutter, repoPath]);
+
+  const closeTab = async (path: string) => {
+    const buffer = buffers.get(keyOf(repoPath, path));
+    const state = shownRef.current === path && viewRef.current ? viewRef.current.state : buffer?.state;
+    if (buffer && state && isDirty(state, buffer.saved)) {
+      const discard = await ask(t("editor.discardConfirm", { name: path.split("/").pop() ?? path }), {
+        kind: "warning",
+        okLabel: t("editor.discard"),
+      });
+      if (!discard) return;
+    }
+    buffers.delete(keyOf(repoPath, path));
+    markDirty(path, false);
+    close(repoPath, path);
+  };
+  // ⌘P opens a file by name, as in Zed (the repository switcher steps aside on this page).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setQuickOpen(true);
+      }
+      if (e.metaKey && !e.shiftKey && e.key.toLowerCase() === "w" && shownRef.current) {
+        e.preventDefault();
+        void closeTab(shownRef.current);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  return (
+    <section aria-label={t("view.editor")} className="flex h-full min-h-0 flex-col">
+      {tabs.length > 0 && (
+        <div role="tablist" className="flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-white/[0.06]">
+          {tabs.map((path) => {
+            const selected = path === active;
+            return (
+              <div
+                key={path}
+                role="tab"
+                aria-selected={selected}
+                title={path}
+                onMouseDown={(e) => {
+                  if (e.button === 1) {
+                    e.preventDefault();
+                    void closeTab(path);
+                  }
+                }}
+                className={cn(
+                  "group flex shrink-0 items-center gap-1.5 border-r border-white/[0.06] pr-1.5 pl-3 text-[12.5px]",
+                  selected ? "bg-white/[0.04] text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <button type="button" onClick={() => open(repoPath, path)} className="flex items-center gap-1.5">
+                  <FileIcon path={path} className="size-3.5" />
+                  {path.split("/").pop()}
+                </button>
+                <button
+                  type="button"
+                  aria-label={t("editor.closeTab")}
+                  onClick={() => void closeTab(path)}
+                  className="grid size-5 place-items-center rounded text-muted-foreground hover:bg-white/[0.08] hover:text-foreground"
+                >
+                  {dirty.has(path) ? (
+                    <>
+                      <span className="size-2 rounded-full bg-foreground/70 group-hover:hidden" />
+                      <X aria-hidden className="hidden size-3.5 group-hover:block" />
+                    </>
+                  ) : (
+                    <X aria-hidden className={cn("size-3.5", !selected && "opacity-0 group-hover:opacity-100")} />
+                  )}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {active && <EditorToolbar path={active} view={viewRef} />}
+      <div className="relative min-h-0 flex-1">
+        <div ref={hostRef} className={cn("absolute inset-0", (!active || notice) && "invisible")} />
+        {!active && <PanelMessage icon={<Code2 />} title={t("editor.empty")} hint={t("editor.emptyHint")} />}
+        {active && notice && (
+          <PanelMessage
+            icon={<FileWarning />}
+            title={t(
+              notice.kind === "binary"
+                ? "editor.binary"
+                : notice.kind === "tooLarge"
+                  ? "editor.tooLarge"
+                  : "editor.loadFailed",
+            )}
+            hint={notice.message}
+          />
+        )}
+      </div>
+      {active && !notice && (
+        <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-white/[0.06] px-3 text-[11.5px] text-muted-foreground">
+          <span className="min-w-0 truncate">{active}</span>
+          <button
+            type="button"
+            onClick={() => askRef.current()}
+            className="ml-auto flex items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-white/[0.06] hover:text-foreground"
+          >
+            <Sparkles aria-hidden className="size-3" />
+            {selected ? t("editor.askSelection") : t("editor.askAgent")}
+            <kbd className="font-sans">⌘L</kbd>
+          </button>
+          <span className="tabular-nums">{t("editor.position", cursor)}</span>
+          <span>{languageName(active) ?? t("editor.plainText")}</span>
+        </footer>
+      )}
+      <QuickOpen repoPath={repoPath} open={quickOpen} onOpenChange={setQuickOpen} />
+      <AskAgent repoPath={repoPath} selection={asking} onClose={() => setAsking(null)} />
+    </section>
+  );
+}

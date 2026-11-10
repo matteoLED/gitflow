@@ -1,6 +1,6 @@
 import { useThemeKind } from "@/features/settings/use-apply-appearance";
 import { useShallow } from "zustand/react/shallow";
-import { useEffect, useMemo, useState, type ReactNode, type Ref } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode, type Ref } from "react";
 import { ArrowDownToLine, ArrowUpToLine, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { FileIcon } from "@/components/file-icon";
@@ -16,6 +16,7 @@ import { highlightDiff, type LineTokens, cachedTokens } from "./syntax-client";
 import { toSplitRows } from "./split-rows";
 import { useT } from "@/i18n";
 import { ImageDiff, isImage, type ImageSource } from "./ImageDiff";
+import { CommentButton, LineThreads } from "./LineComments";
 
 const MAX_RENDERED_LINES = 3000;
 
@@ -62,20 +63,30 @@ function LineNumber({ value, kind, gutter }: { value: number | null; kind: DiffL
 
 function Line({ line, ctx }: { line: DiffLine; ctx: RenderContext }) {
   return (
-    <div className={cn("flex", ROW_STYLES[line.kind].row)}>
-      <LineNumber value={line.kind === "removed" ? line.oldLine : line.newLine} kind={line.kind} gutter={ctx.gutter} />
-      <span className="sr-only">{line.kind === "context" ? "" : `${line.kind}:`}</span>
-      <span className={codeClass(ctx.wrap)}>
-        <Code line={line} tokenOf={ctx.tokenOf} />
-      </span>
-    </div>
+    <>
+      <div className={cn("group/line relative flex", ROW_STYLES[line.kind].row)}>
+        <CommentButton line={line} />
+        <LineNumber
+          value={line.kind === "removed" ? line.oldLine : line.newLine}
+          kind={line.kind}
+          gutter={ctx.gutter}
+        />
+        <span className="sr-only">{line.kind === "context" ? "" : `${line.kind}:`}</span>
+        <span className={codeClass(ctx.wrap)}>
+          <Code line={line} tokenOf={ctx.tokenOf} />
+        </span>
+      </div>
+      <LineThreads line={line} />
+    </>
   );
 }
 
 function Half({ line, side, ctx }: { line: DiffLine | null; side: "left" | "right"; ctx: RenderContext }) {
   if (!line) return <div aria-hidden className="bg-white/[0.015]" />;
   return (
-    <div className={cn("flex min-w-0", ROW_STYLES[line.kind].row)}>
+    <div className={cn("group/line relative flex min-w-0", ROW_STYLES[line.kind].row)}>
+      {/* A context line appears on both sides: only the new one takes comments. */}
+      {(side === "right" || line.kind === "removed") && <CommentButton line={line} />}
       <LineNumber value={side === "left" ? line.oldLine : line.newLine} kind={line.kind} gutter={ctx.gutter} />
       <span className="sr-only">{line.kind === "context" ? "" : `${line.kind}:`}</span>
       <span className={codeClass(true)}>
@@ -90,10 +101,14 @@ function Lines({ lines, ctx }: { lines: DiffLine[]; ctx: RenderContext }) {
     return lines.map((line, i) => <Line key={i} line={line} ctx={ctx} />);
   }
   return toSplitRows(lines).map((row, i) => (
-    <div key={i} className="grid grid-cols-2 divide-x divide-white/6">
-      <Half line={row.left} side="left" ctx={ctx} />
-      <Half line={row.right} side="right" ctx={ctx} />
-    </div>
+    <Fragment key={i}>
+      <div className="grid grid-cols-2 divide-x divide-white/6">
+        <Half line={row.left} side="left" ctx={ctx} />
+        <Half line={row.right} side="right" ctx={ctx} />
+      </div>
+      {row.left?.kind === "removed" && <LineThreads line={row.left} />}
+      {row.right && <LineThreads line={row.right} />}
+    </Fragment>
   ));
 }
 

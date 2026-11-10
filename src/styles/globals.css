@@ -49,6 +49,9 @@
   --color-selection: var(--selection);
   --color-added: var(--added);
   --color-added-foreground: var(--added-foreground);
+  --color-merged: var(--merged);
+  --color-check-failed: var(--check-failed);
+  --color-check-passed: var(--check-passed);
   --color-removed: var(--removed);
   --color-removed-foreground: var(--removed-foreground);
   --color-renamed: var(--renamed);
@@ -94,6 +97,10 @@
 
   --added: #4f9b68;
   --added-foreground: #9ccb9e; /* text on dark surfaces: ≥ 4.5:1 */
+  /* CI checks: a vivid red for failures (Linear's error red), a fresh green when all pass. */
+  --check-failed: #eb5757;
+  --check-passed: #82c873;
+  --merged: #5e6ad2; /* merged pull requests: Linear's "done" indigo, the same as a completed issue's check */
   --removed: #b65f68;
   --removed-foreground: #e39a9f;
   --renamed: #c8a35a;

@@ -33,6 +33,20 @@ export function Notices() {
                 </pre>
               </details>
             )}
+            {/* Below the message, never beside it: the text keeps the notice's full width. */}
+            {notice.action && (
+              <Button
+                variant="outline"
+                size="xs"
+                className="mt-2"
+                onClick={() => {
+                  notice.action?.run();
+                  dismiss(notice.id);
+                }}
+              >
+                {notice.action.label}
+              </Button>
+            )}
           </div>
           <Button variant="ghost" size="icon-xs" aria-label={t("common.dismiss")} onClick={() => dismiss(notice.id)}>
             <X />

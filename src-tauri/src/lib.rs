@@ -6,6 +6,7 @@ mod commands;
 mod git;
 mod github_status;
 mod linear;
+mod lsp;
 mod preview;
 mod preview_view;
 mod terminal;
@@ -28,6 +29,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::open_repository,
             commands::list_refs,
+            commands::list_files,
+            commands::read_file,
+            commands::write_file,
+            commands::line_changes,
+            commands::search_files,
+            commands::lsp_start,
+            commands::lsp_send,
+            commands::lsp_stop,
             commands::list_commits,
             commands::list_commit_files,
             commands::get_commit_diff,
@@ -41,6 +50,7 @@ pub fn run() {
             commands::open_github_url,
             commands::get_file_contents,
             commands::get_image,
+            commands::save_image,
             commands::watch_repository,
             commands::terminal_open,
             commands::terminal_write,
@@ -52,6 +62,7 @@ pub fn run() {
             commands::start_agent_run,
             commands::cancel_agent_run,
             commands::list_agent_sessions,
+            commands::list_agent_sessions_page,
             commands::get_agent_session,
             commands::get_session_usage,
             commands::get_usage_stats,
@@ -95,6 +106,10 @@ pub fn run() {
             commands::linear_project_issues,
             commands::linear_active_cycles,
             commands::github_status,
+            commands::delete_branch,
+            commands::restore_branch,
+            commands::delete_remote_branch,
+            commands::restore_remote_branch,
             commands::linear_set_issue_state,
             commands::get_pull_request_details,
             commands::merge_pull_request,
@@ -103,6 +118,13 @@ pub fn run() {
             commands::create_pull_request,
             commands::rerun_failed_checks,
             commands::add_reviewer,
+            commands::list_review_threads,
+            commands::resolve_review_thread,
+            commands::react_to_comment,
+            commands::edit_review_comment,
+            commands::delete_review_comment,
+            commands::comment_line,
+            commands::reply_review_comment,
             commands::set_pull_request_state,
             commands::get_job_log,
             commands::save_attachment,

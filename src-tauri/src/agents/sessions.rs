@@ -175,6 +175,16 @@ fn timelines() -> &'static Cache<(u64, Vec<AgentStep>)> {
 }
 
 pub fn list_sessions(repo: &Path) -> GitResult<Vec<SessionSummary>> {
+    list_sessions_page(repo, 0, MAX_SESSIONS)
+}
+
+/// One page of the repository's sessions, latest first: only that page's files are read, so scrolling far
+/// back stays cheap. Fewer than `limit` means there are no more.
+pub fn list_sessions_page(
+    repo: &Path,
+    offset: usize,
+    limit: usize,
+) -> GitResult<Vec<SessionSummary>> {
     let Some(dir) = projects_dir(repo) else {
         return Ok(Vec::new());
     };
@@ -188,27 +198,30 @@ pub fn list_sessions(repo: &Path) -> GitResult<Vec<SessionSummary>> {
         .filter_map(|p| Some((fs::metadata(&p).ok()?.modified().ok()?, p)))
         .collect();
     files.sort_by_key(|f| std::cmp::Reverse(f.0));
-    files.truncate(MAX_SESSIONS);
     Ok(files
         .into_iter()
-        .map(|(_, path)| {
-            let id = path
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let mut cache = summaries().lock().unwrap_or_else(|e| e.into_inner());
-            let summary = cache
-                .entry(path.clone())
-                .or_insert_with(|| Summary::new(id));
-            let (events, offset) = read_from(&path, summary.offset);
-            if offset < summary.offset {
-                *summary = Summary::new(summary.data.id.clone()); // file was rewritten
-            }
-            events.iter().for_each(|e| summary.feed(e));
-            summary.offset = offset;
-            summary.view()
-        })
+        .skip(offset)
+        .take(limit.min(200))
+        .map(|(_, path)| session_summary(path))
         .collect())
+}
+
+fn session_summary(path: PathBuf) -> SessionSummary {
+    let id = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut cache = summaries().lock().unwrap_or_else(|e| e.into_inner());
+    let summary = cache
+        .entry(path.clone())
+        .or_insert_with(|| Summary::new(id));
+    let (events, offset) = read_from(&path, summary.offset);
+    if offset < summary.offset {
+        *summary = Summary::new(summary.data.id.clone()); // file was rewritten
+    }
+    events.iter().for_each(|e| summary.feed(e));
+    summary.offset = offset;
+    summary.view()
 }
 
 /// The session as a timeline, without sub-agent chatter; capped for very long sessions.

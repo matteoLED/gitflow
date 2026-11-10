@@ -13,6 +13,9 @@ type Theme = { kind: ThemeKind; tokens: Tokens };
 const LIGHT_DIFF: Tokens = {
   "--added": "#2f8a4c",
   "--added-foreground": "#1f7a3c",
+  "--merged": "#5e6ad2",
+  "--check-failed": "#c9473d",
+  "--check-passed": "#2f8a4c",
   "--removed": "#c4424e",
   "--removed-foreground": "#b3303d",
   "--renamed": "#a87b1f",

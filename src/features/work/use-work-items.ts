@@ -23,6 +23,7 @@ export function useWorkItems(repoPath: string) {
       refs.data &&
       workItems({
         branches: refs.data.branches,
+        remotes: refs.data.remotes,
         // GitHub or Linear unreachable: the branches still show, without what they would add.
         pullRequests: prs.data ?? [],
         runs: runs.data ?? [],
@@ -37,7 +38,8 @@ export function useWorkItems(repoPath: string) {
 export function filterWork(items: WorkItem[], filter: WorkFilter): WorkItem[] {
   if (filter === "mine") return items.filter((i) => i.local);
   if (filter === "pulls") return items.filter((i) => i.pr?.state === "OPEN");
-  if (filter === "cleanup") return items.filter((i) => i.local && (i.status === "merged" || i.status === "stale"));
+  if (filter === "cleanup")
+    return items.filter((i) => !i.current && (i.local || i.remote) && (i.status === "merged" || i.status === "stale"));
   return items;
 }
 

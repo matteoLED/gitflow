@@ -50,7 +50,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function CreateForm({ onDone }: { onDone: () => void }) {
+type IssueDraft = { title: string; description: string };
+
+function CreateForm({ onDone, initial }: { onDone: () => void; initial?: IssueDraft }) {
   const t = useT();
   const client = useQueryClient();
   const notify = useNoticesStore((s) => s.notify);
@@ -62,8 +64,8 @@ function CreateForm({ onDone }: { onDone: () => void }) {
   const [teamId, setTeamId] = useState<string | null>(null);
   const team = teams.find((x) => x.id === teamId) ?? teams.find((x) => x.id === lastTeam) ?? teams[0];
   const [stateId, setStateId] = useState(DEFAULT_STATE);
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
+  const [title, setTitle] = useState(initial?.title ?? "");
+  const [description, setDescription] = useState(initial?.description ?? "");
   const [priority, setPriority] = useState(0);
   const [assignToMe, setAssignToMe] = useState(true);
   const installed = useInstalledAgents().data ?? [];
@@ -283,12 +285,28 @@ export function CreateIssueButton({ variant = "icon" }: { variant?: "icon" | "he
           <kbd className="kbd text-[11px]">C</kbd>
         </Button>
       )}
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="grid-cols-[minmax(0,1fr)] gap-4 rounded-xl sm:max-w-[640px]">
-          <DialogTitle className="text-[15px]">{t("linear.newIssue")}</DialogTitle>
-          {open && <CreateForm onDone={() => setOpen(false)} />}
-        </DialogContent>
-      </Dialog>
+      <CreateIssueDialog open={open} onOpenChange={setOpen} />
     </>
+  );
+}
+
+/** The new-issue form in a dialog, optionally prefilled (from a code comment, for instance). */
+export function CreateIssueDialog({
+  open,
+  onOpenChange,
+  initial,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  initial?: IssueDraft;
+}) {
+  const t = useT();
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="grid-cols-[minmax(0,1fr)] gap-4 rounded-xl sm:max-w-[640px]">
+        <DialogTitle className="text-[15px]">{t("linear.newIssue")}</DialogTitle>
+        {open && <CreateForm onDone={() => onOpenChange(false)} initial={initial} />}
+      </DialogContent>
+    </Dialog>
   );
 }

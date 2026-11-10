@@ -1,12 +1,18 @@
 import type { PullRequest } from "@/types/git";
 
 /**
- * Stacked pull requests: a PR whose base branch is another open PR's head sits on top of it.
+ * Stacked pull requests: a PR whose base branch is another PR's head (in the same state, open by default) sits
+ * on top of it.
  * A stack is listed bottom → top, the bottom one being based on a real branch (main…).
  */
-export function buildStacks(prs: PullRequest[]): PullRequest[][] {
-  const open = prs.filter((pr) => pr.state === "OPEN");
-  const byHead = new Map(open.map((pr) => [pr.headRefName, pr]));
+export function buildStacks(prs: PullRequest[], state: PullRequest["state"] = "OPEN"): PullRequest[][] {
+  const open = prs.filter((pr) => pr.state === state);
+  // A branch name can come back (a merged branch reused): the latest PR on it is the one stacked on.
+  const byHead = new Map<string, PullRequest>();
+  for (const pr of open) {
+    const known = byHead.get(pr.headRefName);
+    if (!known || known.updatedAt < pr.updatedAt) byHead.set(pr.headRefName, pr);
+  }
   const childrenOf = new Map<number, PullRequest[]>();
   for (const pr of open) {
     const parent = byHead.get(pr.baseRefName);

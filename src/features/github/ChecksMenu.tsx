@@ -47,8 +47,8 @@ export const checkLabel = (c: PullRequestCheck) => (c.workflowName ? `${c.workfl
 export function CheckIcon({ check, className }: { check: PullRequestCheck; className?: string }) {
   const outcome = checkOutcome(check);
   const base = cn("size-3.5 shrink-0", className);
-  if (outcome === "pass") return <Check aria-hidden className={cn(base, "text-added-foreground")} />;
-  if (outcome === "fail") return <X aria-hidden className={cn(base, "text-removed-foreground")} />;
+  if (outcome === "pass") return <Check aria-hidden className={cn(base, "text-check-passed")} />;
+  if (outcome === "fail") return <X aria-hidden className={cn(base, "text-check-failed")} />;
   if (check.status === "IN_PROGRESS" || check.state === "PENDING")
     return (
       <span className={cn("grid size-3.5 shrink-0 place-items-center text-primary", className)}>
@@ -124,6 +124,68 @@ export async function resolveWithAgent(repoPath: string, pr: PullRequestDetails,
   useWorkspaceStore.getState().setView("agents");
 }
 
+const ROUND_ACTION =
+  "grid size-6 shrink-0 place-items-center rounded-full bg-white/[0.06] text-muted-foreground outline-none hover:bg-white/[0.1] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
+
+/** A failing check in the sidebar: opens its logs; on hover, fix it with an agent or re-run it. */
+function FailingCheck({
+  repoPath,
+  pr,
+  check,
+  onOpen,
+}: {
+  repoPath: string;
+  pr: PullRequestDetails;
+  check: PullRequestCheck;
+  onOpen: (check: PullRequestCheck) => void;
+}) {
+  const t = useT();
+  const client = useQueryClient();
+  const notify = useNoticesStore((s) => s.notify);
+  const runId = runIdOf(check);
+  const rerun = useMutation({
+    mutationFn: () => gitBackend.rerunFailedChecks(repoPath, [runId ?? 0]),
+    onSuccess: () => {
+      notify({ tone: "success", title: t("checks.rerunStarted") });
+      void client.invalidateQueries({ queryKey: ["pull-request", repoPath, pr.number] });
+    },
+    onError: (error) => notify({ tone: "error", title: t("checks.rerunFailed"), detail: toGitError(error).message }),
+  });
+  return (
+    <div className="group flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => onOpen(check)}
+        className="flex min-w-0 items-center gap-2.5 rounded-full px-2.5 py-1 text-[13px] outline-none group-hover:bg-white/[0.06] focus-visible:bg-white/[0.06]"
+      >
+        <span className="size-2 shrink-0 rounded-full bg-check-failed" />
+        <span className="min-w-0 truncate">{nameOf(check)}</span>
+      </button>
+      <button
+        type="button"
+        aria-label={t("checks.fixWithAgent")}
+        title={t("checks.fixWithAgent")}
+        onClick={() => void resolveWithAgent(repoPath, pr, [check])}
+        className={cn(ROUND_ACTION, "opacity-0 group-hover:opacity-100 focus-visible:opacity-100")}
+      >
+        <MousePointer2 aria-hidden className="size-3.5" />
+      </button>
+      {runId !== null && (
+        <button
+          type="button"
+          aria-label={t("checks.rerun")}
+          title={t("checks.rerun")}
+          disabled={rerun.isPending}
+          onClick={() => rerun.mutate()}
+          className={cn(ROUND_ACTION, "opacity-0 group-hover:opacity-100 focus-visible:opacity-100")}
+        >
+          {rerun.isPending ? <BrailleLoader /> : <RefreshCw aria-hidden className="size-3.5" />}
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** Linear's checks pill: a summary that opens every check, grouped, with fixes one click away. */
 export function ChecksMenu({ repoPath, pr }: { repoPath: string; pr: PullRequestDetails }) {
   const t = useT();
@@ -166,7 +228,7 @@ export function ChecksMenu({ repoPath, pr }: { repoPath: string; pr: PullRequest
           ) : (
             <ListChecks
               aria-hidden
-              className={cn("size-4", allGood ? "text-added-foreground" : "text-removed-foreground")}
+              className={cn("size-4", allGood ? "text-check-passed" : "text-check-failed")}
             />
           )}
           {t("pr.checksPassed", { passed: passed.length, total: checks.length })}
@@ -215,10 +277,7 @@ export function ChecksMenu({ repoPath, pr }: { repoPath: string; pr: PullRequest
       </Popover>
       <CheckDialog repoPath={repoPath} pr={pr} checks={checks} check={current} onChange={setViewed} />
       {failing.map((check, i) => (
-        <p key={i} className="flex items-center gap-2.5 px-1.5 text-[13px]">
-          <span className="mx-1 size-2 shrink-0 rounded-full bg-removed-foreground" />
-          <span className="min-w-0 truncate">{nameOf(check)}</span>
-        </p>
+        <FailingCheck key={i} repoPath={repoPath} pr={pr} check={check} onOpen={open} />
       ))}
     </div>
   );

@@ -20,6 +20,8 @@ import { useWorkStore } from "@/stores/work-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { WorkItem } from "./work-items";
 import { STATUS } from "./WorkPage";
+import { DeleteBranchesButton } from "./DeleteBranches";
+import { deletable } from "./use-delete-branches";
 
 /** "Work / MNT-936 · branch": the way back to the list, above any detail. */
 function Breadcrumb({ item }: { item: WorkItem }) {
@@ -121,6 +123,15 @@ function BranchDetail({ repoPath, item }: { repoPath: string; item: WorkItem }) 
               published={!!local.upstream && !local.upstreamGone}
               base={base}
               ahead={list.length}
+            />
+          )}
+          {deletable(item) && (
+            <DeleteBranchesButton
+              repoPath={repoPath}
+              items={[item]}
+              label={t("branches.delete")}
+              variant="ghost"
+              className="h-8 text-[13px] text-muted-foreground"
             />
           )}
           {range && (

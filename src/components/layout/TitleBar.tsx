@@ -14,6 +14,7 @@ import {
   Layers,
   MonitorSmartphone,
   Network,
+  Code2,
   PanelLeft,
   Plus,
   Sparkles,
@@ -45,6 +46,7 @@ export const VIEW_ICONS: Record<View, IconType> = {
   agents: Sparkles,
   browser: Globe,
   graph: Network,
+  editor: Code2,
   work: GitBranch,
 };
 
@@ -59,6 +61,7 @@ export const VIEW_LABELS = {
   agents: "view.agents",
   browser: "view.browser",
   graph: "view.graph",
+  editor: "view.editor",
   work: "view.work",
 } as const;
 
@@ -237,12 +240,16 @@ function Tabs() {
             onKeyDown={(e) => e.key === "Enter" && select(tab.id)}
             onAuxClick={(e) => e.button === 1 && closeTab(tab.id)}
             className={cn(
-              "group/tab flex h-7 w-44 shrink-0 items-center gap-1.5 rounded-md border border-transparent px-2 text-[12.5px] text-muted-foreground outline-none transition-colors hover:bg-white/[0.05] focus-visible:ring-2 focus-visible:ring-ring",
-              tab.id === active && "border-white/[0.07] bg-white/[0.07] text-foreground hover:bg-white/[0.08]",
+              // Every tab sits on its own soft fill; the active one is lighter, as in Linear's desktop app.
+              "group/tab relative flex h-7 max-w-56 min-w-0 shrink-0 cursor-default items-center gap-2 rounded-lg bg-white/[0.04] pr-1.5 pl-2.5 text-[12.5px] text-muted-foreground outline-none transition-colors hover:bg-white/[0.06] hover:text-foreground/85 focus-visible:ring-2 focus-visible:ring-ring",
+              tab.id === active && "bg-white/[0.09] text-foreground hover:bg-white/[0.1] hover:text-foreground",
             )}
           >
             <PlaceIcon place={tab} className="size-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">{tab.title || t("view.home")}</span>
+            {/* A title too long fades out (the fade sits in the padding, so a short one stays sharp). */}
+            <span className="-mr-5 min-w-0 flex-1 overflow-hidden pr-5 whitespace-nowrap [mask-image:linear-gradient(to_right,black_calc(100%-20px),transparent)]">
+              {tab.title || t("view.home")}
+            </span>
             <button
               type="button"
               aria-label={t("tabs.close")}
@@ -250,7 +257,7 @@ function Tabs() {
                 e.stopPropagation();
                 closeTab(tab.id);
               }}
-              className="grid size-4 shrink-0 place-items-center rounded opacity-0 group-hover/tab:opacity-100 hover:bg-white/[0.12] focus-visible:opacity-100"
+              className="grid size-4 shrink-0 place-items-center rounded text-muted-foreground opacity-0 group-hover/tab:opacity-100 hover:bg-white/[0.12] hover:text-foreground focus-visible:opacity-100"
             >
               <X aria-hidden className="size-3" />
             </button>

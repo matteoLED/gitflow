@@ -13,6 +13,7 @@ import { reviewKey, useReviewStore } from "@/stores/review-store";
 import type { ChangedFile } from "@/types/git";
 import { useViewSettings } from "@/stores/view-settings-store";
 import { DiffBody, DiffCard } from "./DiffCard";
+import { FileCommentCount, LineCommentsProvider } from "./LineComments";
 import { isGenerated } from "./generated";
 import { ViewOptions } from "./ViewOptions";
 import { FileActions } from "./FileActions";
@@ -41,6 +42,24 @@ function CommitDiffCard({ repoPath, hash, base, file, highlighted, open, onToggl
   const [expanded, setExpanded] = useState(false);
   const toggleExpanded = useCallback(() => setExpanded((e) => !e), []);
   const diff = useCommitDiff(repoPath, hash, file.path, file.previousPath, open && (inView || highlighted), base);
+  // Lines take comments only on the pull request's own diff, the one GitHub anchors them to.
+  const pr = useWorkspaceStore((s) => (s.pullRequest?.head === hash ? s.pullRequest : null));
+  const body = (
+    <div ref={placeRef}>
+      {rendered ? (
+        <DiffBody
+          path={file.path}
+          diff={diff.data}
+          error={diff.error}
+          loading={diff.isPending}
+          expandAll={expanded}
+          image={{ repoPath, hash, base, status: file.status }}
+        />
+      ) : (
+        <div style={{ height: place.height }} />
+      )}
+    </div>
+  );
   return (
     <DiffCard
       file={file}
@@ -50,33 +69,29 @@ function CommitDiffCard({ repoPath, hash, base, file, highlighted, open, onToggl
       cardRef={ref}
       id={cardId(file.path)}
       actions={
-        <FileActions
-          repoPath={repoPath}
-          hash={hash}
-          base={base}
-          file={file}
-          open={open}
-          onToggleOpen={onToggle}
-          expanded={expanded}
-          onToggleExpanded={toggleExpanded}
-          selected={highlighted}
-        />
+        <>
+          {pr && <FileCommentCount repoPath={repoPath} number={pr.number} path={file.path} />}
+          <FileActions
+            repoPath={repoPath}
+            hash={hash}
+            base={base}
+            file={file}
+            open={open}
+            onToggleOpen={onToggle}
+            expanded={expanded}
+            onToggleExpanded={toggleExpanded}
+            selected={highlighted}
+          />
+        </>
       }
     >
-      <div ref={placeRef}>
-        {rendered ? (
-          <DiffBody
-            path={file.path}
-            diff={diff.data}
-            error={diff.error}
-            loading={diff.isPending}
-            expandAll={expanded}
-            image={{ repoPath, hash, base, status: file.status }}
-          />
-        ) : (
-          <div style={{ height: place.height }} />
-        )}
-      </div>
+      {pr ? (
+        <LineCommentsProvider repoPath={repoPath} pr={pr} path={file.path}>
+          {body}
+        </LineCommentsProvider>
+      ) : (
+        body
+      )}
     </DiffCard>
   );
 }

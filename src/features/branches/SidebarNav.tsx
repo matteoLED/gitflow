@@ -10,6 +10,7 @@ import {
   Layers,
   MonitorSmartphone,
   Network,
+  Code2,
   Sparkles,
   SquareTerminal,
 } from "lucide-react";
@@ -52,7 +53,12 @@ function RowContent({ Icon, label, hint }: Omit<RowProps, "active">) {
 /** A page of the app: a router link. Tools (Linear, Preview, Agents) lead back to the history when active. */
 function PageRow({ view, ...props }: RowProps & { view: View }) {
   const toggles =
-    view === "linear" || view === "preview" || view === "agents" || view === "browser" || view === "graph";
+    view === "linear" ||
+    view === "preview" ||
+    view === "agents" ||
+    view === "browser" ||
+    view === "graph" ||
+    view === "editor";
   const to = props.active && toggles ? VIEW_PATHS.history : VIEW_PATHS[view];
   return (
     <li>
@@ -89,6 +95,7 @@ export function SidebarNav({ repoPath }: { repoPath: string }) {
         {row("linear", LinearIcon, "Linear", "⌘⇧L")}
         {row("preview", MonitorSmartphone, t("view.preview"), "⌘⇧P")}
         {row("agents", Sparkles, t("view.agents"))}
+        {row("editor", Code2, t("view.editor"))}
         {row("graph", Network, t("view.graph"))}
         {row("browser", Globe, t("view.browser"))}
         <li>

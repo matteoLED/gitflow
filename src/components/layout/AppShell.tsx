@@ -39,6 +39,8 @@ const CiPage = lazy(() => import("@/features/ci/CiPage").then((m) => ({ default:
 const CiList = lazy(() => import("@/features/ci/CiPage").then((m) => ({ default: m.CiList })));
 const AssistantPanel = lazy(() => import("@/features/agents/AssistantPanel"));
 const CodeGraphPage = lazy(() => import("@/features/code-graph/CodeGraph").then((m) => ({ default: m.CodeGraphPage })));
+const EditorPage = lazy(() => import("@/features/editor/EditorPage").then((m) => ({ default: m.EditorPage })));
+const EditorSidebar = lazy(() => import("@/features/editor/EditorSidebar").then((m) => ({ default: m.EditorSidebar })));
 const CodeGraphList = lazy(() => import("@/features/code-graph/CodeGraph").then((m) => ({ default: m.CodeGraphList })));
 const BrowserPanel = lazy(() => import("@/features/browser/Browser").then((m) => ({ default: m.BrowserPanel })));
 const BrowserTabs = lazy(() => import("@/features/browser/Browser").then((m) => ({ default: m.BrowserTabs })));
@@ -209,6 +211,16 @@ function PageList({ repo, view }: { repo: RepositoryInfo; view: View }) {
       </ListPanel>
     );
   if (view === "work") return <ListPanel title={t("view.work")}>{() => <WorkList repoPath={repo.path} />}</ListPanel>;
+  if (view === "editor")
+    return (
+      <ListPanel title={t("view.editor")}>
+        {() => (
+          <Suspense fallback={null}>
+            <EditorSidebar repoPath={repo.path} />
+          </Suspense>
+        )}
+      </ListPanel>
+    );
   if (view === "graph")
     return (
       <ListPanel title={t("view.graph")}>
@@ -253,6 +265,7 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
     view === "linear" ||
     view === "browser" ||
     view === "graph" ||
+    view === "editor" ||
     view === "work"
   ) {
     return (
@@ -274,9 +287,11 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
                         ? "view.browser"
                         : view === "graph"
                           ? "view.graph"
-                          : view === "work"
-                            ? "view.work"
-                            : "view.preview",
+                          : view === "editor"
+                            ? "view.editor"
+                            : view === "work"
+                              ? "view.work"
+                              : "view.preview",
                   )
         }
         list={<PageList repo={repo} view={view} />}
@@ -300,6 +315,8 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
             <WorkPage repoPath={repo.path} />
           ) : view === "graph" ? (
             <CodeGraphPage repoPath={repo.path} />
+          ) : view === "editor" ? (
+            <EditorPage repoPath={repo.path} />
           ) : (
             <PreviewPanel repoPath={repo.path} />
           )}

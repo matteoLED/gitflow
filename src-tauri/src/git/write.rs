@@ -112,6 +112,183 @@ pub fn create_branch(repo: &Path, name: &str, switch: bool) -> GitResult<()> {
     git(repo, &args).map(drop)
 }
 
+/// Deletes a local branch; returns its tip so it can be restored. Never the checked-out branch.
+///
+/// Without `force`, only merged work goes: merged into HEAD or the upstream (`git branch -d`), into the default
+/// branch, or squash-merged there (an equivalent commit exists on it), or by a pull request GitHub merged at this
+/// very commit (asked to `gh` last). `merged_head`, the head of a pull request
+/// merged on GitHub, also counts — only if the branch still points exactly there. `force` is the user's explicit
+/// "delete anyway".
+pub fn delete_branch(
+    repo: &Path,
+    name: &str,
+    merged_head: Option<&str>,
+    force: bool,
+) -> GitResult<String> {
+    let name = validate::revision(name)?;
+    if head(repo)?.branch.as_deref() == Some(name) {
+        return Err(GitError::invalid(
+            "Switch to another branch before deleting this one.",
+        ));
+    }
+    let full = format!("refs/heads/{name}");
+    let tip = git_text(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &full,
+        ],
+    )
+    .map_err(|_| GitError::invalid(format!("“{name}” isn't a local branch.")))?
+    .trim()
+    .to_string();
+    if let Some(oid) = merged_head
+        && validate::object_id(oid)? != tip
+        && !force
+    {
+        return Err(GitError::invalid(format!(
+            "“{name}” has commits that aren't in its merged pull request; it was kept."
+        )));
+    }
+    let merged = force
+        || merged_head.is_some()
+        || git(repo, &["branch", "-d", "--end-of-options", name]).is_ok()
+        || merged_into_default(repo, &tip)
+        || super::github::merged_pull_request_at(repo, name, &tip);
+    if !merged {
+        return Err(GitError::invalid(format!(
+            "“{name}” isn't merged; it was kept so no commit is lost."
+        )));
+    }
+    if ref_exists(repo, &full) {
+        git(repo, &["branch", "-D", "--end-of-options", name])?;
+    }
+    Ok(tip)
+}
+
+fn ref_exists(repo: &Path, full: &str) -> bool {
+    git(
+        repo,
+        &["rev-parse", "--verify", "--quiet", "--end-of-options", full],
+    )
+    .is_ok()
+}
+
+/// Whether `tip`'s work is on the default branch (origin's copy when there is one): merged, or squash-merged —
+/// the branch's whole change as one commit has an equivalent there (`git cherry` compares patches).
+fn merged_into_default(repo: &Path, tip: &str) -> bool {
+    let Some(base) = super::github::default_base(repo) else {
+        return false;
+    };
+    let target = [
+        format!("refs/remotes/origin/{base}"),
+        format!("refs/heads/{base}"),
+    ]
+    .into_iter()
+    .find(|r| ref_exists(repo, r));
+    let Some(target) = target else { return false };
+    if git(repo, &["merge-base", "--is-ancestor", tip, &target]).is_ok() {
+        return true;
+    }
+    let squashed = || -> GitResult<bool> {
+        let base = git_text(repo, &["merge-base", &target, tip])?;
+        let tree = git_text(repo, &["rev-parse", &format!("{tip}^{{tree}}")])?;
+        // A throwaway commit, never referenced: git's gc drops it.
+        let squash = git_text(
+            repo,
+            &[
+                "commit-tree",
+                tree.trim(),
+                "-p",
+                base.trim(),
+                "-m",
+                "squash check",
+            ],
+        )?;
+        Ok(git_text(repo, &["cherry", &target, squash.trim()])?
+            .trim_start()
+            .starts_with('-'))
+    };
+    squashed().unwrap_or(false)
+}
+
+/// Brings a deleted branch back on the commit it pointed to.
+pub fn restore_branch(repo: &Path, name: &str, tip: &str) -> GitResult<()> {
+    let name = checked_branch_name(repo, name)?;
+    let tip = validate::object_id(tip)?;
+    git(repo, &["branch", "--end-of-options", &name, tip]).map(drop)
+}
+
+/// Deletes a branch on its remote (GitHub); returns the commit it pointed to, for undo. The default branch is
+/// refused, and `--force-with-lease` makes the push fail if someone pushed to the branch since the last fetch.
+pub fn delete_remote_branch(repo: &Path, remote: &str, name: &str) -> GitResult<String> {
+    let (remote, name) = (validate::revision(remote)?, validate::revision(name)?);
+    if remote.contains('/') {
+        return Err(GitError::invalid("Invalid remote name."));
+    }
+    let default = git_text(
+        repo,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            &format!("refs/remotes/{remote}/HEAD"),
+        ],
+    )
+    .map(|r| r.trim().rsplit('/').next().unwrap_or_default().to_string())
+    .unwrap_or_default();
+    if name == default || ["main", "master"].contains(&name) {
+        return Err(GitError::invalid(format!(
+            "“{name}” is the default branch; it can't be deleted here."
+        )));
+    }
+    let tracking = format!("refs/remotes/{remote}/{name}");
+    let tip = git_text(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &tracking,
+        ],
+    )
+    .map_err(|_| GitError::invalid(format!("“{remote}/{name}” isn't a remote branch.")))?
+    .trim()
+    .to_string();
+    let lease = format!("--force-with-lease=refs/heads/{name}:{tip}");
+    git_with(
+        repo,
+        &["push", &lease, "--", remote, &format!(":refs/heads/{name}")],
+        &NETWORK,
+    )?;
+    Ok(tip)
+}
+
+/// Pushes a deleted remote branch back, on the commit it pointed to (only if nothing took its name since).
+pub fn restore_remote_branch(repo: &Path, remote: &str, name: &str, tip: &str) -> GitResult<()> {
+    let (remote, name, tip) = (
+        validate::revision(remote)?,
+        checked_branch_name(repo, name)?,
+        validate::object_id(tip)?,
+    );
+    let lease = format!("--force-with-lease=refs/heads/{name}:");
+    git_with(
+        repo,
+        &[
+            "push",
+            &lease,
+            "--",
+            remote,
+            &format!("{tip}:refs/heads/{name}"),
+        ],
+        &NETWORK,
+    )
+    .map(drop)
+}
+
 pub fn fetch(repo: &Path) -> GitResult<()> {
     git_with(repo, &["fetch", "--all", "--prune"], &NETWORK).map(drop)
 }
@@ -372,5 +549,118 @@ mod tests {
             list_commits(repo.path(), None, 0, 1, Default::default()).unwrap()[0].subject,
             "Remote change"
         );
+    }
+
+    fn repo_with_feature() -> TestRepo {
+        let repo = committed_repo();
+        repo.git(&["switch", "-q", "-c", "feature"]);
+        repo.write("b.txt", "b\n");
+        repo.commit_all("Feature");
+        repo.git(&["switch", "-q", "main"]);
+        repo
+    }
+
+    fn branches(repo: &TestRepo) -> Vec<String> {
+        list_refs(repo.path())
+            .unwrap()
+            .branches
+            .into_iter()
+            .map(|b| b.name)
+            .collect()
+    }
+
+    #[test]
+    fn deleting_keeps_an_unmerged_branch() {
+        let repo = repo_with_feature();
+        assert!(delete_branch(repo.path(), "feature", None, false).is_err());
+    }
+
+    #[test]
+    fn deleting_a_merged_branch_returns_its_tip() {
+        let repo = repo_with_feature();
+        repo.git(&["merge", "-q", "--ff-only", "feature"]);
+        let tip = delete_branch(repo.path(), "feature", None, false).unwrap();
+        assert_eq!(tip, repo.git(&["rev-parse", "HEAD"]).trim());
+    }
+
+    #[test]
+    fn a_squash_merged_branch_goes_only_at_its_pull_request_head() {
+        let repo = repo_with_feature();
+        let head = repo.git(&["rev-parse", "feature"]).trim().to_string();
+        assert!(delete_branch(repo.path(), "feature", Some(&"a".repeat(40)), false).is_err());
+        assert!(delete_branch(repo.path(), "feature", Some(&head), false).is_ok());
+    }
+
+    #[test]
+    fn the_checked_out_branch_is_never_deleted() {
+        let repo = repo_with_feature();
+        assert!(delete_branch(repo.path(), "main", None, false).is_err());
+    }
+
+    #[test]
+    fn a_deleted_branch_can_be_restored() {
+        let repo = repo_with_feature();
+        let head = repo.git(&["rev-parse", "feature"]).trim().to_string();
+        delete_branch(repo.path(), "feature", Some(&head), false).unwrap();
+        restore_branch(repo.path(), "feature", &head).unwrap();
+        assert!(branches(&repo).contains(&"feature".to_string()));
+    }
+
+    #[test]
+    fn a_remote_branch_is_deleted_and_restored() {
+        let (repo, _remote) = repo_with_remote();
+        repo.git(&["push", "-q", "origin", "main", "main:feature"]);
+        repo.git(&["fetch", "-q", "origin"]);
+        let tip = delete_remote_branch(repo.path(), "origin", "feature").unwrap();
+        assert!(
+            repo.git(&["ls-remote", "--heads", "origin"])
+                .lines()
+                .all(|l| !l.ends_with("/feature"))
+        );
+        restore_remote_branch(repo.path(), "origin", "feature", &tip).unwrap();
+        assert!(
+            repo.git(&["ls-remote", "--heads", "origin"])
+                .contains("refs/heads/feature")
+        );
+    }
+
+    #[test]
+    fn the_remote_default_branch_is_never_deleted() {
+        let (repo, _remote) = repo_with_remote();
+        repo.git(&["push", "-q", "origin", "main"]);
+        repo.git(&["fetch", "-q", "origin"]);
+        assert!(delete_remote_branch(repo.path(), "origin", "main").is_err());
+    }
+
+    #[test]
+    fn a_remote_branch_pushed_to_since_the_fetch_is_kept() {
+        let (repo, remote) = repo_with_remote();
+        repo.git(&["push", "-q", "origin", "main", "main:feature"]);
+        repo.git(&["fetch", "-q", "origin"]);
+        // Someone else moves the branch on the remote: our tracking ref is now stale.
+        repo.write("c.txt", "c\n");
+        let newer = repo.commit_all("Newer");
+        repo.git(&[
+            "push",
+            "-q",
+            &remote.path().to_string_lossy(),
+            &format!("{newer}:refs/heads/feature"),
+        ]);
+        assert!(delete_remote_branch(repo.path(), "origin", "feature").is_err());
+    }
+
+    #[test]
+    fn a_squash_merged_branch_is_seen_as_merged() {
+        let repo = repo_with_feature();
+        repo.git(&["merge", "-q", "--squash", "feature"]);
+        repo.git(&["commit", "-q", "-m", "Feature (squashed)"]);
+        repo.git(&["switch", "-q", "-c", "other"]);
+        assert!(delete_branch(repo.path(), "feature", None, false).is_ok());
+    }
+
+    #[test]
+    fn force_deletes_an_unmerged_branch() {
+        let repo = repo_with_feature();
+        assert!(delete_branch(repo.path(), "feature", None, true).is_ok());
     }
 }

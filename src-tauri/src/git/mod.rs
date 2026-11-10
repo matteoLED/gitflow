@@ -1,4 +1,5 @@
 pub mod errors;
+pub mod files;
 pub mod github;
 pub mod identity;
 pub mod model;

@@ -36,6 +36,9 @@ pub struct LocalBranch {
 pub struct RemoteBranch {
     pub remote: String,
     pub name: String,
+    /// Date of the branch's last commit (ISO 8601).
+    #[serde(default)]
+    pub committed_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

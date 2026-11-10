@@ -7,7 +7,7 @@ const refs = (names: string[], remotes = 0): RefsSnapshot =>
   ({
     head: { branch: "main" },
     branches: [branch("main"), ...names.map(branch)],
-    remotes: Array.from({ length: remotes }, (_, i) => ({ remote: "origin", name: `r${i}` })),
+    remotes: Array.from({ length: remotes }, (_, i) => ({ remote: "origin", name: `r${i}`, committedAt: "" })),
     tags: [],
     stashes: [],
   }) as unknown as RefsSnapshot;

@@ -153,22 +153,14 @@ pub fn list_commit_files(
 const MAX_FILE_BYTES: usize = 5 * 1024 * 1024;
 const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
 
-/// An image at one side of a diff as a `data:` URL, or None when that side has no such file.
-pub fn image_data_url(
-    repo: &Path,
-    hash: &str,
-    base: Option<&str>,
-    path: &str,
-    old_side: bool,
-) -> GitResult<Option<String>> {
-    let hash = validate::object_id(hash)?;
-    let path = validate::relative_path(path)?;
+/// An image's MIME type from its extension, or an error for anything else.
+fn image_mime(path: &str) -> GitResult<&'static str> {
     let ext = path
         .rsplit('.')
         .next()
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let mime = match ext.as_str() {
+    Ok(match ext.as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -178,7 +170,19 @@ pub fn image_data_url(
         "bmp" => "image/bmp",
         "svg" => "image/svg+xml",
         _ => return Err(GitError::invalid("Not an image.")),
-    };
+    })
+}
+
+/// The bytes of an image at one side of a diff, or None when that side has no such file.
+fn image_bytes(
+    repo: &Path,
+    hash: &str,
+    base: Option<&str>,
+    path: &str,
+    old_side: bool,
+) -> GitResult<Option<Vec<u8>>> {
+    let hash = validate::object_id(hash)?;
+    let path = validate::relative_path(path)?;
     let rev = if old_side {
         diff_base(repo, hash, base)?
     } else {
@@ -188,10 +192,44 @@ pub fn image_data_url(
     let Ok(bytes) = git(repo, &["show", "--no-ext-diff", "--end-of-options", &spec]) else {
         return Ok(None); // added or deleted: that side doesn't exist
     };
+    Ok(Some(bytes))
+}
+
+/// An image at one side of a diff as a `data:` URL, or None when that side has no such file.
+pub fn image_data_url(
+    repo: &Path,
+    hash: &str,
+    base: Option<&str>,
+    path: &str,
+    old_side: bool,
+) -> GitResult<Option<String>> {
+    let mime = image_mime(path)?;
+    let Some(bytes) = image_bytes(repo, hash, base, path, old_side)? else {
+        return Ok(None);
+    };
     if bytes.len() > MAX_IMAGE_BYTES {
         return Err(GitError::invalid("This image is too large to preview."));
     }
     Ok(Some(format!("data:{mime};base64,{}", base64(&bytes))))
+}
+
+/// Writes an image at one side of a diff to `dest`, a path the user picked in the save dialog.
+pub fn save_image(
+    repo: &Path,
+    hash: &str,
+    base: Option<&str>,
+    path: &str,
+    old_side: bool,
+    dest: &Path,
+) -> GitResult<()> {
+    image_mime(path)?;
+    if !dest.is_absolute() {
+        return Err(GitError::invalid("Choose where to save the image."));
+    }
+    let bytes = image_bytes(repo, hash, base, path, old_side)?
+        .ok_or_else(|| GitError::invalid("This image isn't in that version."))?;
+    std::fs::write(dest, bytes)
+        .map_err(|e| GitError::invalid(format!("Couldn't save the image: {e}")))
 }
 
 pub(crate) fn base64(bytes: &[u8]) -> String {
@@ -600,5 +638,14 @@ mod tests {
         let new = image_data_url(repo.path(), &first, None, "logo.png", false).unwrap();
         let old = image_data_url(repo.path(), &first, None, "logo.png", true).unwrap();
         assert!(new.unwrap().starts_with("data:image/png;base64,") && old.is_none());
+    }
+
+    #[test]
+    fn images_save_to_the_chosen_file() {
+        let (repo, first, _) = repo_with_history();
+        let dest = repo.path().join("saved.png");
+        save_image(repo.path(), &first, None, "logo.png", false, &dest).unwrap();
+        let committed = image_bytes(repo.path(), &first, None, "logo.png", false).unwrap();
+        assert_eq!(std::fs::read(&dest).ok(), committed);
     }
 }

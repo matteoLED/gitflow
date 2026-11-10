@@ -66,18 +66,23 @@ export function UsageRing({ tokens, window, cost }: { tokens: number | null; win
           {tokens !== null && `${percent}%`}
         </button>
       </TooltipTrigger>
-      <TooltipContent side="top" className="block min-w-40 space-y-2 px-3 py-2 text-[12.5px]">
+      <TooltipContent
+        side="top"
+        sideOffset={6}
+        arrow={false}
+        className="block min-w-40 space-y-2 rounded-lg border border-white/10 bg-popover px-3 py-2 text-[12.5px] text-popover-foreground shadow-xl"
+      >
         {tokens !== null && (
           <div>
-            <p className="opacity-60">{t("agents.context")}</p>
+            <p className="text-muted-foreground">{t("agents.context")}</p>
             <p className="font-medium tabular-nums">
               {percent}% · {compact(tokens)} / {compact(window)}
             </p>
           </div>
         )}
         {cost !== null && (
-          <div className={cn(tokens !== null && "border-t border-background/15 pt-2")}>
-            <p className="opacity-60">{t("agents.cost")}</p>
+          <div className={cn(tokens !== null && "border-t border-white/[0.08] pt-2")}>
+            <p className="text-muted-foreground">{t("agents.cost")}</p>
             <p className="font-medium tabular-nums">{cost.toFixed(2)} USD</p>
           </div>
         )}

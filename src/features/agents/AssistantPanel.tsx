@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   FileText,
   GitCommitHorizontal,
@@ -6,16 +7,21 @@ import {
   Globe,
   History,
   ListChecks,
+  Bot,
   Maximize2,
   MessageSquarePlus,
   Sparkles,
   X,
 } from "lucide-react";
+import { BrailleLoader } from "@/components/braille-loader";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useT, type MessageKey } from "@/i18n";
 import { gitBackend } from "@/lib/tauri-git";
-import { useAgentsStore, threadRuns } from "@/stores/agents-store";
+import { formatAge } from "@/lib/format-date";
+import { cn } from "@/lib/utils";
+import { useAgentsStore, threadRuns, type AgentRun } from "@/stores/agents-store";
 import { runOf, usePreviewStore } from "@/stores/preview-store";
 import { useUiStore } from "@/stores/ui-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
@@ -25,6 +31,7 @@ import { LinearIcon } from "@/features/linear/LinearIcon";
 import { useOpenIssue } from "@/features/linear/linear-queries";
 import { ContextMeter } from "./ContextMeter";
 import { RunSettingsBar } from "./RunSettingsBar";
+import { ClaudeIcon } from "./agent-icons";
 import { ChatThread, CONTEXT_SEPARATOR } from "./ChatThread";
 import { startAgentRun, useInstalledAgents } from "./use-agents";
 
@@ -109,16 +116,222 @@ function HeaderButton({ label, onClick, children }: { label: string; onClick: ()
   );
 }
 
+type Conversation = { thread: string; title: string; last: string; assistant: boolean; running: boolean };
+
+/** One entry per conversation of the repository (assistant chats and agent tasks), latest activity first. */
+export function conversationsOf(runs: readonly AgentRun[], repoPath: string): Conversation[] {
+  const byThread = new Map<string, AgentRun[]>();
+  for (const run of runs) {
+    if (run.repoPath !== repoPath) continue;
+    byThread.set(run.thread, [...(byThread.get(run.thread) ?? []), run]);
+  }
+  return [...byThread]
+    .map(([thread, list]) => {
+      const sorted = [...list].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+      const first = sorted[0];
+      const prompt = first.task?.kind === "custom" ? first.task.prompt : "";
+      return {
+        thread,
+        title: first.title,
+        last: sorted[sorted.length - 1].startedAt,
+        assistant: prompt.includes(CONTEXT_SEPARATOR),
+        running: list.some((r) => r.status === "running"),
+      };
+    })
+    .sort((a, b) => b.last.localeCompare(a.last));
+}
+
+const PAGE = 30;
+type Entry = Conversation & { session: boolean };
+
+/** Previous conversations, to pick one back up: the app's own, then older Claude Code sessions as you scroll. */
+function HistoryMenu({ repoPath, current }: { repoPath: string; current: string | null }) {
+  const t = useT();
+  const runs = useAgentsStore((s) => s.runs);
+  const setAssistantThread = useAgentsStore((s) => s.setAssistantThread);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const sessions = useInfiniteQuery({
+    queryKey: ["agent-sessions-page", repoPath],
+    queryFn: ({ pageParam }) => gitBackend.listAgentSessionsPage(repoPath, pageParam, PAGE),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => (last.length < PAGE ? undefined : pages.length * PAGE),
+    enabled: open,
+    staleTime: 30_000,
+  });
+  const entries = useMemo(() => {
+    const own: Entry[] = conversationsOf(runs, repoPath).map((c) => ({ ...c, session: false }));
+    // A session continued from the app is already listed as that conversation.
+    const known = new Set(runs.filter((r) => r.repoPath === repoPath).map((r) => r.sessionId));
+    const past: Entry[] = (sessions.data?.pages.flat() ?? [])
+      .filter((s) => !known.has(s.id))
+      .map((s) => ({
+        thread: `session:${s.id}`,
+        title: s.title,
+        last: s.updatedAt ?? s.startedAt ?? "",
+        assistant: false,
+        running: false,
+        session: true,
+      }));
+    return [...own, ...past].sort((a, b) => b.last.localeCompare(a.last));
+  }, [runs, repoPath, sessions.data]);
+  const needle = query.trim().toLowerCase();
+  const shown = needle ? entries.filter((c) => c.title.toLowerCase().includes(needle)) : entries;
+
+  // Infinite scroll: reaching the end of the list loads the next page (also while a search narrows it).
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = sessions;
+  const sentinel = useCallback(
+    (node: HTMLLIElement | null) => {
+      if (!node) return;
+      const observer = new IntersectionObserver((seen) => {
+        if (seen.some((e) => e.isIntersecting) && hasNextPage && !isFetchingNextPage) void fetchNextPage();
+      });
+      observer.observe(node);
+      return () => observer.disconnect();
+    },
+    [fetchNextPage, hasNextPage, isFetchingNextPage],
+  );
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("assistant.history")}
+              className="size-7 text-muted-foreground data-[state=open]:bg-white/[0.08] data-[state=open]:text-foreground"
+            >
+              <History />
+            </Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent>{t("assistant.history")}</TooltipContent>
+      </Tooltip>
+      <PopoverContent align="end" sideOffset={6} className="w-80 overflow-hidden rounded-xl p-0 shadow-2xl">
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t("assistant.historyFilter")}
+          aria-label={t("assistant.historyFilter")}
+          className="h-10 w-full border-b border-white/[0.07] bg-transparent px-3.5 text-[13px] outline-none placeholder:text-muted-foreground"
+        />
+        <ul className="max-h-[420px] overflow-y-auto p-1">
+          {shown.length === 0 && !sessions.isFetching && (
+            <li className="px-3 py-6 text-center text-[12.5px] text-muted-foreground">{t("assistant.historyEmpty")}</li>
+          )}
+          {shown.map((c) => (
+            <li key={c.thread}>
+              <button
+                type="button"
+                onClick={() => {
+                  setAssistantThread(c.thread);
+                  setOpen(false);
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-white/[0.06]",
+                  c.thread === current && "bg-white/[0.06]",
+                )}
+              >
+                {c.running ? (
+                  <BrailleLoader className="shrink-0 text-primary" />
+                ) : c.session ? (
+                  <ClaudeIcon className="size-3.5 shrink-0 text-[#d97757]" />
+                ) : c.assistant ? (
+                  <Sparkles aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                ) : (
+                  <Bot aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                )}
+                <span className="min-w-0 flex-1 truncate">{c.title || t("assistant.untitled")}</span>
+                {c.last && (
+                  <span className="shrink-0 text-[11.5px] text-muted-foreground">
+                    {formatAge(c.last, undefined, t.locale)}
+                  </span>
+                )}
+              </button>
+            </li>
+          ))}
+          {hasNextPage && <li ref={sentinel} className="h-1" />}
+          {sessions.isFetching && (
+            <li className="flex justify-center py-2">
+              <BrailleLoader className="text-primary" />
+            </li>
+          )}
+        </ul>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /**
  * Side-panel assistant (⌘I), like a browser's AI sidebar: it stays next to the preview, a diff or the
  * history, and knows what's on screen. Read-only, through the user's own Claude Code / Codex.
  */
+const WIDTH_KEY = "gitflow.assistantWidth";
+const DEFAULT_WIDTH = 380;
+const MIN_WIDTH = 320;
+const clampWidth = (width: number) => Math.round(Math.min(Math.max(width, MIN_WIDTH), window.innerWidth - 360));
+const storedWidth = () => clampWidth(Number(localStorage.getItem(WIDTH_KEY)) || DEFAULT_WIDTH);
+
+/** The panel's left edge: drag to widen the chat, double-click to bring it back to its default width. */
+function ResizeEdge({ width, onResize }: { width: number; onResize: (width: number) => void }) {
+  const t = useT();
+  const save = (value: number) => localStorage.setItem(WIDTH_KEY, String(value));
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={t("assistant.resize")}
+      aria-valuenow={width}
+      tabIndex={0}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const start = width;
+        let last = start;
+        const move = (ev: PointerEvent) => {
+          last = clampWidth(start + startX - ev.clientX);
+          onResize(last);
+        };
+        const up = () => {
+          save(last);
+          document.body.style.cursor = "";
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+        };
+        document.body.style.cursor = "col-resize";
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+      }}
+      onDoubleClick={() => {
+        onResize(DEFAULT_WIDTH);
+        save(DEFAULT_WIDTH);
+      }}
+      onKeyDown={(e) => {
+        const step = e.key === "ArrowLeft" ? 40 : e.key === "ArrowRight" ? -40 : 0;
+        if (!step) return;
+        e.preventDefault();
+        const next = clampWidth(width + step);
+        onResize(next);
+        save(next);
+      }}
+      className="group absolute inset-y-0 left-0 z-10 w-2 -translate-x-1 cursor-col-resize outline-none"
+    >
+      <span className="absolute inset-y-[45px] left-1/2 w-px -translate-x-1/2 bg-primary/70 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+    </div>
+  );
+}
+
 export function AssistantPanel({ repoPath }: { repoPath: string }) {
+  const [width, setWidth] = useState(storedWidth);
   const t = useT();
   const setOpen = useUiStore((s) => s.setAssistantOpen);
   const { runs, assistantThread, setAssistantThread, preferredAgent, select } = useAgentsStore();
   const installed = useInstalledAgents().data;
-  const agent = pickAgent(installed, preferredAgent);
+  const pastSession = assistantThread?.startsWith("session:") ? assistantThread.slice(8) : null;
+  const agent = pastSession ? "claude" : pickAgent(installed, preferredAgent);
   const chips = useContextChips(repoPath);
   const suggestions = useSuggestions(chips);
   const repo = useWorkspaceStore((s) => s.repo);
@@ -126,7 +339,13 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
   const [sending, setSending] = useState(false);
   const thread = assistantThread ? threadRuns(runs, assistantThread) : [];
   const live = thread.find((r) => r.status === "running");
-  const resume = [...thread].reverse().find((r) => r.sessionId)?.sessionId ?? null;
+  const resume = [...thread].reverse().find((r) => r.sessionId)?.sessionId ?? pastSession ?? null;
+  // A Claude Code session picked from the history: its past turns, then what was said here since.
+  const sessionSteps = useQuery({
+    queryKey: ["agent-session", repoPath, pastSession],
+    queryFn: () => gitBackend.getAgentSession(repoPath, pastSession ?? ""),
+    enabled: !!pastSession,
+  });
   const agentName = agent === "codex" ? "Codex" : "Claude Code";
 
   const send = async (message: string, images: string[] = []) => {
@@ -156,10 +375,12 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
   };
 
   return (
-    <div data-tauri-drag-region className="h-full shrink-0 pt-[45px] pr-1.5 pb-1.5">
+    <div data-tauri-drag-region className="relative flex h-full shrink-0 pt-[45px] pr-1.5 pb-1.5">
+      <ResizeEdge width={width} onResize={setWidth} />
       <aside
         aria-label={t("assistant.title")}
-        className="flex h-full w-[380px] flex-col overflow-hidden rounded-[10px] border border-white/[0.06] bg-background shadow-[0_1px_3px_rgb(0_0_0/0.35)]"
+        style={{ width }}
+        className="flex h-full flex-col overflow-hidden rounded-[10px] border border-white/[0.06] bg-background shadow-[0_1px_3px_rgb(0_0_0/0.35)]"
       >
         <header
           data-tauri-drag-region
@@ -167,6 +388,7 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
         >
           <Sparkles aria-hidden className="size-4 text-primary" />
           <h2 className="mr-auto pl-1 text-[13px] font-medium">{t("assistant.title")}</h2>
+          <HistoryMenu repoPath={repoPath} current={assistantThread} />
           <HeaderButton label={t("assistant.new")} onClick={() => setAssistantThread(null)}>
             <MessageSquarePlus />
           </HeaderButton>
@@ -188,7 +410,7 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
         <ChatThread
           compact
           placeholder={assistantThread ? undefined : t("assistant.placeholder")}
-          steps={thread.flatMap((r) => r.steps)}
+          steps={[...(sessionSteps.data ?? []), ...thread.flatMap((r) => r.steps)]}
           running={!!live || sending}
           agentLabel={agentName}
           settings={

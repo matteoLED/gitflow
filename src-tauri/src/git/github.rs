@@ -139,6 +139,27 @@ pub fn list_pull_requests(repo: &Path) -> GitResult<Vec<PullRequest>> {
     Ok(prs)
 }
 
+/// Whether GitHub merged a pull request of `branch` whose head was exactly `tip`: its work is on GitHub, even
+/// when it was squashed long ago and git can no longer tell. Any doubt (no `gh`, offline) answers no.
+pub(crate) fn merged_pull_request_at(repo: &Path, branch: &str, tip: &str) -> bool {
+    let args = [
+        "pr",
+        "list",
+        "--head",
+        branch,
+        "--state",
+        "merged",
+        "--limit",
+        "20",
+        "--json",
+        "headRefOid",
+    ];
+    gh_json(repo, &args).is_ok_and(|prs| {
+        prs.as_array()
+            .is_some_and(|prs| prs.iter().any(|pr| pr["headRefOid"].as_str() == Some(tip)))
+    })
+}
+
 fn gh_json(repo: &Path, args: &[&str]) -> GitResult<serde_json::Value> {
     let out = gh(&require_gh()?, repo, args)?;
     serde_json::from_slice(&out)
@@ -176,6 +197,183 @@ pub fn comment_pull_request(repo: &Path, number: u32, body: &str) -> GitResult<(
     let number = number.to_string();
     let body_arg = format!("--body={body}");
     gh(&require_gh()?, repo, &["pr", "comment", &number, &body_arg]).map(|_| ())
+}
+
+const REVIEW_THREADS_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+    reviewThreads(first: 100) { nodes {
+      id isResolved isOutdated path line originalLine diffSide
+      comments(first: 100) { nodes {
+        id databaseId url body createdAt viewerCanUpdate viewerCanDelete
+        author { login avatarUrl }
+        reactionGroups { content viewerHasReacted reactors { totalCount } }
+      } }
+    } }
+  } }
+}";
+
+/// The pull request's code comment threads, with their replies, resolution and reactions.
+// ponytail: first 100 threads of 100 comments; paginate if a PR ever outgrows that.
+pub fn review_threads(repo: &Path, number: u32) -> GitResult<serde_json::Value> {
+    let query = format!("query={REVIEW_THREADS_QUERY}");
+    let number = format!("number={number}");
+    gh_json(
+        repo,
+        &[
+            "api",
+            "graphql",
+            "-f",
+            &query,
+            "-F",
+            "owner={owner}",
+            "-F",
+            "name={repo}",
+            "-F",
+            &number,
+            "--jq",
+            ".data.repository.pullRequest.reviewThreads.nodes",
+        ],
+    )
+}
+
+/// GraphQL node ids are opaque base64-ish tokens: anything else is refused before reaching gh.
+fn node_id(id: &str) -> GitResult<&str> {
+    let ok = !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_-=".contains(c));
+    ok.then_some(id)
+        .ok_or_else(|| GitError::invalid("Unknown GitHub id."))
+}
+
+fn graphql(repo: &Path, query: &str, fields: &[String]) -> GitResult<()> {
+    let query = format!("query={query}");
+    let mut args = vec!["api", "graphql", "-f", query.as_str()];
+    for field in fields {
+        args.extend(["-f", field.as_str()]);
+    }
+    gh(&require_gh()?, repo, &args).map(|_| ())
+}
+
+/// Marks a code comment thread resolved, or open again.
+pub fn resolve_thread(repo: &Path, thread_id: &str, resolved: bool) -> GitResult<()> {
+    let id = node_id(thread_id)?;
+    let mutation = if resolved {
+        "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { id } } }"
+    } else {
+        "mutation($id: ID!) { unresolveReviewThread(input: {threadId: $id}) { thread { id } } }"
+    };
+    graphql(repo, mutation, &[format!("id={id}")])
+}
+
+const REACTIONS: [&str; 8] = [
+    "THUMBS_UP",
+    "THUMBS_DOWN",
+    "LAUGH",
+    "HOORAY",
+    "CONFUSED",
+    "HEART",
+    "ROCKET",
+    "EYES",
+];
+
+/// Adds or removes the user's reaction on a comment.
+pub fn react(repo: &Path, subject_id: &str, content: &str, add: bool) -> GitResult<()> {
+    let id = node_id(subject_id)?;
+    if !REACTIONS.contains(&content) {
+        return Err(GitError::invalid("Unknown reaction."));
+    }
+    let mutation = if add {
+        "mutation($id: ID!, $content: ReactionContent!) { addReaction(input: {subjectId: $id, content: $content}) { subject { id } } }"
+    } else {
+        "mutation($id: ID!, $content: ReactionContent!) { removeReaction(input: {subjectId: $id, content: $content}) { subject { id } } }"
+    };
+    graphql(
+        repo,
+        mutation,
+        &[format!("id={id}"), format!("content={content}")],
+    )
+}
+
+/// Rewrites one of the user's code comments.
+pub fn edit_review_comment(repo: &Path, comment_id: u64, body: &str) -> GitResult<()> {
+    let body = format!("body={}", review_body(body)?);
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/comments/{comment_id}");
+    gh(
+        &require_gh()?,
+        repo,
+        &["api", "--method", "PATCH", &endpoint, "-f", &body],
+    )
+    .map(|_| ())
+}
+
+/// Deletes one of the user's code comments.
+pub fn delete_review_comment(repo: &Path, comment_id: u64) -> GitResult<()> {
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/comments/{comment_id}");
+    gh(
+        &require_gh()?,
+        repo,
+        &["api", "--method", "DELETE", &endpoint],
+    )
+    .map(|_| ())
+}
+
+fn review_body(body: &str) -> GitResult<&str> {
+    let body = body.trim();
+    if body.is_empty() || body.len() > 65_536 {
+        return Err(GitError::invalid("Write a comment first."));
+    }
+    Ok(body)
+}
+
+/// Comments one line of the pull request's diff. `side` is LEFT (old version) or RIGHT (new one).
+pub fn comment_line(
+    repo: &Path,
+    number: u32,
+    commit: &str,
+    path: &str,
+    line: u32,
+    side: &str,
+    body: &str,
+) -> GitResult<()> {
+    let body = review_body(body)?;
+    let commit = validate::object_id(commit)?;
+    let path = validate::relative_path(path)?;
+    if side != "LEFT" && side != "RIGHT" {
+        return Err(GitError::invalid("Unknown diff side."));
+    }
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments");
+    // Each field is its own argv entry (`-f` keeps it a raw string, `@file` included): nothing reaches a shell.
+    let fields = [
+        format!("body={body}"),
+        format!("commit_id={commit}"),
+        format!("path={path}"),
+        format!("side={side}"),
+    ];
+    let line = format!("line={line}");
+    let mut args = vec!["api", "--method", "POST", &endpoint, "-F", &line];
+    for field in &fields {
+        args.extend(["-f", field.as_str()]);
+    }
+    gh(&require_gh()?, repo, &args).map(|_| ())
+}
+
+/// Answers a code comment's thread.
+pub fn reply_review_comment(
+    repo: &Path,
+    number: u32,
+    comment_id: u64,
+    body: &str,
+) -> GitResult<()> {
+    let body = format!("body={}", review_body(body)?);
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments/{comment_id}/replies");
+    gh(
+        &require_gh()?,
+        repo,
+        &["api", "--method", "POST", &endpoint, "-f", &body],
+    )
+    .map(|_| ())
 }
 
 /// Re-runs the failed jobs of the given GitHub Actions runs (`gh run rerun <id> --failed`).
@@ -317,7 +515,7 @@ fn ref_exists(repo: &Path, name: &str) -> bool {
 }
 
 /// The remote's default branch (`origin/HEAD`), else `main` or `master` when they exist.
-fn default_base(repo: &Path) -> Option<String> {
+pub(crate) fn default_base(repo: &Path) -> Option<String> {
     let remote_head = git_text(
         repo,
         &[
@@ -683,5 +881,11 @@ mod tests {
         assert!(open_in_browser("http://example.com/").is_err());
         assert!(open_in_browser("https://github.com/a b").is_err());
         assert!(open_in_browser("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn node_ids_refuse_anything_but_id_characters() {
+        assert!(super::node_id("PRRT_kwDOAbc-12=").is_ok());
+        assert!(super::node_id("x; rm").is_err() && super::node_id("").is_err());
     }
 }

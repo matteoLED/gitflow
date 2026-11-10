@@ -123,6 +123,7 @@ pub fn parse_refs(text: &str) -> RefsSnapshot {
                 snapshot.remotes.push(RemoteBranch {
                     remote: remote.into(),
                     name: name.into(),
+                    committed_at: date.into(),
                 });
             }
         } else if let Some(tag) = refname.strip_prefix("refs/tags/") {
@@ -349,7 +350,8 @@ mod tests {
             snapshot.remotes,
             vec![RemoteBranch {
                 remote: "origin".into(),
-                name: "feat/x".into()
+                name: "feat/x".into(),
+                committed_at: String::new(),
             }]
         );
     }

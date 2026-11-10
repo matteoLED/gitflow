@@ -47,6 +47,7 @@ import { DataUnavailable } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { formatAge } from "@/lib/format-date";
@@ -100,7 +101,7 @@ function StatusLine({ pr }: { pr: PullRequestDetails }) {
   if (pr.state === "MERGED")
     return (
       <p className="flex items-center gap-2">
-        <GitMerge aria-hidden className="size-4 text-[#a371f7]" />
+        <GitMerge aria-hidden className="size-4 text-merged" />
         {t("pr.merged")}
       </p>
     );
@@ -445,6 +446,107 @@ const isBuild = (path: string) =>
   /(^|\/)(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|Cargo\.(toml|lock)|go\.(mod|sum)|pyproject\.toml|poetry\.lock|uv\.lock|requirements[^/]*\.txt|Gemfile(\.lock)?|pubspec\.(yaml|lock)|Dockerfile[^/]*|docker-compose[^/]*\.ya?ml|turbo\.json|nx\.json)$|^\.github\//.test(
     path,
   );
+const isDoc = (path: string) => /\.(md|mdx|rst|adoc|txt)$|(^|\/)docs?\//i.test(path);
+const isGenerated = (path: string) =>
+  /\.(gen|generated|g|pb)\.[^/]+$|(^|\/)(__generated__|generated)\/|\.snap$|(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|Cargo\.lock|go\.sum|poetry\.lock|uv\.lock|Gemfile\.lock|pubspec\.lock)$/.test(
+    path,
+  );
+const isAsset = (path: string) =>
+  /\.(png|jpe?g|gif|webp|avif|ico|icns|bmp|tiff?|svg|mp4|mov|webm|mp3|wav|ogg|woff2?|ttf|otf|eot|pdf|zip)$/i.test(path);
+
+const KINDS = ["implementation", "tests", "documentation", "generated", "build", "assets"] as const;
+type Kind = (typeof KINDS)[number];
+const kindOf = (path: string): Kind =>
+  isAsset(path)
+    ? "assets"
+    : isGenerated(path)
+      ? "generated"
+      : isTest(path)
+        ? "tests"
+        : isBuild(path)
+          ? "build"
+          : isDoc(path)
+            ? "documentation"
+            : "implementation";
+const KIND_LABEL = {
+  implementation: "pr.implementation",
+  tests: "pr.tests",
+  documentation: "pr.documentation",
+  generated: "pr.generated",
+  build: "pr.build",
+  assets: "pr.assets",
+} as const;
+type Files = PullRequestDetails["files"];
+const sum = (files: Files) => ({
+  add: files.reduce((n, f) => n + f.additions, 0),
+  del: files.reduce((n, f) => n + f.deletions, 0),
+});
+const count = (n: number) => n.toLocaleString();
+
+/** `+12 −3`; `compact` drops a zero removal, like Linear's header pill. */
+function Lines({ add, del, compact = false }: { add: number; del: number; compact?: boolean }) {
+  return (
+    <span className="whitespace-nowrap tabular-nums">
+      <span className="text-added-foreground">+{count(add)}</span>
+      {!(compact && del === 0) && <span className="ml-1.5 text-removed-foreground">−{count(del)}</span>}
+    </span>
+  );
+}
+
+/** Linear-like line count: the implementation's by default, every kind on hover, the total on click. */
+function DiffStat({ pr }: { pr: PullRequestDetails }) {
+  const t = useT();
+  const [total, setTotal] = useState(false);
+  const kinds = KINDS.map((kind) => ({ kind, files: pr.files.filter((f) => kindOf(f.path) === kind) }))
+    .filter((k) => k.files.length > 0)
+    .map((k) => ({ kind: k.kind, files: k.files.length, ...sum(k.files) }));
+  const implementation = kinds.find((k) => k.kind === "implementation") ?? { add: 0, del: 0 };
+  // `gh` may list only part of a huge PR's files: the total comes from GitHub's own count.
+  const all = { add: pr.additions, del: pr.deletions };
+  const split = kinds.length > 1;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={() => split && setTotal((v) => !v)}
+          className="shrink-0 rounded-full px-2 py-0.5 text-[12.5px] transition-colors hover:bg-white/[0.07] data-[state=delayed-open]:bg-white/[0.07] data-[state=instant-open]:bg-white/[0.07]"
+        >
+          <Lines {...(total || !split ? all : implementation)} compact />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        side="bottom"
+        align="start"
+        sideOffset={6}
+        arrow={false}
+        className="block min-w-48 rounded-lg border border-white/10 bg-popover px-3 py-2.5 text-[12.5px] text-popover-foreground shadow-xl"
+      >
+        <div className="space-y-1.5">
+          {kinds.map((k) => (
+            <div key={k.kind} className="flex items-center gap-6">
+              <span className="flex-1">{t(KIND_LABEL[k.kind])}</span>
+              {k.kind === "assets" ? (
+                <span className="text-muted-foreground">{t.plural("pr.fileCount", k.files)}</span>
+              ) : (
+                <Lines add={k.add} del={k.del} />
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 flex items-center gap-6 border-t border-white/[0.08] pt-2">
+          <span className="flex-1">{t("pr.total")}</span>
+          <Lines {...all} />
+        </div>
+        {split && (
+          <p className="mt-1.5 text-[11.5px] text-muted-foreground">
+            {t(total ? "pr.showImplementation" : "pr.showTotal")}
+          </p>
+        )}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 function FileGroup({
   title,
@@ -453,7 +555,7 @@ function FileGroup({
   initiallyOpen,
 }: {
   title: string;
-  files: PullRequestDetails["files"];
+  files: Files;
   onOpen: (path: string | null) => void;
   initiallyOpen: boolean;
 }) {
@@ -461,8 +563,7 @@ function FileGroup({
   const [open, setOpen] = useState(initiallyOpen);
   const [all, setAll] = useState(false);
   if (files.length === 0) return null;
-  const add = files.reduce((n, f) => n + f.additions, 0);
-  const del = files.reduce((n, f) => n + f.deletions, 0);
+  const { add, del } = sum(files);
   const shown = all ? files : files.slice(0, 6);
   return (
     <div>
@@ -477,9 +578,11 @@ function FileGroup({
           aria-hidden
           className={cn("size-3 text-muted-foreground transition-transform", !open && "-rotate-90")}
         />
-        <span className="ml-auto font-mono text-[12px]">
-          <span className="text-added-foreground">+{add}</span> <span className="text-removed-foreground">−{del}</span>
-        </span>
+        {(add > 0 || del > 0) && (
+          <span className="ml-auto text-[12px]">
+            <Lines add={add} del={del} />
+          </span>
+        )}
       </button>
       {open && (
         <ul className="mt-0.5 ml-1.5 border-l border-white/[0.08] pl-2.5">
@@ -518,17 +621,22 @@ function FileGroup({
   );
 }
 
-/** Changed files split like Linear: implementation first, then tests, then build & dependencies. */
+/** Changed files split like Linear: implementation first, then documentation, tests, build & dependencies. */
 function FilesSummary({ pr, onOpen }: { pr: PullRequestDetails; onOpen: (path: string | null) => void }) {
   const t = useT();
-  const tests = pr.files.filter((f) => isTest(f.path));
-  const build = pr.files.filter((f) => !isTest(f.path) && isBuild(f.path));
-  const code = pr.files.filter((f) => !isTest(f.path) && !isBuild(f.path));
+  const groups = KINDS.map((kind) => ({ kind, files: pr.files.filter((f) => kindOf(f.path) === kind) }));
+  const first = groups.find((g) => g.files.length > 0)?.kind;
   return (
     <Side title={t.plural("pr.filesChanged", pr.changedFiles)}>
-      <FileGroup title={t("pr.implementation")} files={code} onOpen={onOpen} initiallyOpen />
-      <FileGroup title={t("pr.tests")} files={tests} onOpen={onOpen} initiallyOpen={code.length === 0} />
-      <FileGroup title={t("pr.build")} files={build} onOpen={onOpen} initiallyOpen={false} />
+      {groups.map((g) => (
+        <FileGroup
+          key={g.kind}
+          title={t(KIND_LABEL[g.kind])}
+          files={g.files}
+          onOpen={onOpen}
+          initiallyOpen={g.kind === first && g.kind !== "build"}
+        />
+      ))}
     </Side>
   );
 }
@@ -582,6 +690,46 @@ function ReplyRow({ repoPath, pr, entry }: { repoPath: string; pr: PullRequestDe
   );
 }
 
+/** "Opened by x with N commits": the count unfolds the commits, newest first. */
+function OpenedWith({ pr }: { pr: PullRequestDetails }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mb-4 text-[13px] text-muted-foreground">
+      <p className="flex items-center gap-2.5">
+        <GitPullRequest aria-hidden className="size-4 text-added-foreground" />
+        <span>
+          {t("pr.openedBy", { author: pr.author.login })}{" "}
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => setOpen((o) => !o)}
+            className="rounded-sm underline-offset-2 hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            {t.plural("pr.withCommits", pr.commits.length)}
+          </button>{" "}
+          · {formatAge(pr.createdAt, undefined, t.locale)}
+        </span>
+      </p>
+      {open && (
+        <ol className="mt-2 ml-1.5">
+          {[...pr.commits].reverse().map((c) => (
+            <li
+              key={c.oid}
+              className="relative flex items-center gap-2.5 py-1.5 pl-6 before:absolute before:top-0 before:bottom-0 before:left-[5px] before:w-px before:bg-white/10 first:before:top-1/2 last:before:bottom-1/2"
+            >
+              <GitCommitHorizontal aria-hidden className="absolute left-0 size-3 bg-background text-muted-foreground" />
+              <span className="shrink-0 font-mono text-[12px]">{c.oid.slice(0, 7)}</span>
+              <span className="min-w-0 truncate text-foreground/85">{c.messageHeadline}</span>
+              {c.committedDate && <span className="shrink-0">· {formatAge(c.committedDate, undefined, t.locale)}</span>}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 function Activity({ repoPath, pr }: { repoPath: string; pr: PullRequestDetails }) {
   const t = useT();
   const [draft, setDraft] = useState("");
@@ -595,11 +743,7 @@ function Activity({ repoPath, pr }: { repoPath: string; pr: PullRequestDetails }
   return (
     <section className="mt-10">
       <h2 className="mb-3 text-[13px] text-muted-foreground">{t("linear.activity")}</h2>
-      <p className="mb-4 flex items-center gap-2.5 text-[13px] text-muted-foreground">
-        <GitPullRequest aria-hidden className="size-4 text-added-foreground" />
-        {t.plural("pr.opened", pr.commits.length, { author: pr.author.login })} ·{" "}
-        {formatAge(pr.createdAt, undefined, t.locale)}
-      </p>
+      <OpenedWith pr={pr} />
       <ol className="space-y-3">
         {entries.map((e) => (
           <li key={e.key} className="surface overflow-hidden">
@@ -850,12 +994,7 @@ export function PullRequestPage({ repoPath, pr }: { repoPath: string; pr: Active
         {data ? <StatusLine pr={data} /> : <GitPullRequest aria-hidden className="size-4 text-added-foreground" />}
         <span className="shrink-0 text-muted-foreground">#{pr.number}</span>
         <span className="min-w-0 truncate font-medium">{pr.title}</span>
-        {data && (
-          <span className="shrink-0 font-mono text-[12px]">
-            <span className="text-added-foreground">+{data.additions}</span>{" "}
-            <span className="text-removed-foreground">−{data.deletions}</span>
-          </span>
-        )}
+        {data && <DiffStat pr={data} />}
         <button
           type="button"
           title={t("pr.copyNumber")}

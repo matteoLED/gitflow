@@ -10,6 +10,8 @@ pub enum ErrorKind {
     Timeout,
     OutputTooLarge,
     Io,
+    /// A file changed on disk since it was read: saving would overwrite someone else's edit.
+    ChangedOnDisk,
 }
 
 /// Error sent to the frontend: a readable `message` plus raw Git output in `detail` for diagnosis.

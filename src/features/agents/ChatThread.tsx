@@ -384,7 +384,7 @@ export function ChatThread({
         <div
           onDragOver={(e) => e.preventDefault()}
           onDrop={attachments.onDrop}
-          className="surface mx-auto max-w-[780px] rounded-2xl shadow-[0_12px_40px_rgb(0_0_0/0.35)] transition-colors focus-within:border-primary/40"
+          className="mx-auto max-w-[780px] rounded-xl border border-white/[0.07] bg-[color-mix(in_oklab,var(--foreground)_5%,var(--background))] transition-colors focus-within:border-white/[0.14]"
         >
           {context && <div className="flex flex-wrap gap-1.5 px-2.5 pt-2.5">{context}</div>}
           <AttachmentStrip attachments={attachments} />
@@ -396,9 +396,9 @@ export function ChatThread({
             disabled={!onSend}
             aria-label={t("agents.message")}
             placeholder={onSend ? (placeholder ?? t("agents.continuePlaceholder")) : t("agents.cannotContinue")}
-            className="max-h-48 min-h-14 resize-none border-0 bg-transparent px-3.5 py-2.5 text-[13.5px] shadow-none focus-visible:ring-0 md:text-[13.5px] dark:bg-transparent"
+            className="field-sizing-content max-h-48 min-h-[60px] resize-none rounded-none border-0 bg-transparent px-3.5 pt-3 pb-0 text-[14px] leading-[1.45] shadow-none placeholder:text-muted-foreground/70 focus-visible:ring-0 md:text-[14px] dark:bg-transparent"
           />
-          <div className="flex items-center gap-1.5 px-2 pb-2">
+          <div className="flex items-center gap-1.5 px-2 pt-1 pb-2">
             {onSend && <AttachButton attachments={attachments} />}
             {/* Grows so a trailing item of `settings` (the context ring) can sit by the send button. */}
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -417,10 +417,12 @@ export function ChatThread({
             ) : (
               <Button
                 size="icon-sm"
+                variant="ghost"
                 aria-label={t("agents.send")}
                 disabled={(!draft.trim() && attachments.items.length === 0) || !onSend || attachments.saving}
                 onClick={send}
-                className="ml-auto size-8 shrink-0 rounded-full"
+                // Linear's send: a quiet grey circle, brighter once there's something to send.
+                className="ml-auto size-8 shrink-0 rounded-full bg-white/[0.12] text-foreground hover:bg-white/[0.18] disabled:bg-white/[0.06] disabled:text-muted-foreground disabled:opacity-100"
               >
                 <ArrowUp className="size-4" />
               </Button>

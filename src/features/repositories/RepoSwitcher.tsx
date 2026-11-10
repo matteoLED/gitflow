@@ -32,6 +32,8 @@ function useRepoShortcuts(openSwitcher: () => void) {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!event.metaKey || event.shiftKey || event.altKey) return;
       const { repos, switchRepo } = useWorkspaceStore.getState();
+      // On the editor page, ⌘P opens a file instead (as in Zed).
+      if (event.key.toLowerCase() === "p" && useWorkspaceStore.getState().view === "editor") return;
       if (event.key.toLowerCase() === "p") openSwitcher();
       else if (/^[1-9]$/.test(event.key) && repos[Number(event.key) - 1]) switchRepo(repos[Number(event.key) - 1].path);
       else return;

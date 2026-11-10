@@ -56,7 +56,7 @@ const REFS: RefsSnapshot = {
     { name: "main", upstream: "origin/main", upstreamGone: false, ahead: 1, behind: 0, committedAt: "", subject: "" },
     { name: "feature/login", upstream: null, upstreamGone: false, ahead: 0, behind: 0, committedAt: "", subject: "" },
   ],
-  remotes: [{ remote: "origin", name: "main" }],
+  remotes: [{ remote: "origin", name: "main", committedAt: "" }],
   tags: [],
   stashes: [],
 };

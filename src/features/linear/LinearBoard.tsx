@@ -46,51 +46,65 @@ function Card({ issue, showOrg, showAssignee }: CardProps) {
   );
 }
 
+const CHIP = "flex h-6 max-w-44 items-center gap-1.5 rounded-full border border-white/[0.08] px-2";
+
 function CardBody({ issue, showOrg, showAssignee, lifted = false }: CardProps & { lifted?: boolean }) {
   const t = useT();
   const setIssue = useLinearStore((s) => s.setIssue);
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => setIssue(issue.id, issue.orgId)}
-        className={cn(
-          "w-full rounded-lg border border-white/[0.07] bg-card p-3 text-left shadow-[0_1px_2px_rgb(0_0_0/0.3)] outline-none transition-colors hover:border-white/[0.13] hover:bg-white/[0.05] focus-visible:ring-2 focus-visible:ring-ring",
-          lifted && "rotate-2 cursor-grabbing border-white/20 bg-[#26272c] shadow-2xl",
+    <button
+      type="button"
+      onClick={() => setIssue(issue.id, issue.orgId)}
+      className={cn(
+        "w-full rounded-lg border border-white/[0.06] bg-white/[0.035] px-3 pt-2.5 pb-2.5 text-left shadow-[0_1px_2px_rgb(0_0_0/0.25)] outline-none transition-colors hover:border-white/[0.1] hover:bg-white/[0.055] focus-visible:ring-2 focus-visible:ring-ring",
+        lifted && "rotate-2 cursor-grabbing border-white/20 bg-popover shadow-2xl",
+      )}
+    >
+      {/* Id left, assignee right — the same place on every card, as in Linear. */}
+      <span className="flex h-5 items-center gap-1.5 text-[12px] text-muted-foreground">
+        <span className="tabular-nums">{issue.identifier}</span>
+        {showOrg && <span className="truncate">· {issue.orgName}</span>}
+        {showAssignee && issue.assignee && (
+          <AuthorAvatar
+            name={issue.assignee.name}
+            src={issue.assignee.avatarUrl}
+            className="ml-auto size-5 text-[9px]"
+          />
         )}
-      >
-        <span className="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
-          {issue.identifier}
-          {showOrg && <span className="truncate">· {issue.orgName}</span>}
-          <span className="ml-auto">{formatAge(issue.updatedAt, undefined, t.locale)}</span>
-          {/* Top-right like Linear: the same place on every card, whatever chips follow. */}
-          {showAssignee && issue.assignee && (
-            <AuthorAvatar name={issue.assignee.name} src={issue.assignee.avatarUrl} className="size-4.5 text-[8px]" />
-          )}
-        </span>
-        <span className="mt-1 flex items-start gap-2 text-[13px] leading-snug">
+      </span>
+      <span className="mt-1 flex items-start gap-2 text-[13px] leading-[1.35] font-medium">
+        <span className="mt-px">
           <StateDot state={issue.state} />
-          <span className="line-clamp-2">{issue.title}</span>
         </span>
-        <span className="mt-2.5 flex flex-wrap items-center gap-1.5 text-[11.5px] text-muted-foreground">
-          <span className="grid size-5 place-items-center rounded border border-white/[0.08]">
-            <PriorityIcon priority={issue.priority} />
-          </span>
+        <span className="line-clamp-2">{issue.title}</span>
+      </span>
+      {(issue.priority > 0 || issue.project || issue.labels.nodes.length > 0) && (
+        <span className="mt-2.5 flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
+          {/* "No priority" says nothing: the chip shows only when there is one. */}
+          {issue.priority > 0 && (
+            <span className={cn(CHIP, "w-6 justify-center px-0")} title={issue.priorityLabel}>
+              <PriorityIcon priority={issue.priority} />
+            </span>
+          )}
           {issue.project && (
-            <span className="flex max-w-44 items-center gap-1 rounded border border-white/[0.08] px-1.5 py-0.5">
+            <span className={CHIP}>
               <ProjectIcon project={issue.project} className="size-3" />
               <span className="truncate">{issue.project.name}</span>
             </span>
           )}
           {issue.labels.nodes.slice(0, 2).map((l) => (
-            <span key={l.name} className="flex items-center gap-1 rounded border border-white/[0.08] px-1.5 py-0.5">
-              <span className="size-1.5 rounded-full" style={{ backgroundColor: l.color }} />
-              {l.name}
+            <span key={l.name} className={CHIP}>
+              <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: l.color }} />
+              <span className="truncate">{l.name}</span>
             </span>
           ))}
+          {issue.labels.nodes.length > 2 && <span className={CHIP}>+{issue.labels.nodes.length - 2}</span>}
         </span>
-      </button>
-    </>
+      )}
+      <span className="mt-2 block text-[11.5px] text-muted-foreground/80">
+        {t("linear.updated")} {formatAge(issue.updatedAt, undefined, t.locale)}
+      </span>
+    </button>
   );
 }
 
@@ -109,16 +123,16 @@ function Column({
     <div
       ref={setNodeRef}
       className={cn(
-        "flex w-[300px] shrink-0 flex-col rounded-xl bg-white/[0.02] transition-colors",
+        "flex w-[320px] shrink-0 flex-col rounded-xl bg-white/[0.012] transition-colors",
         isOver && "bg-primary/[0.07] ring-1 ring-primary/40",
       )}
     >
-      <h3 className="flex h-10 shrink-0 items-center gap-2 px-3 text-[13px] font-medium">
+      <h3 className="flex h-11 shrink-0 items-center gap-2 px-3.5 text-[13px] font-medium">
         <StateDot state={column} />
         {column.name}
         <span className="font-normal text-muted-foreground">{column.items.length}</span>
       </h3>
-      <ul className={cn("min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2", closed && "opacity-75")}>
+      <ul className={cn("min-h-0 flex-1 space-y-1.5 overflow-y-auto px-1.5 pb-2", closed && "opacity-75")}>
         {column.items.map((issue) => (
           <Card key={cardId(issue)} issue={issue} showOrg={showOrg} showAssignee={showAssignee} />
         ))}

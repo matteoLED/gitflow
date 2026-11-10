@@ -8,6 +8,11 @@ import type {
   GitIdentity,
   GithubUser,
   PullRequest,
+  EditorFile,
+  LineChange,
+  Reaction,
+  SearchResults,
+  ReviewThread,
   RepositoryInfo,
   WorkingSide,
   WorkingTreeEntry,
@@ -122,6 +127,9 @@ export const gitBackend = {
   saveAttachment: (data: string, extension: string) => invoke<string>("save_attachment", { data, extension }),
   cancelAgentRun: (runId: string) => invoke<null>("cancel_agent_run", { runId }),
   listAgentSessions: (repoPath: string) => invoke<AgentSession[]>("list_agent_sessions", { repoPath }),
+  /** One page of past Claude Code sessions, latest first; a short page is the last one. */
+  listAgentSessionsPage: (repoPath: string, offset: number, limit: number) =>
+    invoke<AgentSession[]>("list_agent_sessions_page", { repoPath, offset, limit }),
   getAgentSession: (repoPath: string, id: string) => invoke<AgentStep[]>("get_agent_session", { repoPath, id }),
   getSessionUsage: (repoPath: string, id: string) => invoke<SessionUsage>("get_session_usage", { repoPath, id }),
   listAgentDefinitions: (repoPath: string) => invoke<AgentDefinition[]>("list_agent_definitions", { repoPath }),
@@ -174,6 +182,40 @@ export const gitBackend = {
   /** One side of an image diff as a data: URL; null when that side doesn't exist (added/deleted). */
   getImage: (repoPath: string, hash: string, base: string | null, path: string, oldSide: boolean) =>
     invoke<string | null>("get_image", { repoPath, hash, base, path, oldSide }),
+  listReviewThreads: (repoPath: string, number: number) =>
+    invoke<ReviewThread[]>("list_review_threads", { repoPath, number }),
+  resolveReviewThread: (repoPath: string, threadId: string, resolved: boolean) =>
+    invoke<null>("resolve_review_thread", { repoPath, threadId, resolved }),
+  reactToComment: (repoPath: string, subjectId: string, content: Reaction, add: boolean) =>
+    invoke<null>("react_to_comment", { repoPath, subjectId, content, add }),
+  editReviewComment: (repoPath: string, commentId: number, body: string) =>
+    invoke<null>("edit_review_comment", { repoPath, commentId, body }),
+  deleteReviewComment: (repoPath: string, commentId: number) =>
+    invoke<null>("delete_review_comment", { repoPath, commentId }),
+  commentLine: (
+    repoPath: string,
+    number: number,
+    commit: string,
+    path: string,
+    line: number,
+    side: "LEFT" | "RIGHT",
+    body: string,
+  ) => invoke<null>("comment_line", { repoPath, number, commit, path, line, side, body }),
+  replyReviewComment: (repoPath: string, number: number, commentId: number, body: string) =>
+    invoke<null>("reply_review_comment", { repoPath, number, commentId, body }),
+  /** Every file of the working tree, `.gitignore` respected. */
+  listFiles: (repoPath: string) => invoke<string[]>("list_files", { repoPath }),
+  readFile: (repoPath: string, path: string) => invoke<EditorFile>("read_file", { repoPath, path }),
+  /** Saves atomically; refuses (changedOnDisk) when the file changed since `expectedMtime`. Returns the new mtime. */
+  writeFile: (repoPath: string, path: string, content: string, expectedMtime: number | null) =>
+    invoke<number>("write_file", { repoPath, path, content, expectedMtime }),
+  /** Lines matching `query` across the working tree (git grep). */
+  searchFiles: (repoPath: string, query: string, regex: boolean, caseSensitive: boolean) =>
+    invoke<SearchResults>("search_files", { repoPath, query, regex, caseSensitive }),
+  lineChanges: (repoPath: string, path: string) => invoke<LineChange[]>("line_changes", { repoPath, path }),
+  /** Writes that image to `dest`, a path picked in the save dialog. */
+  saveImage: (repoPath: string, hash: string, base: string | null, path: string, oldSide: boolean, dest: string) =>
+    invoke<null>("save_image", { repoPath, hash, base, path, oldSide, dest }),
   /** Watches the repository; changes arrive as `repo-changed` events. */
   watchRepository: (repoPath: string) => invoke<null>("watch_repository", { repoPath }),
   terminalOpen: (repoPath: string, cols: number, rows: number) =>
@@ -210,6 +252,16 @@ export const gitBackend = {
   /** Checks out `origin/x` as a local tracking branch (or switches to it if it exists); returns its name. */
   checkoutRemoteBranch: (repoPath: string, remoteRef: string) =>
     invoke<string>("checkout_remote_branch", { repoPath, remoteRef }),
+  /** Deletes a local branch, returning its tip; only merged work unless `force` (the user's "delete anyway"). */
+  deleteBranch: (repoPath: string, name: string, mergedHead: string | null, force = false) =>
+    invoke<string>("delete_branch", { repoPath, name, mergedHead, force }),
+  restoreBranch: (repoPath: string, name: string, tip: string) =>
+    invoke<null>("restore_branch", { repoPath, name, tip }),
+  /** Deletes a branch on GitHub (never the default one), returning its tip for undo. */
+  deleteRemoteBranch: (repoPath: string, remote: string, name: string) =>
+    invoke<string>("delete_remote_branch", { repoPath, remote, name }),
+  restoreRemoteBranch: (repoPath: string, remote: string, name: string, tip: string) =>
+    invoke<null>("restore_remote_branch", { repoPath, remote, name, tip }),
   createBranch: (repoPath: string, name: string, switchTo: boolean) =>
     invoke<null>("create_branch", { repoPath, name, switch: switchTo }),
   fetch: (repoPath: string) => invoke<null>("fetch", { repoPath }),

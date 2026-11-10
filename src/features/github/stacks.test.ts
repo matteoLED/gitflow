@@ -30,4 +30,9 @@ describe("stacked pull requests", () => {
   it("lists a stack top first", () => {
     expect(stackOf(PRS, 1729)?.map((p) => p.number)).toEqual([1731, 1729]);
   });
+
+  it("finds merged stacks among merged pull requests", () => {
+    const merged = PRS.map((p) => ({ ...p, state: "MERGED" as const }));
+    expect(buildStacks(merged, "MERGED").map((s) => s.map((p) => p.number))).toEqual([[1729, 1731]]);
+  });
 });

@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, Copy, ExternalLink, MoreHorizontal, X } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, ChevronDown, Copy, ExternalLink, MoreHorizontal, RefreshCw, X } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { GithubIcon } from "@/components/github-icon";
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -11,11 +11,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useT } from "@/i18n";
+import { formatAge } from "@/lib/format-date";
+import { useNoticesStore } from "@/stores/notices-store";
 import { toGitError } from "@/lib/errors";
 import { gitBackend } from "@/lib/tauri-git";
 import type { PullRequestCheck, PullRequestDetails } from "@/types/git";
-import { CheckIcon, checkLabel, checkOutcome, runIdOf } from "./ChecksMenu";
-import { JobSteps, jobIdOf } from "./PullRequestCi";
+import { CheckIcon, checkDuration, checkLabel, checkOutcome, runIdOf } from "./ChecksMenu";
+import { JobLogView } from "./JobLog";
+import { cleanLine, jobIdOf, logByStep } from "./PullRequestCi";
 
 /** The Actions job behind a check, from its details link (…/actions/runs/<run>/job/<job>). */
 export function jobIdOfCheck(check: PullRequestCheck): number | null {
@@ -70,8 +73,8 @@ function CheckBody({ repoPath, check }: { repoPath: string; check: PullRequestCh
   // checks have nothing to show yet.
   if (outcome === "pending" && job && job.steps.length > 0)
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <JobSteps repoPath={repoPath} job={job} />
+      <div className="mx-3 mb-3 min-h-0 flex-1 overflow-y-auto rounded-lg border border-white/[0.06] bg-black/20">
+        <JobLogView repoPath={repoPath} job={job} />
       </div>
     );
   if (outcome === "pending")
@@ -96,8 +99,102 @@ function CheckBody({ repoPath, check }: { repoPath: string; check: PullRequestCh
     );
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <JobSteps repoPath={repoPath} job={job} />
+      <JobLogView repoPath={repoPath} job={job} />
     </div>
+  );
+}
+
+/** The commit the check ran on, when it ended, and what to do next: copy the errors, re-run it. */
+function CheckFooter({ repoPath, pr, check }: { repoPath: string; pr: PullRequestDetails; check: PullRequestCheck }) {
+  const t = useT();
+  const client = useQueryClient();
+  const notify = useNoticesStore((s) => s.notify);
+  const [copied, setCopied] = useState(false);
+  const sha = pr.commits[pr.commits.length - 1]?.oid ?? "";
+  const outcome = checkOutcome(check);
+  const runId = runIdOf(check);
+  const jobId = jobIdOfCheck(check);
+  const time = checkDuration(check);
+  const copy = async (text: () => Promise<string>) => {
+    try {
+      await navigator.clipboard.writeText(await text());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch (error) {
+      notify({ tone: "error", title: t("checks.copyFailed"), detail: toGitError(error).message });
+    }
+  };
+  // Same query as the log view: copying reuses what's already loaded.
+  const log = (failedOnly: boolean) => async () =>
+    logByStep(
+      await client.fetchQuery({
+        queryKey: ["job-log", repoPath, jobId, failedOnly],
+        queryFn: () => gitBackend.getJobLog(repoPath, jobId ?? 0, failedOnly),
+        staleTime: Infinity,
+      }),
+    )
+      .flatMap((g) => g.lines.map(cleanLine))
+      .join("\n");
+  const rerun = useMutation({
+    mutationFn: () => gitBackend.rerunFailedChecks(repoPath, [runId ?? 0]),
+    onSuccess: () => {
+      notify({ tone: "success", title: t("checks.rerunStarted") });
+      void client.invalidateQueries({ queryKey: ["pull-request", repoPath, pr.number] });
+    },
+    onError: (error) => notify({ tone: "error", title: t("checks.rerunFailed"), detail: toGitError(error).message }),
+  });
+  const ended = outcome !== "pending" ? check.completedAt : null;
+  return (
+    <footer className="flex items-center gap-2 border-t border-white/[0.06] px-3.5 py-2 text-[12.5px]">
+      <span className="font-mono">{sha.slice(0, 7)}</span>
+      <span className="min-w-0 flex-1 truncate text-muted-foreground">{pr.title}</span>
+      {ended && (
+        <span className="shrink-0 text-muted-foreground">
+          {t(outcome === "fail" ? "checks.failedAgo" : "checks.endedAgo", {
+            age: formatAge(ended, undefined, t.locale),
+          })}
+          {time && ` · ${time}`}
+        </span>
+      )}
+      <div className="flex shrink-0 items-center rounded-md border border-white/10">
+        <button
+          type="button"
+          disabled={jobId === null}
+          onClick={() => void copy(log(outcome === "fail"))}
+          className="flex items-center gap-1.5 rounded-l-md px-2 py-1 hover:enabled:bg-white/[0.06] disabled:opacity-50"
+        >
+          {copied ? (
+            <Check aria-hidden className="size-3.5 text-added-foreground" />
+          ) : (
+            <Copy aria-hidden className="size-3.5" />
+          )}
+          {t(outcome === "fail" ? "checks.copyErrors" : "checks.copyLog")}
+        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label={t("common.more")}
+            className="grid h-full place-items-center rounded-r-md border-l border-white/10 px-1.5 py-1 outline-none hover:bg-white/[0.06]"
+          >
+            <ChevronDown aria-hidden className="size-3.5" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            {jobId !== null && (
+              <DropdownMenuItem onSelect={() => void copy(log(false))}>{t("ci.copyAllLogs")}</DropdownMenuItem>
+            )}
+            <DropdownMenuItem onSelect={() => void copy(async () => sha)}>{t("checks.copyFullSha")}</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      <button
+        type="button"
+        disabled={runId === null || outcome === "pending" || rerun.isPending}
+        onClick={() => rerun.mutate()}
+        className="flex shrink-0 items-center gap-1.5 rounded-md border border-white/10 px-2 py-1 hover:enabled:bg-white/[0.06] disabled:opacity-50"
+      >
+        {rerun.isPending ? <BrailleLoader /> : <RefreshCw aria-hidden className="size-3.5" />}
+        {t("checks.rerun")}
+      </button>
+    </footer>
   );
 }
 
@@ -116,13 +213,6 @@ export function CheckDialog({
   onChange: (check: PullRequestCheck | null) => void;
 }) {
   const t = useT();
-  const [copied, setCopied] = useState(false);
-  const sha = pr.commits[pr.commits.length - 1]?.oid ?? "";
-  const copy = async () => {
-    await navigator.clipboard.writeText(sha);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
-  };
   const url = check ? urlOf(check) : null;
   return (
     <Dialog open={!!check} onOpenChange={(open) => !open && onChange(null)}>
@@ -176,18 +266,7 @@ export function CheckDialog({
               </DialogClose>
             </header>
             <CheckBody key={checkLabel(check)} repoPath={repoPath} check={check} />
-            <footer className="flex items-center gap-2 border-t border-white/[0.06] px-3.5 py-2 text-[12px]">
-              <span className="font-mono">{sha.slice(0, 7)}</span>
-              <span className="min-w-0 flex-1 truncate text-muted-foreground">{pr.title}</span>
-              <button
-                type="button"
-                onClick={() => void copy()}
-                className="flex items-center gap-1.5 rounded-md px-2 py-0.5 text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
-              >
-                {copied ? <Check aria-hidden className="size-3.5" /> : <Copy aria-hidden className="size-3.5" />}
-                {t("checks.copySha")}
-              </button>
-            </footer>
+            <CheckFooter repoPath={repoPath} pr={pr} check={check} />
           </>
         )}
       </DialogContent>

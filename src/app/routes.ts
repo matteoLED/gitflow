@@ -13,6 +13,7 @@ export const VIEW_PATHS = {
   agents: "/agents",
   browser: "/browser",
   graph: "/graph",
+  editor: "/editor",
 } as const satisfies Record<View, string>;
 
 export const VIEWS = Object.keys(VIEW_PATHS) as View[];

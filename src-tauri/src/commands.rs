@@ -10,7 +10,7 @@ use crate::git::github::{GithubUser, PullRequest, PullRequestRange, ReviewEvent}
 use crate::git::identity::GitIdentity;
 use crate::git::model::*;
 use crate::git::read::{self, LogFilters, WorkingSide};
-use crate::git::{github, identity, validate, write};
+use crate::git::{files, github, identity, validate, write};
 use crate::linear;
 use crate::preview;
 use crate::preview_view;
@@ -32,6 +32,60 @@ fn repo(path: &str) -> GitResult<PathBuf> {
 #[tauri::command]
 pub async fn open_repository(path: String) -> GitResult<RepositoryInfo> {
     blocking(move || read::open_repository(&path)).await
+}
+
+#[tauri::command]
+pub async fn list_files(repo_path: String) -> GitResult<Vec<String>> {
+    blocking(move || files::list_files(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn read_file(repo_path: String, path: String) -> GitResult<files::EditorFile> {
+    blocking(move || files::read_file(&repo(&repo_path)?, &path)).await
+}
+
+#[tauri::command]
+pub async fn write_file(
+    repo_path: String,
+    path: String,
+    content: String,
+    expected_mtime: Option<u64>,
+) -> GitResult<u64> {
+    blocking(move || files::write_file(&repo(&repo_path)?, &path, &content, expected_mtime)).await
+}
+
+#[tauri::command]
+pub async fn search_files(
+    repo_path: String,
+    query: String,
+    regex: bool,
+    case_sensitive: bool,
+) -> GitResult<files::SearchResults> {
+    blocking(move || files::search(&repo(&repo_path)?, &query, regex, case_sensitive)).await
+}
+
+#[tauri::command]
+pub async fn line_changes(repo_path: String, path: String) -> GitResult<Vec<files::LineChange>> {
+    blocking(move || files::line_changes(&repo(&repo_path)?, &path)).await
+}
+
+#[tauri::command]
+pub async fn lsp_start(
+    app: tauri::AppHandle,
+    repo_path: String,
+    language: String,
+) -> GitResult<String> {
+    blocking(move || crate::lsp::start(app, &repo(&repo_path)?, &language)).await
+}
+
+#[tauri::command]
+pub fn lsp_send(id: String, message: String) -> GitResult<()> {
+    crate::lsp::send(&id, &message)
+}
+
+#[tauri::command]
+pub fn lsp_stop(id: String) {
+    crate::lsp::stop(&id)
 }
 
 #[tauri::command]
@@ -172,6 +226,80 @@ pub async fn rerun_failed_checks(repo_path: String, run_ids: Vec<u64>) -> GitRes
 }
 
 #[tauri::command]
+pub async fn list_review_threads(repo_path: String, number: u32) -> GitResult<serde_json::Value> {
+    blocking(move || github::review_threads(&repo(&repo_path)?, number)).await
+}
+
+#[tauri::command]
+pub async fn resolve_review_thread(
+    repo_path: String,
+    thread_id: String,
+    resolved: bool,
+) -> GitResult<()> {
+    blocking(move || github::resolve_thread(&repo(&repo_path)?, &thread_id, resolved)).await
+}
+
+#[tauri::command]
+pub async fn react_to_comment(
+    repo_path: String,
+    subject_id: String,
+    content: String,
+    add: bool,
+) -> GitResult<()> {
+    blocking(move || github::react(&repo(&repo_path)?, &subject_id, &content, add)).await
+}
+
+#[tauri::command]
+pub async fn edit_review_comment(
+    repo_path: String,
+    comment_id: u64,
+    body: String,
+) -> GitResult<()> {
+    blocking(move || github::edit_review_comment(&repo(&repo_path)?, comment_id, &body)).await
+}
+
+#[tauri::command]
+pub async fn delete_review_comment(repo_path: String, comment_id: u64) -> GitResult<()> {
+    blocking(move || github::delete_review_comment(&repo(&repo_path)?, comment_id)).await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn comment_line(
+    repo_path: String,
+    number: u32,
+    commit: String,
+    path: String,
+    line: u32,
+    side: String,
+    body: String,
+) -> GitResult<()> {
+    blocking(move || {
+        github::comment_line(
+            &repo(&repo_path)?,
+            number,
+            &commit,
+            &path,
+            line,
+            &side,
+            &body,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn reply_review_comment(
+    repo_path: String,
+    number: u32,
+    comment_id: u64,
+    body: String,
+) -> GitResult<()> {
+    blocking(move || github::reply_review_comment(&repo(&repo_path)?, number, comment_id, &body))
+        .await
+}
+
+#[tauri::command]
 pub async fn add_reviewer(repo_path: String, number: u32, login: String) -> GitResult<()> {
     blocking(move || github::add_reviewer(&repo(&repo_path)?, number, &login)).await
 }
@@ -249,6 +377,15 @@ pub async fn list_agent_sessions(
     repo_path: String,
 ) -> GitResult<Vec<agents::sessions::SessionSummary>> {
     blocking(move || agents::sessions::list_sessions(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn list_agent_sessions_page(
+    repo_path: String,
+    offset: usize,
+    limit: usize,
+) -> GitResult<Vec<agents::sessions::SessionSummary>> {
+    blocking(move || agents::sessions::list_sessions_page(&repo(&repo_path)?, offset, limit)).await
 }
 
 #[tauri::command]
@@ -564,6 +701,28 @@ pub async fn get_image(
 }
 
 #[tauri::command]
+pub async fn save_image(
+    repo_path: String,
+    hash: String,
+    base: Option<String>,
+    path: String,
+    old_side: bool,
+    dest: String,
+) -> GitResult<()> {
+    blocking(move || {
+        read::save_image(
+            &repo(&repo_path)?,
+            &hash,
+            base.as_deref(),
+            &path,
+            old_side,
+            std::path::Path::new(&dest),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn get_file_contents(repo_path: String, hash: String, path: String) -> GitResult<String> {
     blocking(move || read::file_contents(&repo(&repo_path)?, &hash, &path)).await
 }
@@ -606,6 +765,41 @@ pub async fn checkout_remote_branch(repo_path: String, remote_ref: String) -> Gi
 #[tauri::command]
 pub async fn switch_branch(repo_path: String, name: String) -> GitResult<()> {
     blocking(move || write::switch_branch(&repo(&repo_path)?, &name)).await
+}
+
+#[tauri::command]
+pub async fn delete_branch(
+    repo_path: String,
+    name: String,
+    merged_head: Option<String>,
+    force: bool,
+) -> GitResult<String> {
+    blocking(move || write::delete_branch(&repo(&repo_path)?, &name, merged_head.as_deref(), force))
+        .await
+}
+
+#[tauri::command]
+pub async fn delete_remote_branch(
+    repo_path: String,
+    remote: String,
+    name: String,
+) -> GitResult<String> {
+    blocking(move || write::delete_remote_branch(&repo(&repo_path)?, &remote, &name)).await
+}
+
+#[tauri::command]
+pub async fn restore_remote_branch(
+    repo_path: String,
+    remote: String,
+    name: String,
+    tip: String,
+) -> GitResult<()> {
+    blocking(move || write::restore_remote_branch(&repo(&repo_path)?, &remote, &name, &tip)).await
+}
+
+#[tauri::command]
+pub async fn restore_branch(repo_path: String, name: String, tip: String) -> GitResult<()> {
+    blocking(move || write::restore_branch(&repo(&repo_path)?, &name, &tip)).await
 }
 
 #[tauri::command]

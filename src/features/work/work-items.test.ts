@@ -90,4 +90,14 @@ describe("workItems", () => {
     const prs = [pr("x", { state: "MERGED", number: 1 }), pr("x", { number: 2 })];
     expect(items({ branches: [branch("x")], pullRequests: prs })[0].pr?.number).toBe(2);
   });
+
+  it("lists a branch that is only on GitHub", () => {
+    const remotes = [{ remote: "origin", name: "old", committedAt: "2026-08-01T00:00:00Z" }];
+    expect(items({ remotes })[0]).toMatchObject({ local: null, status: "stale" });
+  });
+
+  it("keeps a merged pull request's branch still on GitHub, to clean up", () => {
+    const remotes = [{ remote: "origin", name: "old", committedAt: "2026-11-01T00:00:00Z" }];
+    expect(items({ remotes, pullRequests: [pr("old", { state: "MERGED" })] })[0].status).toBe("merged");
+  });
 });

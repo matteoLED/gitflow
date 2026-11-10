@@ -14,6 +14,7 @@ import { Route as AgentsRouteImport } from './routes/agents'
 import { Route as BrowserRouteImport } from './routes/browser'
 import { Route as ChangesRouteImport } from './routes/changes'
 import { Route as CiRouteImport } from './routes/ci'
+import { Route as EditorRouteImport } from './routes/editor'
 import { Route as GraphRouteImport } from './routes/graph'
 import { Route as HistoryRouteImport } from './routes/history'
 import { Route as LinearRouteImport } from './routes/linear'
@@ -44,6 +45,11 @@ const ChangesRoute = ChangesRouteImport.update({
 const CiRoute = CiRouteImport.update({
   id: '/ci',
   path: '/ci',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EditorRoute = EditorRouteImport.update({
+  id: '/editor',
+  path: '/editor',
   getParentRoute: () => rootRouteImport,
 } as any)
 const GraphRoute = GraphRouteImport.update({
@@ -83,6 +89,7 @@ export interface FileRoutesByFullPath {
   '/browser': typeof BrowserRoute
   '/changes': typeof ChangesRoute
   '/ci': typeof CiRoute
+  '/editor': typeof EditorRoute
   '/graph': typeof GraphRoute
   '/history': typeof HistoryRoute
   '/linear': typeof LinearRoute
@@ -96,6 +103,7 @@ export interface FileRoutesByTo {
   '/browser': typeof BrowserRoute
   '/changes': typeof ChangesRoute
   '/ci': typeof CiRoute
+  '/editor': typeof EditorRoute
   '/graph': typeof GraphRoute
   '/history': typeof HistoryRoute
   '/linear': typeof LinearRoute
@@ -110,6 +118,7 @@ export interface FileRoutesById {
   '/browser': typeof BrowserRoute
   '/changes': typeof ChangesRoute
   '/ci': typeof CiRoute
+  '/editor': typeof EditorRoute
   '/graph': typeof GraphRoute
   '/history': typeof HistoryRoute
   '/linear': typeof LinearRoute
@@ -125,6 +134,7 @@ export interface FileRouteTypes {
     | '/browser'
     | '/changes'
     | '/ci'
+    | '/editor'
     | '/graph'
     | '/history'
     | '/linear'
@@ -138,6 +148,7 @@ export interface FileRouteTypes {
     | '/browser'
     | '/changes'
     | '/ci'
+    | '/editor'
     | '/graph'
     | '/history'
     | '/linear'
@@ -151,6 +162,7 @@ export interface FileRouteTypes {
     | '/browser'
     | '/changes'
     | '/ci'
+    | '/editor'
     | '/graph'
     | '/history'
     | '/linear'
@@ -165,6 +177,7 @@ export interface RootRouteChildren {
   BrowserRoute: typeof BrowserRoute
   ChangesRoute: typeof ChangesRoute
   CiRoute: typeof CiRoute
+  EditorRoute: typeof EditorRoute
   GraphRoute: typeof GraphRoute
   HistoryRoute: typeof HistoryRoute
   LinearRoute: typeof LinearRoute
@@ -208,6 +221,13 @@ declare module '@tanstack/react-router' {
       path: '/ci'
       fullPath: '/ci'
       preLoaderRoute: typeof CiRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/editor': {
+      id: '/editor'
+      path: '/editor'
+      fullPath: '/editor'
+      preLoaderRoute: typeof EditorRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/graph': {
@@ -261,6 +281,7 @@ const rootRouteChildren: RootRouteChildren = {
   BrowserRoute: BrowserRoute,
   ChangesRoute: ChangesRoute,
   CiRoute: CiRoute,
+  EditorRoute: EditorRoute,
   GraphRoute: GraphRoute,
   HistoryRoute: HistoryRoute,
   LinearRoute: LinearRoute,

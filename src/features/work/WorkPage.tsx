@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   ChevronDown,
+  Cloud,
   CircleAlert,
   CircleCheck,
   Clock,
@@ -26,6 +27,8 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 import { WORK_STATUSES, type CiState, type WorkItem, type WorkStatus } from "./work-items";
 import { filterWork, useWorkItems } from "./use-work-items";
 import { WorkDetail } from "./WorkDetail";
+import { DeleteBranchesButton } from "./DeleteBranches";
+import { cleanable, deletable } from "./use-delete-branches";
 import { InboxPage } from "./InboxPage";
 
 export const STATUS: Record<WorkStatus, { icon: LucideIcon; label: MessageKey; className: string }> = {
@@ -35,7 +38,7 @@ export const STATUS: Record<WorkStatus, { icon: LucideIcon; label: MessageKey; c
   draft: { icon: GitPullRequestDraft, label: "work.status.draft", className: "text-muted-foreground" },
   progress: { icon: GitBranch, label: "work.status.progress", className: "text-renamed" },
   stale: { icon: Clock, label: "work.status.stale", className: "text-muted-foreground" },
-  merged: { icon: GitMerge, label: "work.status.merged", className: "text-primary/70" },
+  merged: { icon: GitMerge, label: "work.status.merged", className: "text-merged" },
 };
 
 const CI_DOT: Record<CiState, string> = {
@@ -43,6 +46,10 @@ const CI_DOT: Record<CiState, string> = {
   failure: "bg-removed-foreground",
   running: "bg-renamed animate-pulse",
 };
+
+/** The buttons shown on a hovered row: one look for all of them. */
+const ROW_ACTION =
+  "flex h-6 items-center gap-1 rounded-md border border-white/10 bg-white/[0.04] px-2 text-[12px] font-normal text-muted-foreground shadow-none hover:bg-white/[0.09] hover:text-foreground [&_svg]:size-3";
 
 /** One branch of work, as a dense Linear row: status, issue, title and branch, then CI, PR, sync and age. */
 function WorkRow({ item, repoPath }: { item: WorkItem; repoPath: string }) {
@@ -75,6 +82,12 @@ function WorkRow({ item, repoPath }: { item: WorkItem; repoPath: string }) {
         <span className="truncate font-mono text-[11.5px] text-muted-foreground">{item.issueId ?? ""}</span>
         <span className="flex min-w-0 items-baseline gap-2">
           <span className="truncate">{item.title}</span>
+          {!item.local && item.remote && !item.pr && (
+            <Cloud
+              aria-label={t("branches.onGithub")}
+              className="size-3.5 shrink-0 self-center text-muted-foreground"
+            />
+          )}
           {item.title !== item.branch && (
             <span className="truncate font-mono text-[11.5px] text-muted-foreground">{item.branch}</span>
           )}
@@ -104,11 +117,13 @@ function WorkRow({ item, repoPath }: { item: WorkItem; repoPath: string }) {
           )}
           {item.pr && <span>#{item.pr.number}</span>}
           {item.pr && !item.local && <span className="max-w-24 truncate">{item.pr.author.login}</span>}
-          <span className="w-10 text-right">{item.updatedAt && formatAge(item.updatedAt, undefined, t.locale)}</span>
+          <span className="w-14 text-right whitespace-nowrap">
+            {item.updatedAt && formatAge(item.updatedAt, undefined, t.locale)}
+          </span>
         </span>
       </button>
-      {/* Row actions, on hover, over the metadata. */}
-      <span className="absolute top-1/2 right-4 hidden -translate-y-1/2 items-center gap-1 group-hover/row:flex">
+      {/* Row actions, on hover: they cover the end of the row, fading the text out instead of overlapping it. */}
+      <span className="pointer-events-none absolute inset-y-px right-0 hidden items-center gap-1 bg-linear-to-l from-background from-75% to-transparent pr-4 pl-16 group-hover/row:flex [&>*]:pointer-events-auto">
         {item.issue && (
           <button
             type="button"
@@ -116,10 +131,18 @@ function WorkRow({ item, repoPath }: { item: WorkItem; repoPath: string }) {
               setIssue(item.issue?.id ?? null);
               setView("linear");
             }}
-            className="h-6 rounded-md border border-white/10 bg-card px-2 text-[12px] text-muted-foreground hover:text-foreground"
+            className={ROW_ACTION}
           >
             {t("work.openIssue")}
           </button>
+        )}
+        {deletable(item) && (item.status === "merged" || item.status === "stale") && (
+          <DeleteBranchesButton
+            repoPath={repoPath}
+            items={[item]}
+            label={t("branches.delete")}
+            className={ROW_ACTION}
+          />
         )}
         {canCheckout && (
           <button
@@ -131,7 +154,7 @@ function WorkRow({ item, repoPath }: { item: WorkItem; repoPath: string }) {
                 name: item.local ? item.branch : `origin/${item.branch}`,
               })
             }
-            className="h-6 rounded-md border border-white/10 bg-card px-2 text-[12px] text-muted-foreground hover:text-foreground"
+            className={ROW_ACTION}
           >
             {t("work.checkout")}
           </button>
@@ -152,7 +175,7 @@ function Section({ status, items, repoPath }: { status: WorkStatus; items: WorkI
         type="button"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        className="sticky top-0 z-10 flex h-9 w-full items-center gap-2 border-b border-white/[0.05] bg-[#18191c] px-5 text-left text-[12.5px] font-medium"
+        className="sticky top-0 z-10 flex h-9 w-full items-center gap-2 border-b border-white/[0.05] bg-background px-5 text-left text-[12.5px] font-medium"
       >
         <ChevronDown
           aria-hidden
@@ -187,6 +210,14 @@ export function WorkPage({ repoPath }: { repoPath: string }) {
       <span className="font-medium">{t(`work.filter.${filter}`)}</span>
       {work.data && <span className="text-muted-foreground">{filterWork(work.data, filter).length}</span>}
       {work.loadingPrs && <BrailleLoader className="ml-2 text-muted-foreground" label={t("work.loadingPrs")} />}
+      {work.data && (
+        <DeleteBranchesButton
+          repoPath={repoPath}
+          items={cleanable(filterWork(work.data, filter))}
+          label={t.plural("branches.cleanUp", cleanable(filterWork(work.data, filter)).length)}
+          className="ml-auto"
+        />
+      )}
     </PanelHeader>
   );
   if (work.error)

@@ -4,11 +4,12 @@ import {
   Check,
   ChevronRight,
   GitBranch,
-  GitMerge,
   GitPullRequest,
+  GitMerge,
   GitPullRequestClosed,
   GitPullRequestDraft,
-  Layers,
+  Plus,
+  Waypoints,
   X,
 } from "lucide-react";
 import { AuthorAvatar } from "@/components/author-avatar";
@@ -52,7 +53,7 @@ export function StateIcon({ pr }: { pr: PullRequest }) {
   const t = useT();
   const className = "size-3.5 shrink-0";
   if (pr.state === "MERGED")
-    return <GitMerge aria-label={t("github.merged")} className={cn(className, "text-[#a48ff0]")} />;
+    return <GitMerge aria-label={t("github.merged")} className={cn(className, "text-merged")} />;
   if (pr.state === "CLOSED")
     return (
       <GitPullRequestClosed aria-label={t("github.closed")} className={cn(className, "text-removed-foreground")} />
@@ -135,7 +136,13 @@ function PullRequestRow({ repoPath, repoName, pr, nested = false }: RowProps) {
   const loading = loadingPr === pr.number;
   const open = () => void openPr(pr);
   return (
-    <li className={cn(nested && "relative ml-3 border-l border-white/10 pl-2")}>
+    <li
+      className={cn(
+        nested &&
+          // Tree lines, as in Linear: an elbow into each PR, the trunk running on past all but the last.
+          "relative pl-5 before:absolute before:top-0 before:left-[15px] before:h-1/2 before:w-2.5 before:rounded-bl-md before:border-b before:border-l before:border-white/15 after:absolute after:top-1/2 after:bottom-0 after:left-[15px] after:border-l after:border-white/15 last:after:hidden",
+      )}
+    >
       <button
         type="button"
         aria-current={selected ? "true" : undefined}
@@ -162,18 +169,28 @@ function PullRequestRow({ repoPath, repoName, pr, nested = false }: RowProps) {
   );
 }
 
+/** Rows shown before "Show N more" in a long group. */
+const GROUP_LIMIT = 10;
+
 function Group({
   label,
   count,
   defaultCollapsed,
-  children,
+  items,
+  sizeOf,
 }: {
   label: string;
   count: number;
   defaultCollapsed: boolean;
-  children: React.ReactNode;
+  items: React.ReactNode[];
+  /** How many pull requests each item holds (a stack holds several), for the "more" count. */
+  sizeOf: (index: number) => number;
 }) {
+  const t = useT();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const [all, setAll] = useState(false);
+  const shown = all ? items : items.slice(0, GROUP_LIMIT);
+  const hidden = items.slice(shown.length).reduce<number>((n, _, i) => n + sizeOf(shown.length + i), 0);
   return (
     <li className="mb-1">
       <button
@@ -186,29 +203,69 @@ function Group({
         <span>{count}</span>
         <ChevronRight aria-hidden className={cn("size-3 transition-transform", !collapsed && "rotate-90")} />
       </button>
-      {!collapsed && <ul className="mt-0.5">{children}</ul>}
+      {!collapsed && (
+        <ul className="mt-0.5">
+          {shown}
+          {hidden > 0 && (
+            <li>
+              <button
+                type="button"
+                onClick={() => setAll(true)}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
+              >
+                <Plus aria-hidden className="size-3.5" />
+                {t.plural("github.showMore", hidden)}
+              </button>
+            </li>
+          )}
+        </ul>
+      )}
     </li>
   );
 }
 
-/** A stack, like Linear: the bottom PR's title, its size, and its PRs indented beneath. */
+/** A stack, like Linear: the bottom PR's title, its size, its author and age; its PRs hang beneath. */
 function StackGroup({ repoPath, repoName, stack }: { repoPath: string; repoName: string; stack: PullRequest[] }) {
   const t = useT();
-  const [open, setOpen] = useState(true);
+  const bottom = stack[0];
+  // Open stacks start unfolded; merged ones are history, folded.
+  const [open, setOpen] = useState(bottom.state === "OPEN");
+  const selected = useWorkspaceStore((s) => stack.some((pr) => pr.number === s.pullRequest?.number));
   const top = [...stack].reverse();
+  const updated = stack.reduce((a, pr) => (pr.updatedAt > a ? pr.updatedAt : a), bottom.updatedAt);
+  const tone =
+    bottom.state === "MERGED"
+      ? "text-merged"
+      : bottom.state === "CLOSED"
+        ? "text-removed-foreground"
+        : "text-added-foreground";
   return (
     <li className="mb-0.5">
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="grid w-full grid-cols-[14px_1fr_auto] items-center gap-x-2 rounded-md px-2 py-1.5 text-left outline-none transition-colors hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn(
+          "grid w-full grid-cols-[14px_1fr_auto] items-center gap-x-2 rounded-md px-2 py-1.5 text-left outline-none transition-colors hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-ring",
+          (open || selected) && "bg-white/[0.04]",
+        )}
       >
-        <Layers aria-label={t("github.stack")} className="size-3.5 text-added-foreground" />
-        <span className="truncate text-[12.5px] text-foreground">{stack[0].title}</span>
-        <span className="flex items-center gap-1 text-[11.5px] text-muted-foreground">
-          <span className="rounded bg-white/[0.08] px-1.5 tabular-nums">{stack.length}</span>
-          <ChevronRight aria-hidden className={cn("size-3 transition-transform", open && "rotate-90")} />
+        <Waypoints aria-label={t("github.stack")} className={cn("size-3.5", tone)} />
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-[12.5px] text-foreground">{bottom.title}</span>
+          <span className="shrink-0 rounded bg-white/[0.08] px-1.5 text-[11px] text-muted-foreground tabular-nums">
+            {stack.length}
+          </span>
+          <ChevronRight
+            aria-hidden
+            className={cn("size-3 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}
+          />
+        </span>
+        <span className="flex items-center gap-1.5">
+          <AuthorAvatar name={bottom.author.login} src={avatarOf(bottom.author.login)} className="size-4" />
+          <span className="min-w-7 text-right text-[11.5px] whitespace-nowrap text-muted-foreground">
+            {formatAge(updated, undefined, t.locale)}
+          </span>
         </span>
         <span className="col-start-2 truncate text-[11.5px] text-muted-foreground">{repoName}</span>
       </button>
@@ -234,26 +291,45 @@ export function PullRequestList({ repoPath, query }: { repoPath: string; query: 
   if (!prs.data) return <PanelLoading title={t("github.loading")} variant="grid-importing" />;
   const visible = query ? prs.data.filter((pr) => matches(pr, query)) : prs.data;
   if (visible.length === 0) return <PanelMessage title={query ? t("github.noMatch") : t("github.none")} />;
-  const stacks = query ? [] : buildStacks(visible);
-  const stacked = new Set(stacks.flat().map((pr) => pr.number));
+  // Stacks of open PRs and of merged ones; a stack lives in its bottom PR's group, where that PR would sit.
+  const stacks = query ? [] : [...buildStacks(visible, "OPEN"), ...buildStacks(visible, "MERGED")];
+  const stackOfPr = new Map(stacks.flatMap((stack) => stack.map((pr) => [pr.number, stack] as const)));
   return (
     <nav aria-label={t("github.list")} className="mt-4 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
       <ul>
         {GROUPS.map(({ id, label, collapsed }) => {
-          // A stack lives in its bottom PR's group; its PRs aren't repeated on their own.
-          const groupStacks = stacks.filter((stack) => groupOf(stack[0]) === id);
-          const members = visible.filter((pr) => groupOf(pr) === id && !stacked.has(pr.number));
-          const count = members.length + groupStacks.reduce((n, s) => n + s.length, 0);
+          const items: { key: number; size: number; node: React.ReactNode }[] = [];
+          const placed = new Set<PullRequest[]>();
+          for (const pr of visible) {
+            const stack = stackOfPr.get(pr.number);
+            if (stack) {
+              // At its most recent PR's place, once; in the group of its bottom PR.
+              if (placed.has(stack) || groupOf(stack[0]) !== id) continue;
+              placed.add(stack);
+              items.push({
+                key: stack[0].number,
+                size: stack.length,
+                node: <StackGroup key={stack[0].number} repoPath={repoPath} repoName={repoName} stack={stack} />,
+              });
+            } else if (groupOf(pr) === id) {
+              items.push({
+                key: pr.number,
+                size: 1,
+                node: <PullRequestRow key={pr.number} repoPath={repoPath} repoName={repoName} pr={pr} />,
+              });
+            }
+          }
+          const count = items.reduce((n, item) => n + item.size, 0);
           if (count === 0) return null;
           return (
-            <Group key={id} label={t(label)} count={count} defaultCollapsed={collapsed && !query}>
-              {groupStacks.map((stack) => (
-                <StackGroup key={stack[0].number} repoPath={repoPath} repoName={repoName} stack={stack} />
-              ))}
-              {members.map((pr) => (
-                <PullRequestRow key={pr.number} repoPath={repoPath} repoName={repoName} pr={pr} />
-              ))}
-            </Group>
+            <Group
+              key={id}
+              label={t(label)}
+              count={count}
+              defaultCollapsed={collapsed && !query}
+              items={items.map((item) => item.node)}
+              sizeOf={(i) => items[i].size}
+            />
           );
         })}
       </ul>

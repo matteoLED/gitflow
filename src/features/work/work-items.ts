@@ -1,4 +1,4 @@
-import type { LinearIssue, LocalBranch, PullRequest, WorkflowRun } from "@/types/git";
+import type { LinearIssue, LocalBranch, PullRequest, RemoteBranch, WorkflowRun } from "@/types/git";
 
 /** Where a piece of work stands, from first commit to merge — the sections of the Work page, in order. */
 export type WorkStatus = "changes" | "review" | "approved" | "draft" | "progress" | "merged" | "stale";
@@ -11,6 +11,8 @@ export type WorkItem = {
   key: string;
   branch: string;
   local: LocalBranch | null;
+  /** The same branch on GitHub (`origin`), when it's there. */
+  remote: RemoteBranch | null;
   pr: PullRequest | null;
   /** "MNT-936", read from the branch name. */
   issueId: string | null;
@@ -49,18 +51,20 @@ function ciOf(runs: WorkflowRun[]): Map<string, CiState> {
   return states;
 }
 
-function statusOf(pr: PullRequest | null, local: LocalBranch | null, now: number): WorkStatus {
+function statusOf(pr: PullRequest | null, local: LocalBranch | null, lastCommit: string, now: number): WorkStatus {
   if (pr?.state === "MERGED" || pr?.state === "CLOSED") return "merged";
   if (pr?.isDraft) return "draft";
   if (pr?.reviewDecision === "CHANGES_REQUESTED") return "changes";
   if (pr?.reviewDecision === "APPROVED") return "approved";
   if (pr) return "review";
-  const old = local?.committedAt && now - new Date(local.committedAt).getTime() > STALE_MS;
+  const old = lastCommit && now - new Date(lastCommit).getTime() > STALE_MS;
   return local?.upstreamGone || old ? "stale" : "progress";
 }
 
 type Sources = {
   branches: LocalBranch[];
+  /** Branches on the remotes; only `origin`'s (or the only remote's) count. */
+  remotes?: RemoteBranch[];
   pullRequests: PullRequest[];
   runs: WorkflowRun[];
   issues: LinearIssue[];
@@ -69,10 +73,18 @@ type Sources = {
 };
 
 /**
- * Every local branch and every open pull request, merged by branch name. Merged pull requests show only while
- * their branch is still here (to clean up). The default branch isn't work in progress: it's left out.
+ * Every local branch, every branch on GitHub and every open pull request, merged by branch name. Merged pull
+ * requests show only while a branch of theirs remains (to clean up). The default branch isn't work: it's left out.
  */
-export function workItems({ branches, pullRequests, runs, issues, head, now = Date.now() }: Sources): WorkItem[] {
+export function workItems({
+  branches,
+  remotes = [],
+  pullRequests,
+  runs,
+  issues,
+  head,
+  now = Date.now(),
+}: Sources): WorkItem[] {
   const ci = ciOf(runs);
   const byIssue = new Map(issues.map((i) => [i.identifier.toUpperCase(), i]));
   // An open pull request wins over an older merged one of the same branch.
@@ -82,8 +94,11 @@ export function workItems({ branches, pullRequests, runs, issues, head, now = Da
     if (!known || (known.state !== "OPEN" && pr.state === "OPEN")) prs.set(pr.headRefName, pr);
   }
   const locals = new Map(branches.map((b) => [b.name, b]));
+  const origin = remotes.some((r) => r.remote === "origin") ? "origin" : remotes[0]?.remote;
+  const onGithub = new Map(remotes.filter((r) => r.remote === origin).map((r) => [r.name, r]));
   const names = new Set([
     ...branches.map((b) => b.name),
+    ...onGithub.keys(),
     ...[...prs.values()].filter((pr) => pr.state === "OPEN").map((pr) => pr.headRefName),
   ]);
   const bases = new Set(pullRequests.map((pr) => pr.baseRefName));
@@ -93,19 +108,22 @@ export function workItems({ branches, pullRequests, runs, issues, head, now = Da
     )
     .map((name) => {
       const local = locals.get(name) ?? null;
+      const remote = onGithub.get(name) ?? null;
       const pr = prs.get(name) ?? null;
+      const lastCommit = [local?.committedAt, remote?.committedAt].filter(Boolean).sort().at(-1) ?? "";
       const issueId = issueIdOf(name);
       const issue = (issueId && byIssue.get(issueId)) || issues.find((i) => i.branchName === name) || null;
-      const updatedAt = [pr?.updatedAt, local?.committedAt].filter(Boolean).sort().at(-1) ?? "";
+      const updatedAt = [pr?.updatedAt, lastCommit].filter(Boolean).sort().at(-1) ?? "";
       return {
         key: name,
         branch: name,
         local,
+        remote,
         pr,
         issueId: issue?.identifier ?? issueId,
         issue,
         ci: ci.get(name) ?? null,
-        status: statusOf(pr, local, now),
+        status: statusOf(pr, local, lastCommit, now),
         current: name === head,
         updatedAt,
         title: pr?.title ?? issue?.title ?? local?.subject ?? name,

@@ -23,6 +23,7 @@ const work = (patch: Partial<WorkItem>): WorkItem => ({
   key: "b",
   branch: "b",
   local: null,
+  remote: null,
   pr: null,
   issueId: null,
   issue: null,

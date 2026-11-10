@@ -4,6 +4,7 @@ import { getT, useLocaleStore } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { gitBackend } from "@/lib/tauri-git";
 import { useAgentsStore } from "@/stores/agents-store";
+import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useNoticesStore } from "@/stores/notices-store";
 import type { AgentKind, AgentRunEvent, AgentTask, PreviewEvent } from "@/types/git";
 import { usePreviewStore } from "@/stores/preview-store";
@@ -65,4 +66,24 @@ export async function startAgentRun(
     useNoticesStore.getState().notify({ tone: "error", title: getT()("agents.startFailed", { message }), detail });
     return null;
   }
+}
+
+/** Starts an agent on a free-form task, then offers to open it from the notice. False when it couldn't start. */
+export async function startAgentWithNotice(repoPath: string, prompt: string, title: string, agent?: AgentKind) {
+  const kind = agent ?? useAgentsStore.getState().preferredAgent;
+  const id = await startAgentRun(repoPath, kind, { kind: "custom", prompt }, title);
+  if (!id) return false; // the reason was already notified
+  const t = getT();
+  useNoticesStore.getState().notify({
+    tone: "success",
+    title: t("comments.agentStarted"),
+    action: {
+      label: t("comments.openAgent"),
+      run: () => {
+        useAgentsStore.getState().select({ type: "run", id });
+        useWorkspaceStore.getState().setView("agents");
+      },
+    },
+  });
+  return true;
 }
