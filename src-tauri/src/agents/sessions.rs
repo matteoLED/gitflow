@@ -150,6 +150,24 @@ impl Summary {
         }
     }
 
+    fn feed_codex(&mut self, event: &Value) {
+        let d = &mut self.data;
+        if let Some(ts) = event.get("timestamp").and_then(Value::as_str) {
+            d.started_at.get_or_insert_with(|| ts.to_string());
+            d.updated_at = Some(ts.to_string());
+        }
+        for step in from_codex_rollout(event) {
+            match step.kind {
+                StepKind::Prompt => {
+                    d.prompts += 1;
+                    self.first_prompt.get_or_insert(step.title);
+                }
+                StepKind::Tool => d.tool_calls += 1,
+                _ => {}
+            }
+        }
+    }
+
     fn view(&self) -> SessionSummary {
         let mut data = self.data.clone();
         if data.title.is_empty() {
@@ -241,7 +259,27 @@ fn codex_root() -> Option<PathBuf> {
 }
 
 /// Every Codex session file, any project: three levels of date folders.
+/// When the session folders were last walked, and what was found.
+type Walk = (std::time::Instant, Vec<PathBuf>);
+
 fn codex_all() -> Vec<PathBuf> {
+    // Every page of the history and every opened session asks: the folder walk is reused for a few seconds.
+    static CACHE: OnceLock<Mutex<Option<Walk>>> = OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some((at, paths)) = cache.as_ref()
+        && at.elapsed() < std::time::Duration::from_secs(10)
+    {
+        return paths.clone();
+    }
+    let paths = walk_codex();
+    *cache = Some((std::time::Instant::now(), paths.clone()));
+    paths
+}
+
+fn walk_codex() -> Vec<PathBuf> {
     let mut dirs = codex_root().into_iter().collect::<Vec<_>>();
     for _ in 0..3 {
         dirs = dirs
@@ -258,27 +296,37 @@ fn codex_all() -> Vec<PathBuf> {
 }
 
 /// The session's first line says where it ran (and whether it's a sub-agent's): read once per file.
+/// A first line not written yet isn't remembered, so a session just started shows up on the next listing.
 fn codex_meta(path: &Path) -> Option<(String, String)> {
     static CACHE: OnceLock<Cache<Option<(String, String)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
-    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(path) {
+        return known.clone();
+    }
+    let meta = read_codex_meta(path)?;
     cache
-        .entry(path.to_path_buf())
-        .or_insert_with(|| {
-            let mut line = String::new();
-            BufReader::new(File::open(path).ok()?)
-                .read_line(&mut line)
-                .ok()?;
-            let meta: Value = serde_json::from_str(&line).ok()?;
-            let payload = meta.get("payload")?;
-            let sub_agent = payload.get("thread_source").and_then(Value::as_str)
-                == Some("subagent")
-                || payload.pointer("/source/subagent").is_some();
-            let id = payload.get("id")?.as_str()?.to_string();
-            let cwd = payload.get("cwd")?.as_str()?.to_string();
-            (!sub_agent).then_some((id, cwd))
-        })
-        .clone()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(path.to_path_buf(), meta.clone());
+    meta
+}
+
+/// None while the first line can't be read yet; Some(None) for a sub-agent's session.
+fn read_codex_meta(path: &Path) -> Option<Option<(String, String)>> {
+    let mut line = String::new();
+    BufReader::new(File::open(path).ok()?)
+        .read_line(&mut line)
+        .ok()?;
+    if !line.ends_with('\n') {
+        return None;
+    }
+    let meta: Value = serde_json::from_str(&line).ok()?;
+    let payload = meta.get("payload")?;
+    let sub_agent = payload.get("thread_source").and_then(Value::as_str) == Some("subagent")
+        || payload.pointer("/source/subagent").is_some();
+    let id = payload.get("id")?.as_str()?.to_string();
+    let cwd = payload.get("cwd")?.as_str()?.to_string();
+    Some((!sub_agent).then_some((id, cwd)))
 }
 
 fn codex_files(repo: &Path) -> Vec<(SystemTime, PathBuf)> {
@@ -291,28 +339,20 @@ fn codex_files(repo: &Path) -> Vec<(SystemTime, PathBuf)> {
 
 fn codex_summary(path: &Path) -> SessionSummary {
     let (id, _) = codex_meta(path).unwrap_or_default();
-    let mut summary = Summary::new(id);
-    summary.data.agent = "codex";
-    let (events, _) = read_from(path, 0);
-    for event in &events {
-        if let Some(ts) = event.get("timestamp").and_then(Value::as_str) {
-            summary
-                .data
-                .started_at
-                .get_or_insert_with(|| ts.to_string());
-            summary.data.updated_at = Some(ts.to_string());
-        }
-        for step in from_codex_rollout(event) {
-            match step.kind {
-                StepKind::Prompt => {
-                    summary.data.prompts += 1;
-                    summary.first_prompt.get_or_insert(step.title);
-                }
-                StepKind::Tool => summary.data.tool_calls += 1,
-                _ => {}
-            }
-        }
+    let mut cache = summaries().lock().unwrap_or_else(|e| e.into_inner());
+    let fresh = || {
+        let mut summary = Summary::new(id.clone());
+        summary.data.agent = "codex";
+        summary
+    };
+    let summary = cache.entry(path.to_path_buf()).or_insert_with(fresh);
+    // Only what was appended since the last read: rollouts reach tens of megabytes.
+    let (events, offset) = read_from(path, summary.offset);
+    if offset < summary.offset {
+        *summary = fresh();
     }
+    events.iter().for_each(|e| summary.feed_codex(e));
+    summary.offset = offset;
     summary.view()
 }
 
@@ -369,12 +409,18 @@ fn codex_steps(repo: &Path, id: &str) -> GitResult<Vec<AgentStep>> {
         .into_iter()
         .find(|p| codex_meta(p).is_some_and(|(i, cwd)| i == id && Path::new(&cwd) == repo))
         .ok_or_else(|| GitError::invalid("This session no longer exists."))?;
-    let (events, _) = read_from(&path, 0);
-    let mut steps: Vec<AgentStep> = events.iter().flat_map(from_codex_rollout).collect();
+    let mut cache = timelines().lock().unwrap_or_else(|e| e.into_inner());
+    let (offset, steps) = cache.entry(path.clone()).or_insert_with(|| (0, Vec::new()));
+    let (events, next) = read_from(&path, *offset);
+    if next < *offset {
+        steps.clear();
+    }
+    *offset = next;
+    steps.extend(events.iter().flat_map(from_codex_rollout));
     if steps.len() > MAX_STEPS {
         steps.drain(..steps.len() - MAX_STEPS);
     }
-    Ok(steps)
+    Ok(steps.clone())
 }
 
 #[cfg(test)]

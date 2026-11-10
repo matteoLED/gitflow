@@ -1,4 +1,5 @@
 mod agents;
+mod app_menu;
 mod attachments;
 mod browser;
 mod code_graph;
@@ -23,6 +24,8 @@ pub fn run() {
                 linear::init(dir.join("linear-accounts.json"));
                 std::thread::spawn(preview::stop_orphans);
             }
+            std::thread::spawn(git::rewrite::clean_temp_files);
+            app_menu::install(app)?;
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())

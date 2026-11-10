@@ -133,38 +133,9 @@ pub fn diff(repo: &Path, path: &str) -> GitResult<String> {
 
 fn diff_at(repo: &Path, root: &Path, path: &str) -> GitResult<String> {
     let worktree = owned(repo, root, path)?;
-    let dir = Path::new(&worktree.path);
     let base = git_text(repo, &["merge-base", "HEAD", &worktree.branch])?;
-    let base = base.trim();
-    // Diffing the merge base against the working tree covers commits and uncommitted edits at once.
-    let mut patch = git_text(dir, &["diff", "--no-ext-diff", "-M", FULL_CONTEXT, base])?;
-    let untracked = git_text(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
-    let opts = RunOptions {
-        ok_codes: &[1], // `--no-index` exits 1 when the files differ
-        ..RunOptions::default()
-    };
-    for file in untracked.split('\0').filter(|f| !f.is_empty()) {
-        let args = [
-            "diff",
-            "--no-ext-diff",
-            "--no-index",
-            FULL_CONTEXT,
-            "--",
-            "/dev/null",
-            file,
-        ];
-        patch.push_str(&String::from_utf8_lossy(&git_with(dir, &args, &opts)?));
-    }
-    Ok(patch)
-}
-
-/// The committed difference between two agents' branches (`git diff a b`): what `b` has that `a` doesn't.
-pub fn compare(repo: &Path, a: &str, b: &str) -> GitResult<String> {
-    compare_at(repo, &root(repo)?, a, b)
-}
-
-fn compare_at(repo: &Path, root: &Path, a: &str, b: &str) -> GitResult<String> {
-    let (a, b) = (owned(repo, root, a)?, owned(repo, root, b)?);
+    let tree = snapshot(Path::new(&worktree.path))?;
+    // One diff from the merge base to everything in the worktree: commits, edits and new files alike.
     git_text(
         repo,
         &[
@@ -172,11 +143,42 @@ fn compare_at(repo: &Path, root: &Path, a: &str, b: &str) -> GitResult<String> {
             "--no-ext-diff",
             "-M",
             FULL_CONTEXT,
-            &a.branch,
-            &b.branch,
-            "--",
+            base.trim(),
+            &tree,
         ],
     )
+}
+
+/// The worktree as it is on disk, committed or not, written as a tree through a throwaway index: the agent's
+/// own index and files are left alone. Ignored files stay out, as they would from a commit.
+fn snapshot(dir: &Path) -> GitResult<String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let index = std::env::temp_dir().join(format!("gitflow-index-{}-{n}", std::process::id()));
+    let index_path = index.to_string_lossy().into_owned();
+    let opts = RunOptions {
+        env: &[("GIT_INDEX_FILE", index_path.as_str())],
+        ..RunOptions::default()
+    };
+    let tree = (|| {
+        git_with(dir, &["read-tree", "HEAD"], &opts)?;
+        git_with(dir, &["add", "-A"], &opts)?;
+        git_with(dir, &["write-tree"], &opts)
+    })();
+    let _ = std::fs::remove_file(&index);
+    Ok(String::from_utf8_lossy(&tree?).trim().to_string())
+}
+
+/// The difference between two agents' worktrees, uncommitted work included: what `b` has that `a` doesn't.
+pub fn compare(repo: &Path, a: &str, b: &str) -> GitResult<String> {
+    compare_at(repo, &root(repo)?, a, b)
+}
+
+fn compare_at(repo: &Path, root: &Path, a: &str, b: &str) -> GitResult<String> {
+    let (a, b) = (owned(repo, root, a)?, owned(repo, root, b)?);
+    // Agents usually leave their work uncommitted: compare what is on disk in each worktree.
+    let (a, b) = (snapshot(Path::new(&a.path))?, snapshot(Path::new(&b.path))?);
+    git_text(repo, &["diff", "--no-ext-diff", "-M", FULL_CONTEXT, &a, &b])
 }
 
 /// Brings the agent's work into the current branch: what it left uncommitted is committed on its branch first
@@ -214,9 +216,22 @@ pub fn publish(repo: &Path, path: &str, title: &str, body: &str) -> GitResult<St
     let base = super::read::head(repo)?
         .branch
         .ok_or_else(|| GitError::invalid("Check out the branch the pull request should target."))?;
-    let title = commit_leftovers(dir, title)?;
+    // Checked before anything is committed or pushed: a run's title is the start of its prompt, possibly
+    // several lines, which `gh pr create` would refuse after the push.
+    let title = one_line_title(title);
+    let title = commit_leftovers(dir, &title)?;
     super::write::push(dir)?;
     super::github::create_pull_request(dir, &base, title, body, false)
+}
+
+/// The first non-empty line, without control characters, at most 200 characters.
+fn one_line_title(title: &str) -> String {
+    let line = title
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("Agent changes");
+    line.chars().filter(|c| !c.is_control()).take(200).collect()
 }
 
 /// Removes the worktree and, when asked, its branch: the user confirmed, so uncommitted agent changes go too.
@@ -310,10 +325,30 @@ mod tests {
     }
 
     #[test]
+    fn comparing_includes_uncommitted_work_and_leaves_the_index_alone() {
+        let (repo, _dir, root) = setup();
+        let a = create_at(repo.path(), &root).unwrap();
+        let b = create_at(repo.path(), &root).unwrap();
+        fs::write(Path::new(&b.path).join("new.txt"), "draft\n").unwrap();
+        let patch = compare_at(repo.path(), &root, &a.path, &b.path).unwrap();
+        assert!(patch.contains("+draft"));
+        assert_eq!(
+            git_text(Path::new(&b.path), &["status", "--porcelain"]).unwrap(),
+            "?? new.txt\n"
+        );
+    }
+
+    #[test]
     fn paths_that_are_not_agent_worktrees_are_refused() {
         let (repo, _dir, root) = setup();
         assert!(owned(repo.path(), &root, "/tmp").is_err());
         let own = repo.path().to_string_lossy().into_owned();
         assert!(remove_at(repo.path(), &root, &own, true).is_err());
+    }
+
+    #[test]
+    fn a_multi_line_prompt_becomes_a_one_line_title() {
+        assert_eq!(one_line_title("\n Fix X\nthen Y"), "Fix X");
+        assert_eq!(one_line_title("  "), "Agent changes");
     }
 }

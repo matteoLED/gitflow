@@ -29,7 +29,7 @@ import { useT, type MessageKey } from "@/i18n";
 import { formatCommitDate } from "@/lib/format-date";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
-import { threadRuns, useAgentsStore, type AgentRun } from "@/stores/agents-store";
+import { threadRuns, unsavedFollowUps, useAgentsStore, type AgentRun } from "@/stores/agents-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { AgentKind, AgentTask, WorkflowJob } from "@/types/git";
 import { ClaudeIcon, CodexIcon } from "./agent-icons";
@@ -430,7 +430,7 @@ function SessionView({ repoPath, id }: { repoPath: string; id: string }) {
         {live && <StopButton runId={live.id} />}
       </PanelHeader>
       <ChatThread
-        steps={[...steps.data, ...followUps.flatMap((r) => r.steps)]}
+        steps={[...steps.data, ...unsavedFollowUps(steps.data, followUps).flatMap((r) => r.steps)]}
         running={!!live}
         agentLabel="Claude Code"
         settings={

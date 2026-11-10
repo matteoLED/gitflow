@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::errors::{GitError, GitResult};
-use super::runner::{git, git_text};
+use super::runner::{git, git_long, git_text};
 use super::validate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -156,21 +156,47 @@ pub fn continue_operation(repo: &Path) -> GitResult<()> {
         OperationKind::Merge => &["-c", "core.editor=true", "commit", "--no-edit"],
         _ => &["-c", "core.editor=true", verb(kind), "--continue"],
     };
-    git(repo, args).map(|_| ())
+    git_long(repo, args).map(|_| ())
 }
 
 /// Stops the operation and puts the branch back as it was before it started.
 pub fn abort_operation(repo: &Path) -> GitResult<()> {
     let kind = require(repo)?;
-    git(repo, &[verb(kind), "--abort"]).map(|_| ())
+    git_long(repo, &[verb(kind), "--abort"]).map(|_| ())
 }
 
-/// Rebase only: drops the commit being replayed and goes on with the next one.
+/// Drops the commit being replayed (rebase) or picked (cherry-pick, revert, e.g. one that became empty)
+/// and goes on with the next one.
 pub fn skip_commit(repo: &Path) -> GitResult<()> {
-    if require(repo)? != OperationKind::Rebase {
-        return Err(GitError::invalid("Only a rebase can skip a commit."));
+    let kind = require(repo)?;
+    match kind {
+        OperationKind::Merge => return Err(GitError::invalid("A merge has no commit to skip.")),
+        OperationKind::Rebase => drop_pending_reword(repo)?,
+        _ => {}
     }
-    git(repo, &["-c", "core.editor=true", "rebase", "--skip"]).map(|_| ())
+    git_long(repo, &["-c", "core.editor=true", verb(kind), "--skip"]).map(|_| ())
+}
+
+/// A reword is a pick followed by an `exec` amending with the message file `gitflow-msg-<sha>-…` (see
+/// `rewrite::build_todo`). Skipping that pick must drop the amend too, or it would reword the previous commit.
+fn drop_pending_reword(repo: &Path) -> GitResult<()> {
+    let Ok(sha) = git_text(repo, &["rev-parse", "--verify", "--quiet", "REBASE_HEAD"]) else {
+        return Ok(());
+    };
+    let todo_path = git_path(repo, "rebase-merge/git-rebase-todo")?;
+    let Ok(todo) = fs::read_to_string(&todo_path) else {
+        return Ok(());
+    };
+    let marker = format!("gitflow-msg-{}-", sha.trim());
+    let kept: String = todo
+        .lines()
+        .filter(|l| !(l.starts_with("exec ") && l.contains(&marker)))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    if kept.lines().count() == todo.lines().count() {
+        return Ok(());
+    }
+    fs::write(&todo_path, kept).map_err(|e| GitError::invalid(e.to_string()))
 }
 
 /// Resolves whole files with one side ("ours" or "theirs"), then marks them resolved.

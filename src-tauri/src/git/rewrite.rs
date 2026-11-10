@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::conflicts;
 use super::errors::{ErrorKind, GitError, GitResult};
-use super::runner::{NETWORK_TIMEOUT, RunOptions, git, git_text, git_with};
+use super::runner::{NETWORK_TIMEOUT, RunOptions, git, git_long, git_text, git_with};
 use super::validate;
 
 const MAX_REBASE_COMMITS: usize = 300;
@@ -118,13 +118,13 @@ pub fn cherry_pick(repo: &Path, hash: &str) -> GitResult<Outcome> {
             "This commit is already on the current branch.",
         ));
     }
-    finish(repo, git(repo, &["cherry-pick", &sha]))
+    finish(repo, git_long(repo, &["cherry-pick", &sha]))
 }
 
 pub fn revert(repo: &Path, hash: &str) -> GitResult<Outcome> {
     ensure_ready(repo)?;
     let sha = single_parent_commit(repo, hash, "reverted")?;
-    finish(repo, git(repo, &["revert", "--no-edit", &sha]))
+    finish(repo, git_long(repo, &["revert", "--no-edit", &sha]))
 }
 
 /// The commits from `from` up to HEAD, oldest first, with their full messages.
@@ -222,17 +222,20 @@ fn check_steps(plan: &[RebaseCommit], steps: &[RebaseStep]) -> GitResult<Option<
         .position(|(s, c)| s.action != RebaseAction::Pick || s.hash != c.hash))
 }
 
-/// The todo list git reads. A reword is a pick, then an amend with the new message once its squashes are in.
+/// The todo list git reads. A reword is a pick, then an amend with the new message once its squashes are in;
+/// the squashed commits' messages follow the new one, as a plain squash keeps them. `message_file(sha, message)`
+/// must name the file `gitflow-msg-<sha>-…`: skipping that commit drops its amend (`conflicts::skip_commit`).
 fn build_todo(
     steps: &[RebaseStep],
-    mut message_file: impl FnMut(&str) -> GitResult<String>,
+    plan: &[RebaseCommit],
+    mut message_file: impl FnMut(&str, &str) -> GitResult<String>,
 ) -> GitResult<String> {
     let mut todo = String::new();
-    let mut pending: Option<String> = None;
+    let mut pending: Option<(&str, String)> = None;
     for step in steps {
         let starts_group = matches!(step.action, RebaseAction::Pick | RebaseAction::Reword);
         if starts_group {
-            flush(&mut todo, pending.take());
+            flush(&mut todo, pending.take(), &mut message_file)?;
         }
         let word = match step.action {
             RebaseAction::Pick | RebaseAction::Reword => "pick",
@@ -242,19 +245,37 @@ fn build_todo(
         };
         todo.push_str(&format!("{word} {}\n", step.hash));
         if step.action == RebaseAction::Reword {
-            pending = Some(message_file(step.message.as_deref().unwrap_or_default())?);
+            let message = step
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            pending = Some((&step.hash, message));
+        } else if let (RebaseAction::Squash, Some((_, message))) = (step.action, &mut pending) {
+            let squashed = plan.iter().find(|c| c.hash == step.hash);
+            if let Some(squashed) = squashed.filter(|c| !c.message.is_empty()) {
+                message.push_str("\n\n");
+                message.push_str(&squashed.message);
+            }
         }
     }
-    flush(&mut todo, pending);
+    flush(&mut todo, pending, &mut message_file)?;
     Ok(todo)
 }
 
-fn flush(todo: &mut String, message_file: Option<String>) {
-    if let Some(path) = message_file {
+fn flush(
+    todo: &mut String,
+    pending: Option<(&str, String)>,
+    message_file: &mut impl FnMut(&str, &str) -> GitResult<String>,
+) -> GitResult<()> {
+    if let Some((sha, message)) = pending {
+        let path = message_file(sha, &message)?;
         todo.push_str(&format!(
             "exec git commit --amend --quiet --allow-empty --no-verify --file={path}\n"
         ));
     }
+    Ok(())
 }
 
 /// Only characters a shell takes literally: these paths end up in the editor command and `exec` lines.
@@ -288,13 +309,34 @@ fn temp_file(kind: &str, content: &str) -> GitResult<PathBuf> {
     let path = std::env::temp_dir().join(name);
     shell_safe(&path)?;
     let io = |e: std::io::Error| GitError::new(ErrorKind::Io, e.to_string());
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(io)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600); // commit messages are nobody else's business
+    let mut file = options.open(&path).map_err(io)?;
     file.write_all(content.as_bytes()).map_err(io)?;
     Ok(path)
+}
+
+const TEMP_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// Best effort, at app start: message and todo files a stopped rebase never got to remove, once a day old.
+pub fn clean_temp_files() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let ours = entry.file_name().to_string_lossy().starts_with("gitflow-");
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > TEMP_MAX_AGE);
+        if ours && old && entry.file_type().is_ok_and(|t| t.is_file()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Rebases from `from` (included) to HEAD following `steps`, oldest first, without opening any editor.
@@ -317,9 +359,9 @@ pub fn interactive_rebase(
         ));
     }
     let mut files = Vec::new();
-    let result = run_rebase(repo, &plan[0].hash, steps, &mut files);
+    let result = run_rebase(repo, &plan, steps, &mut files);
     let outcome = finish(repo, result);
-    // ponytail: on a stop, later `exec` lines still need their message files; the OS temp cleanup removes them.
+    // On a stop, later `exec` lines still need their message files: `clean_temp_files` removes them a day later.
     if !matches!(outcome, Ok(Outcome::Stopped)) {
         for file in files {
             let _ = std::fs::remove_file(file);
@@ -330,20 +372,21 @@ pub fn interactive_rebase(
 
 fn run_rebase(
     repo: &Path,
-    oldest: &str,
+    plan: &[RebaseCommit],
     steps: &[RebaseStep],
     files: &mut Vec<PathBuf>,
 ) -> GitResult<Vec<u8>> {
-    let todo = build_todo(steps, |message| {
-        let path = temp_file("msg", &format!("{}\n", message.trim()))?;
+    let todo = build_todo(steps, plan, |sha, message| {
+        let path = temp_file(&format!("msg-{sha}"), &format!("{message}\n"))?;
         files.push(path.clone());
         shell_safe(&path)
     })?;
     let todo_path = temp_file("todo", &todo)?;
     let editor = format!("cp {}", shell_safe(&todo_path)?);
     files.push(todo_path);
-    let parent = parent_of(repo, oldest);
-    let mut args = vec!["rebase", "--interactive"];
+    let parent = parent_of(repo, &plan[0].hash);
+    // A failed amend (`exec`) stops the rebase and runs again on continue instead of being lost.
+    let mut args = vec!["rebase", "--interactive", "--reschedule-failed-exec"];
     match &parent {
         Some(parent) => args.push(parent),
         None => args.push("--root"),
@@ -505,11 +548,67 @@ mod tests {
             step("bb", RebaseAction::Squash),
             step("cc", RebaseAction::Pick),
         ];
-        let todo = build_todo(&steps, |_| Ok("/tmp/msg".into())).unwrap();
+        let todo = build_todo(&steps, &[], |_, _| Ok("/tmp/msg".into())).unwrap();
         assert_eq!(
             todo,
             "pick aa\nsquash bb\nexec git commit --amend --quiet --allow-empty --no-verify --file=/tmp/msg\npick cc\n"
         );
+    }
+
+    #[test]
+    fn a_reword_keeps_the_messages_squashed_into_it() {
+        let (repo, h) = three();
+        let mut reword = step(&h[0], RebaseAction::Reword);
+        reword.message = Some("A2".into());
+        let steps = [
+            reword,
+            step(&h[1], RebaseAction::Squash),
+            step(&h[2], RebaseAction::Fixup),
+        ];
+        interactive_rebase(repo.path(), &h[0], &steps, false).unwrap();
+        assert_eq!(repo.git(&["log", "-1", "--format=%B"]), "A2\n\nb");
+    }
+
+    #[test]
+    fn skipping_a_conflicting_reword_does_not_reword_the_previous_commit() {
+        let repo = TestRepo::new();
+        repo.write("f.txt", "0\n");
+        repo.commit_all("init");
+        let a = {
+            repo.write("f.txt", "1\n");
+            repo.commit_all("a")
+        };
+        let b = {
+            repo.write("f.txt", "2\n");
+            repo.commit_all("b")
+        };
+        let c = {
+            repo.write("g.txt", "c\n");
+            repo.commit_all("c")
+        };
+        // Without `a`, `b` no longer applies: it stops on conflicts and the user skips it.
+        let mut reword = step(&b, RebaseAction::Reword);
+        reword.message = Some("b reworded".into());
+        let steps = [
+            step(&c, RebaseAction::Pick),
+            reword,
+            step(&a, RebaseAction::Drop),
+        ];
+        let outcome = interactive_rebase(repo.path(), &a, &steps, false).unwrap();
+        assert_eq!(outcome, Outcome::Stopped);
+        conflicts::skip_commit(repo.path()).unwrap();
+        assert_eq!(subjects(&repo), "init\nc");
+    }
+
+    #[test]
+    fn skips_a_cherry_pick_that_became_empty() {
+        let (repo, h) = three();
+        repo.git(&["checkout", "-q", "-b", "other", &h[0]]);
+        repo.write("c.txt", "c");
+        repo.commit_all("same as c");
+        assert_eq!(cherry_pick(repo.path(), &h[2]).unwrap(), Outcome::Stopped);
+        conflicts::skip_commit(repo.path()).unwrap();
+        assert!(conflicts::operation(repo.path()).unwrap().is_none());
     }
 
     #[test]

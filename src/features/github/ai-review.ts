@@ -59,12 +59,23 @@ export function parseAiReview(text: string): AiReviewResult | null {
   return { summary: json.summary.trim(), comments, invalid: json.comments.length - comments.length };
 }
 
-/** `SIDE:line` keys GitHub accepts a comment on, the same anchors the diff view shows threads at. */
+/** GitHub's own diff context: comments must sit on a changed line or within this many lines of one. */
+const CONTEXT = 3;
+
+/**
+ * `SIDE:line` keys GitHub accepts a comment on. The app's diffs carry the whole file as context, but GitHub
+ * only takes lines of its 3-line-context hunks: an unchanged line further away would get the review refused.
+ */
 export function commentableLines(hunks: DiffHunk[]): Set<string> {
   const keys = new Set<string>();
-  for (const line of hunks.flatMap((h) => h.lines)) {
-    if (line.kind === "removed" && line.oldLine !== null) keys.add(`LEFT:${line.oldLine}`);
-    else if (line.kind !== "removed" && line.newLine !== null) keys.add(`RIGHT:${line.newLine}`);
+  for (const { lines } of hunks) {
+    const changed = lines.flatMap((line, i) => (line.kind === "context" ? [] : [i]));
+    lines.forEach((line, i) => {
+      const near = line.kind !== "context" || changed.some((c) => Math.abs(c - i) <= CONTEXT);
+      if (!near) return;
+      if (line.kind === "removed" && line.oldLine !== null) keys.add(`LEFT:${line.oldLine}`);
+      else if (line.kind !== "removed" && line.newLine !== null) keys.add(`RIGHT:${line.newLine}`);
+    });
   }
   return keys;
 }

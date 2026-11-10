@@ -2,10 +2,11 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import type { LineStaging } from "@/features/diff/DiffCard";
-import { buildPartialPatch } from "@/features/diff/partial-patch";
+import { buildPartialPatch, EndOfFileSelectionError, supportsLineStaging } from "@/features/diff/partial-patch";
 import { parseUnifiedDiff } from "@/features/diff/parse-unified-diff";
 import { useGitAction } from "@/features/operations/use-git-action";
 import { gitBackend } from "@/lib/tauri-git";
+import { useNoticesStore } from "@/stores/notices-store";
 import { useT } from "@/i18n";
 import type { PatchMode } from "@/types/git";
 import type { SelectedChange } from "@/stores/workspace-store";
@@ -30,7 +31,9 @@ function nextSelection(prev: Selection | null, index: number, how: "only" | "ran
 export function useLineStaging(repoPath: string, change: SelectedChange, patch: string | undefined) {
   const t = useT();
   const [selection, setSelection] = useState<Selection | null>(null);
-  const [confirmDiscard, setConfirmDiscard] = useState<ReadonlySet<number> | null>(null);
+  const notify = useNoticesStore((s) => s.notify);
+  // Tied to the diff it was asked on, like the selection: a refreshed diff makes the indexes meaningless.
+  const [confirmDiscard, setConfirmDiscard] = useState<Omit<Selection, "anchor"> | null>(null);
   const changed = useMemo(
     () =>
       parseUnifiedDiff(patch ?? "")
@@ -43,13 +46,21 @@ export function useLineStaging(repoPath: string, change: SelectedChange, patch: 
     failure: t("staging.failed"),
   });
 
-  // Renames and untracked files have no plain diff to apply partially: they stage as whole files.
-  if (!patch || change.side === "untracked" || change.previousPath) return { staging: undefined, toolbar: null };
+  // Renames, untracked, added and deleted files have no plain diff to apply partially: they stage as whole files.
+  if (!patch || change.side === "untracked" || change.previousPath || !supportsLineStaging(patch)) {
+    return { staging: undefined, toolbar: null };
+  }
   const current = selection?.patch === patch ? selection : null;
   const picked = current?.picked ?? EMPTY;
+  const pendingDiscard = confirmDiscard?.patch === patch ? confirmDiscard.picked : null;
   const run = (indexes: ReadonlySet<number>, mode: PatchMode) => {
-    const hunks = buildPartialPatch(patch, indexes, mode !== "stage");
-    if (hunks && !apply.isPending) apply.mutate({ hunks, mode });
+    try {
+      const hunks = buildPartialPatch(patch, indexes, mode !== "stage");
+      if (hunks && !apply.isPending) apply.mutate({ hunks, mode });
+    } catch (error) {
+      if (!(error instanceof EndOfFileSelectionError)) throw error;
+      notify({ tone: "error", title: t("staging.failed"), detail: t("staging.selectFileEnd") });
+    }
   };
   const forward: PatchMode = change.side === "staged" ? "unstage" : "stage";
 
@@ -77,25 +88,34 @@ export function useLineStaging(repoPath: string, change: SelectedChange, patch: 
     ),
   };
 
-  const toolbar = picked.size > 0 && (
-    <div className="flex items-center gap-1.5 font-sans">
-      <span className="text-[12px] text-muted-foreground">{t.plural("staging.selected", picked.size)}</span>
-      <Button size="xs" disabled={apply.isPending} onClick={() => run(picked, forward)}>
-        {t(forward === "stage" ? "staging.stageLines" : "staging.unstageLines")}
-      </Button>
-      {change.side === "unstaged" && (
-        <Button variant="outline" size="xs" disabled={apply.isPending} onClick={() => setConfirmDiscard(picked)}>
-          {t("staging.discardLines")}
-        </Button>
+  const toolbar = (
+    <>
+      {picked.size > 0 && (
+        <div className="flex items-center gap-1.5 font-sans">
+          <span className="text-[12px] text-muted-foreground">{t.plural("staging.selected", picked.size)}</span>
+          <Button size="xs" disabled={apply.isPending} onClick={() => run(picked, forward)}>
+            {t(forward === "stage" ? "staging.stageLines" : "staging.unstageLines")}
+          </Button>
+          {change.side === "unstaged" && (
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={apply.isPending}
+              onClick={() => setConfirmDiscard({ patch, picked })}
+            >
+              {t("staging.discardLines")}
+            </Button>
+          )}
+          <Button variant="ghost" size="xs" onClick={() => setSelection(null)}>
+            {t("staging.clear")}
+          </Button>
+        </div>
       )}
-      <Button variant="ghost" size="xs" onClick={() => setSelection(null)}>
-        {t("staging.clear")}
-      </Button>
-      <Dialog open={confirmDiscard !== null} onOpenChange={(open) => !open && setConfirmDiscard(null)}>
+      <Dialog open={pendingDiscard !== null} onOpenChange={(open) => !open && setConfirmDiscard(null)}>
         <DialogContent className="sm:max-w-[420px]">
           <DialogTitle className="text-[15px]">{t("staging.discardTitle")}</DialogTitle>
           <DialogDescription className="text-[13px]">
-            {t.plural("staging.discardBody", confirmDiscard?.size ?? 0)}
+            {t.plural("staging.discardBody", pendingDiscard?.size ?? 0)}
           </DialogDescription>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setConfirmDiscard(null)}>
@@ -104,7 +124,7 @@ export function useLineStaging(repoPath: string, change: SelectedChange, patch: 
             <Button
               variant="destructive"
               onClick={() => {
-                if (confirmDiscard) run(confirmDiscard, "discard");
+                if (pendingDiscard) run(pendingDiscard, "discard");
                 setConfirmDiscard(null);
               }}
             >
@@ -113,7 +133,7 @@ export function useLineStaging(repoPath: string, change: SelectedChange, patch: 
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
   return { staging, toolbar };
 }

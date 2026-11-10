@@ -21,7 +21,7 @@ import { useT, type MessageKey } from "@/i18n";
 import { gitBackend } from "@/lib/tauri-git";
 import { formatAge } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
-import { useAgentsStore, threadRuns, type AgentRun } from "@/stores/agents-store";
+import { useAgentsStore, threadRuns, unsavedFollowUps, type AgentRun } from "@/stores/agents-store";
 import { runOf, usePreviewStore } from "@/stores/preview-store";
 import { useUiStore, type CodeSelection } from "@/stores/ui-store";
 import { editorOf, useEditorStore } from "@/stores/editor-store";
@@ -37,6 +37,9 @@ import { RunSettingsBar } from "./RunSettingsBar";
 import { ClaudeIcon, CodexIcon } from "./agent-icons";
 import { ChatThread, CONTEXT_SEPARATOR } from "./ChatThread";
 import { startAgentRun, useInstalledAgents } from "./use-agents";
+
+/** Keeps prompts under the agents' 20,000-character limit. */
+const clipText = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…` : text);
 
 type Chip = { kind: "preview" | "pr" | "commit" | "issue" | "file"; icon: ReactNode; label: string; detail: string };
 
@@ -89,7 +92,7 @@ function useContextChips(repoPath: string): Chip[] {
       kind: "issue",
       icon: <LinearIcon className="size-3" />,
       label: issue.identifier,
-      detail: `The user is looking at the Linear issue ${issue.identifier} "${issue.title}" (status ${issue.state.name}, team ${issue.team.name}${issue.project ? `, project ${issue.project.name}` : ""}). Its branch name is ${issue.branchName}. Description:\n${issue.description ?? "(none)"}`,
+      detail: `The user is looking at the Linear issue ${issue.identifier} "${issue.title}" (status ${issue.state.name}, team ${issue.team.name}${issue.project ? `, project ${issue.project.name}` : ""}). Its branch name is ${issue.branchName}. Description:\n${clipText(issue.description ?? "(none)", 4_000)}`,
     });
   }
   return chips;
@@ -413,10 +416,7 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
       ].filter(Boolean);
       prompt = `${facts.join("\n")}${CONTEXT_SEPARATOR}${message}`;
     }
-    if (askSelection) {
-      prompt = `${prompt}\n\n${selectionPrompt(askSelection)}`;
-      useUiStore.getState().askAbout(null);
-    }
+    if (askSelection) prompt = `${prompt}\n\n${selectionPrompt(askSelection)}`;
     const id = await startAgentRun(
       repoPath,
       agent,
@@ -425,6 +425,8 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
       assistantThread ? { resume, thread: assistantThread } : undefined,
       images,
     );
+    // Kept when the run couldn't start (e.g. too long a prompt): the user can trim and resend.
+    if (id && askSelection) useUiStore.getState().askAbout(null);
     if (id && !assistantThread) setAssistantThread(id);
     setSending(false);
   };
@@ -465,7 +467,10 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
         <ChatThread
           compact
           placeholder={askSelection ? t("assistant.askCode") : assistantThread ? undefined : t("assistant.placeholder")}
-          steps={[...(sessionSteps.data ?? []), ...thread.flatMap((r) => r.steps)]}
+          steps={[
+            ...(sessionSteps.data ?? []),
+            ...unsavedFollowUps(sessionSteps.data ?? [], thread).flatMap((r) => r.steps),
+          ]}
           running={!!live || sending}
           agentLabel={agentName}
           settings={

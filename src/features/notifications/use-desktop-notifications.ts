@@ -23,7 +23,11 @@ export function useDesktopNotifications(repoPath: string) {
   const [since] = useState(Date.now);
   useEffect(() => {
     if (!items) return;
-    const ids = items.map((item) => `${item.key}@${item.version}`);
+    // Once per thing and reason: a pull request still waiting for review doesn't ring again on each push.
+    // An agent conversation rings for each run that ends in it.
+    const ids = items.map((item) =>
+      item.reason === "agentFinished" ? `${item.key}@${item.version}` : `${item.key}:${item.reason}`,
+    );
     const known = seen.current;
     // Sources (GitHub, Linear, agents) arrive one by one at launch: all of that is the starting point.
     if (Date.now() - since < WARM_UP) {

@@ -273,6 +273,8 @@ export const fr: Record<MessageKey, string> = {
   "changes.noFileHint": "Sélectionnez un fichier modifié pour le relire.",
   "staging.pickLine": "Sélectionner la ligne {line}",
   "staging.failed": "Impossible d'appliquer les lignes sélectionnées",
+  "staging.selectFileEnd":
+    "Ce fichier ne se termine pas par un saut de ligne : sélectionnez aussi ses dernières lignes (supprimées et ajoutées).",
   "staging.stageHunk": "Stager le hunk",
   "staging.unstageHunk": "Unstager le hunk",
   "staging.selected_one": "{count} ligne",

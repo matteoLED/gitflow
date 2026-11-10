@@ -14,4 +14,9 @@ export function selectionOf(view: EditorView, path: string): CodeSelection {
 export const whereOf = (s: CodeSelection) => `${s.path}:${s.from}${s.to > s.from ? `-${s.to}` : ""}`;
 
 /** What the agent reads after the user's message: where the code is, and the code. */
-export const selectionPrompt = (s: CodeSelection) => `About ${whereOf(s)}:\n\n\`\`\`\n${s.code}\n\`\`\``;
+const MAX_CODE = 12_000;
+export const selectionPrompt = (s: CodeSelection) => {
+  const code =
+    s.code.length > MAX_CODE ? `${s.code.slice(0, MAX_CODE)}\n… (truncated, read the file for the rest)` : s.code;
+  return `About ${whereOf(s)}:\n\n\`\`\`\n${code}\n\`\`\``;
+};

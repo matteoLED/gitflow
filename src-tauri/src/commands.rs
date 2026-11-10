@@ -1106,19 +1106,25 @@ pub async fn create_stash(
 pub async fn apply_stash(
     repo_path: String,
     index: u32,
+    hash: String,
     pop: bool,
 ) -> GitResult<crate::git::stash::StashOutcome> {
-    blocking(move || crate::git::stash::apply(&repo(&repo_path)?, index, pop)).await
+    blocking(move || crate::git::stash::apply(&repo(&repo_path)?, index, &hash, pop)).await
 }
 
 #[tauri::command]
-pub async fn drop_stash(repo_path: String, index: u32) -> GitResult<()> {
-    blocking(move || crate::git::stash::drop(&repo(&repo_path)?, index)).await
+pub async fn drop_stash(repo_path: String, index: u32, hash: String) -> GitResult<()> {
+    blocking(move || crate::git::stash::drop(&repo(&repo_path)?, index, &hash)).await
 }
 
 #[tauri::command]
-pub async fn branch_from_stash(repo_path: String, index: u32, name: String) -> GitResult<()> {
-    blocking(move || crate::git::stash::branch(&repo(&repo_path)?, index, &name)).await
+pub async fn branch_from_stash(
+    repo_path: String,
+    index: u32,
+    hash: String,
+    name: String,
+) -> GitResult<()> {
+    blocking(move || crate::git::stash::branch(&repo(&repo_path)?, index, &hash, &name)).await
 }
 
 #[tauri::command]

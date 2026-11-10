@@ -143,7 +143,7 @@ function useStashActions(repoPath: string, stash: StashEntry) {
   const notify = useNoticesStore((s) => s.notify);
   const apply = useGitAction<boolean>(repoPath, {
     run: async (pop) => {
-      const outcome = await gitBackend.applyStash(repoPath, stash.index, pop);
+      const outcome = await gitBackend.applyStash(repoPath, stash.index, stash.hash, pop);
       if (!outcome.conflicts) {
         notify({ tone: "success", title: t(pop ? "stash.popped" : "stash.applied") });
         return;
@@ -165,12 +165,12 @@ function useStashActions(repoPath: string, stash: StashEntry) {
     failure: t("stash.applyFailed"),
   });
   const drop = useGitAction(repoPath, {
-    run: () => gitBackend.dropStash(repoPath, stash.index),
+    run: () => gitBackend.dropStash(repoPath, stash.index, stash.hash),
     success: t("stash.dropped"),
     failure: t("stash.dropFailed"),
   });
   const branch = useGitAction<string>(repoPath, {
-    run: (name) => gitBackend.branchFromStash(repoPath, stash.index, name),
+    run: (name) => gitBackend.branchFromStash(repoPath, stash.index, stash.hash, name),
     success: t("stash.branched"),
     failure: t("stash.branchFailed"),
   });

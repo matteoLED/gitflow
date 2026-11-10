@@ -62,6 +62,12 @@ describe("keepInDiff", () => {
     expect(keepInDiff([{ ...comment, line: 40 }], lines)).toEqual([]);
   });
 
+  it("drops unchanged lines further than 3 lines from a change, as GitHub would", () => {
+    const body = Array.from({ length: 10 }, (_, i) => ` l${i + 1}`).join("\n");
+    const far = commentableLines(parseUnifiedDiff(`@@ -1,11 +1,11 @@\n-x\n+y\n${body}\n`));
+    expect([far.has("RIGHT:4"), far.has("RIGHT:5")]).toEqual([true, false]);
+  });
+
   it("drops files outside the diff", () => {
     expect(keepInDiff([{ ...comment, path: "src/b.ts" }], lines)).toEqual([]);
   });

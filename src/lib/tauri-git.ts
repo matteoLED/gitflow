@@ -249,6 +249,7 @@ export const gitBackend = {
   /** Refuses with `alreadyPushed` unless `confirmed` when the rewritten commits are on a remote. */
   interactiveRebase: (repoPath: string, from: string, steps: RebaseStep[], confirmed: boolean) =>
     invoke<RewriteOutcome>("interactive_rebase", { repoPath, from, steps, confirmed }),
+  /** Skips the commit a rebase, cherry-pick or revert stopped on (not a merge). */
   skipRebaseCommit: (repoPath: string) => invoke<null>("skip_rebase_commit", { repoPath }),
   /** Resolves whole files with one side, then marks them resolved. */
   resolveWithSide: (repoPath: string, paths: string[], theirs: boolean) =>
@@ -367,12 +368,15 @@ export const gitBackend = {
   listStashes: (repoPath: string) => invoke<StashEntry[]>("list_stashes", { repoPath }),
   createStash: (repoPath: string, message: string, includeUntracked: boolean) =>
     invoke<null>("create_stash", { repoPath, message, includeUntracked }),
-  /** Apply (or pop: drops it once applied cleanly). With conflicts the stash is kept. */
-  applyStash: (repoPath: string, index: number, pop: boolean) =>
-    invoke<StashOutcome>("apply_stash", { repoPath, index, pop }),
-  dropStash: (repoPath: string, index: number) => invoke<null>("drop_stash", { repoPath, index }),
-  branchFromStash: (repoPath: string, index: number, name: string) =>
-    invoke<null>("branch_from_stash", { repoPath, index, name }),
+  /**
+   * Apply (or pop: drops it once applied cleanly). With conflicts the stash is kept.
+   * Stash operations pass the listed hash too: the backend refuses if `stash@{index}` no longer points to it.
+   */
+  applyStash: (repoPath: string, index: number, hash: string, pop: boolean) =>
+    invoke<StashOutcome>("apply_stash", { repoPath, index, hash, pop }),
+  dropStash: (repoPath: string, index: number, hash: string) => invoke<null>("drop_stash", { repoPath, index, hash }),
+  branchFromStash: (repoPath: string, index: number, hash: string, name: string) =>
+    invoke<null>("branch_from_stash", { repoPath, index, hash, name }),
   lastUndo: (repoPath: string) => invoke<UndoAction | null>("last_undo", { repoPath }),
   undoLast: (repoPath: string, action: UndoAction) => invoke<null>("undo_last", { repoPath, action }),
 };

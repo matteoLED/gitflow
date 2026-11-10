@@ -62,7 +62,7 @@ export function OperationBar({ repoPath }: { repoPath: string }) {
             {t("conflicts.resolve")}
           </button>
         )}
-        {operation.kind === "rebase" && (
+        {operation.kind !== "merge" && (
           <button
             type="button"
             disabled={action.isPending}

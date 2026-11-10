@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPartialPatch, changeBlocks } from "./partial-patch";
+import { buildPartialPatch, changeBlocks, EndOfFileSelectionError, supportsLineStaging } from "./partial-patch";
 import { parseUnifiedDiff } from "./parse-unified-diff";
 
 const header = "diff --git a/f b/f\n--- a/f\n+++ b/f\n";
@@ -47,6 +47,28 @@ describe("buildPartialPatch", () => {
     expect(buildPartialPatch(patch, new Set([1]), false)).toBe("@@ -1,1 +1,2 @@\n a\n+b\n");
   });
 
+  describe("at the end of a file without a final newline", () => {
+    // HEAD "a", worktree "a\nb", neither ending with a newline: 0 "-a", 1 "+a", 2 "+b"
+    const NO_EOL = "\\ No newline at end of file";
+    const patch = `${header}@@ -1 +1,2 @@\n-a\n${NO_EOL}\n+a\n+b\n${NO_EOL}\n`;
+
+    it("refuses to stage the added last line without the old last line", () => {
+      expect(() => buildPartialPatch(patch, new Set([2]), false)).toThrow(EndOfFileSelectionError);
+    });
+
+    it("refuses to discard the old last line pair without the new last line", () => {
+      expect(() => buildPartialPatch(patch, new Set([0, 1]), true)).toThrow(EndOfFileSelectionError);
+    });
+
+    it("stages the old last line pair alone", () => {
+      expect(buildPartialPatch(patch, new Set([0, 1]), false)).toBe(`@@ -1,1 +1,1 @@\n-a\n${NO_EOL}\n+a\n`);
+    });
+
+    it("discards the added last line alone", () => {
+      expect(buildPartialPatch(patch, new Set([2]), true)).toBe(`@@ -1,1 +1,2 @@\n a\n+b\n${NO_EOL}\n`);
+    });
+  });
+
   it("numbers a new file's hunk from zero", () => {
     const patch = `${header}@@ -0,0 +1,2 @@\n+a\n+b\n`;
     expect(buildPartialPatch(patch, new Set([1]), true)).toBe("@@ -1,1 +1,2 @@\n a\n+b\n");
@@ -56,6 +78,20 @@ describe("buildPartialPatch", () => {
   it("uses the same indexes as parseUnifiedDiff", () => {
     const lines = parseUnifiedDiff(PATCH).flatMap((h) => h.lines);
     expect(lines[4]).toMatchObject({ kind: "added", content: "d" });
+  });
+});
+
+describe("supportsLineStaging", () => {
+  it("is off for an added file", () => {
+    expect(supportsLineStaging("diff --git a/f b/f\nnew file mode 100644\n--- /dev/null\n+++ b/f\n")).toBe(false);
+  });
+
+  it("is off for a deleted file", () => {
+    expect(supportsLineStaging("diff --git a/f b/f\ndeleted file mode 100644\n")).toBe(false);
+  });
+
+  it("is on for a modified file", () => {
+    expect(supportsLineStaging(PATCH)).toBe(true);
   });
 });
 

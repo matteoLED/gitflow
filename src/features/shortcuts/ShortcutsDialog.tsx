@@ -1,3 +1,5 @@
+import { isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useT, type MessageKey } from "@/i18n";
@@ -96,10 +98,16 @@ export function ShortcutsDialog() {
   const open = useUiStore((s) => s.shortcutsOpen);
   const setOpen = useUiStore((s) => s.setShortcutsOpen);
   useEffect(() => {
+    const toggle = () => setOpen(!useUiStore.getState().shortcutsOpen);
+    // In the app, ⌘/ is the Help menu's item: macOS matches it on any keyboard layout (⇧: on AZERTY).
+    if (isTauri()) {
+      const unlisten = listen<string>("menu", ({ payload }) => payload === "shortcuts" && toggle());
+      return () => void unlisten.then((stop) => stop());
+    }
     const onKey = (e: KeyboardEvent) => {
-      if (!e.metaKey || e.altKey || (e.key !== "/" && e.code !== "Slash")) return;
+      if (!e.metaKey || e.altKey || e.key !== "/") return;
       e.preventDefault();
-      setOpen(!useUiStore.getState().shortcutsOpen);
+      toggle();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

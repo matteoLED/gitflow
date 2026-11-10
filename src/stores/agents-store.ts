@@ -85,6 +85,15 @@ const placeholder = (id: string): AgentRun => ({
   thread: id,
 });
 
+/**
+ * Runs continued from a saved session whose turns its file doesn't hold yet. Resuming appends to that file,
+ * so once a run's turns are in it (the file's last step is newer than the run) they would show twice.
+ */
+export function unsavedFollowUps(fileSteps: readonly AgentStep[], runs: readonly AgentRun[]): AgentRun[] {
+  const last = fileSteps.reduce((latest, step) => (step.at && step.at > latest ? step.at : latest), "");
+  return runs.filter((run) => run.status === "running" || !last || run.startedAt > last);
+}
+
 /** Runs of a conversation, oldest first. */
 export const threadRuns = (runs: AgentRun[], thread: string) => runs.filter((r) => r.thread === thread).reverse();
 
@@ -107,10 +116,17 @@ export const useAgentsStore = create<AgentsState>()(
       setAssistantThread: (thread) => set({ assistantThread: thread }),
       addRun: (run) =>
         set(({ runs }) => {
-          // Events can arrive before startAgentRun resolves: keep that placeholder's steps, unless it is a
-          // finished run from an earlier launch with the same id (then start clean).
-          const existing = runs.find((r) => r.id === run.id && r.status === "running");
-          if (existing) return { runs: runs.map((r) => (r === existing ? { ...r, ...run } : r)) };
+          // Events can arrive before startAgentRun resolves, even the end of a CLI that failed at once: that
+          // placeholder (no repository yet) keeps its steps, status and session. A run already added is replaced.
+          const existing = runs.find((r) => r.id === run.id && r.repoPath === "");
+          if (existing)
+            return {
+              runs: runs.map((r) =>
+                r === existing
+                  ? { ...r, ...run, status: existing.status, steps: existing.steps, sessionId: existing.sessionId }
+                  : r,
+              ),
+            };
           runs = runs.filter((r) => r.id !== run.id);
           return { runs: [{ ...run, status: "running", steps: [], sessionId: null }, ...runs] };
         }),

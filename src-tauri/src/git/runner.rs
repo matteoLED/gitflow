@@ -51,7 +51,36 @@ pub fn git_text(repo: &Path, args: &[&str]) -> GitResult<String> {
 pub fn git_with(repo: &Path, args: &[&str], opts: &RunOptions) -> GitResult<Vec<u8>> {
     let mut cmd = git_command(repo, args);
     cmd.envs(opts.env.iter().copied());
-    execute(cmd, args, opts)
+    execute(cmd, args, opts).map_err(|err| match err.kind {
+        ErrorKind::Timeout => mention_index_lock(repo, err),
+        _ => err,
+    })
+}
+
+/// A long write (rebase, cherry-pick, revert: hooks and big trees) killed mid-way leaves a half-done state,
+/// so it gets the network timeout rather than the read one.
+pub fn git_long(repo: &Path, args: &[&str]) -> GitResult<Vec<u8>> {
+    let opts = RunOptions {
+        timeout: NETWORK_TIMEOUT,
+        ..RunOptions::default()
+    };
+    git_with(repo, args, &opts)
+}
+
+/// A git killed mid-write can leave its index lock behind. Deleting it is the user's call: it is only named.
+fn mention_index_lock(repo: &Path, mut err: GitError) -> GitError {
+    let args = ["rev-parse", "--git-path", "index.lock"];
+    let Ok(out) = execute(git_command(repo, &args), &args, &RunOptions::default()) else {
+        return err;
+    };
+    let lock = repo.join(String::from_utf8_lossy(&out).trim());
+    if lock.exists() {
+        err.message.push_str(&format!(
+            " Git's lock file {} is still there: once no git command is running, delete it to go on.",
+            lock.display()
+        ));
+    }
+    err
 }
 
 /// Runs `gh` (an absolute path found by the caller) in `repo`, using the user's own GitHub login.
@@ -203,4 +232,18 @@ fn command_failed(stderr: &str, code: i32) -> GitError {
 
 fn io_error(err: std::io::Error) -> GitError {
     GitError::new(ErrorKind::Io, err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::test_repo::TestRepo;
+
+    #[test]
+    fn a_timeout_names_a_leftover_index_lock() {
+        let repo = TestRepo::new();
+        repo.write(".git/index.lock", "");
+        let err = mention_index_lock(repo.path(), GitError::new(ErrorKind::Timeout, "slow."));
+        assert!(err.message.contains("index.lock"));
+    }
 }

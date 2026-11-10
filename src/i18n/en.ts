@@ -274,6 +274,7 @@ export const en = {
   "changes.noFileHint": "Select a changed file to review it.",
   "staging.pickLine": "Select line {line}",
   "staging.failed": "Couldn't apply the selected lines",
+  "staging.selectFileEnd": "This file doesn't end with a newline: select its last lines too (removed and added).",
   "staging.stageHunk": "Stage hunk",
   "staging.unstageHunk": "Unstage hunk",
   "staging.selected_one": "{count} line",

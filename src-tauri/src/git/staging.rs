@@ -9,8 +9,8 @@ use serde::Deserialize;
 
 use super::errors::{GitError, GitResult};
 use super::read::{head, working_tree};
-use super::runner::{RunOptions, git, git_with};
-use super::{validate, write};
+use super::runner::{RunOptions, git, git_text, git_with};
+use super::{conflicts, validate, write};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,20 +108,88 @@ fn check_groups(groups: &[CommitGroup], changed: &HashSet<String>) -> GitResult<
     Ok(())
 }
 
-/// For each group in order: empties the index (working tree untouched), stages its files, commits.
-/// Returns the new commit hashes. Files in no group stay uncommitted.
-pub fn commit_groups(repo: &Path, groups: &[CommitGroup]) -> GitResult<Vec<String>> {
-    check_groups(groups, &changed_paths(repo)?)?;
-    let mut hashes = Vec::new();
-    for group in groups {
-        if head(repo)?.unborn {
-            git(repo, &["read-tree", "--empty"])?;
-        } else {
-            git(repo, &["reset", "--quiet", "--mixed"])?; // index only, never the working tree
-        }
-        write::stage(repo, &group.files)?;
-        hashes.push(write::commit(repo, &group.message)?);
+/// `git diff --name-only` (with `--cached` for the index), renames as both of their paths.
+fn diff_names(repo: &Path, cached: bool) -> GitResult<HashSet<String>> {
+    let mut args = vec!["diff", "--name-only", "--no-renames", "-z"];
+    if cached {
+        args.push("--cached");
     }
+    let out = git(repo, &args)?;
+    Ok(String::from_utf8_lossy(&out)
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Index = HEAD (empty before the first commit), working tree untouched.
+fn reset_index(repo: &Path) -> GitResult<()> {
+    if head(repo)?.unborn {
+        git(repo, &["read-tree", "--empty"]).map(drop)
+    } else {
+        git(repo, &["read-tree", "HEAD"]).map(drop)
+    }
+}
+
+/// Index = HEAD, plus the staged state `saved` had for `paths`.
+fn restore_staged(repo: &Path, saved: &str, paths: &[&String]) -> GitResult<()> {
+    reset_index(repo)?;
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec!["reset", "--quiet", saved, "--"];
+    args.extend(paths.iter().map(|p| p.as_str()));
+    git(repo, &args).map(drop)
+}
+
+/// For each group in order: puts the index back to HEAD (working tree untouched), stages its files whole,
+/// commits. Returns the new commit hashes. Refuses during a merge, rebase, cherry-pick or revert, and when a
+/// grouped file is partly staged (staging it whole would lose that choice). Files in no group stay uncommitted
+/// with their staged state; on failure the index is put back the same way and the error lists the commits made.
+pub fn commit_groups(repo: &Path, groups: &[CommitGroup]) -> GitResult<Vec<String>> {
+    if conflicts::operation(repo)?.is_some() {
+        return Err(GitError::invalid(
+            "Finish or abort the operation in progress first.",
+        ));
+    }
+    check_groups(groups, &changed_paths(repo)?)?;
+    let staged = diff_names(repo, true)?;
+    let unstaged = diff_names(repo, false)?;
+    let grouped: HashSet<&String> = groups.iter().flat_map(|g| &g.files).collect();
+    if let Some(path) = grouped
+        .iter()
+        .find(|p| staged.contains(**p) && unstaged.contains(**p))
+    {
+        return Err(GitError::invalid(format!(
+            "“{path}” is partly staged: stage or unstage it entirely first."
+        )));
+    }
+    let saved = git_text(repo, &["write-tree"])?.trim().to_string();
+    let mut hashes = Vec::new();
+    let mut committed: HashSet<&String> = HashSet::new();
+    for group in groups {
+        let result = reset_index(repo)
+            .and_then(|()| write::stage(repo, &group.files))
+            .and_then(|()| write::commit(repo, &group.message));
+        let keep: Vec<&String> = staged.iter().filter(|p| !committed.contains(p)).collect();
+        match result {
+            Ok(hash) => {
+                hashes.push(hash);
+                committed.extend(&group.files);
+            }
+            Err(mut err) => {
+                let _ = restore_staged(repo, &saved, &keep);
+                if !hashes.is_empty() {
+                    let short: Vec<&str> = hashes.iter().map(|h| &h[..h.len().min(7)]).collect();
+                    err.message
+                        .push_str(&format!(" Commits already created: {}.", short.join(", ")));
+                }
+                return Err(err);
+            }
+        }
+    }
+    let keep: Vec<&String> = staged.iter().filter(|p| !committed.contains(p)).collect();
+    restore_staged(repo, &saved, &keep)?;
     Ok(hashes)
 }
 
@@ -201,6 +269,30 @@ mod tests {
         );
     }
 
+    // Patches built by partial-patch.ts for HEAD "a" -> worktree "a\nb", neither ending with a newline.
+    const NO_EOL: &str = "\\ No newline at end of file";
+
+    #[test]
+    fn stages_the_old_last_line_pair_of_a_file_without_final_newline() {
+        let repo = repo_with("a");
+        repo.write("a.txt", "a\nb");
+        let hunk = format!("@@ -1,1 +1,1 @@\n-a\n{NO_EOL}\n+a\n");
+        apply_hunks(repo.path(), "a.txt", &hunk, PatchMode::Stage).unwrap();
+        assert_eq!(repo.git(&["cat-file", "-s", ":a.txt"]), "2"); // "a\n"
+    }
+
+    #[test]
+    fn discards_the_added_last_line_of_a_file_without_final_newline() {
+        let repo = repo_with("a");
+        repo.write("a.txt", "a\nb");
+        let hunk = format!("@@ -1,1 +1,2 @@\n a\n+b\n{NO_EOL}\n");
+        apply_hunks(repo.path(), "a.txt", &hunk, PatchMode::Discard).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("a.txt")).unwrap(),
+            "a\n"
+        );
+    }
+
     #[test]
     fn handles_names_with_spaces() {
         let repo = TestRepo::new();
@@ -242,6 +334,72 @@ mod tests {
         assert_eq!(commit_groups(repo.path(), &groups).unwrap().len(), 2);
         assert_eq!(repo.git(&["log", "--format=%s", "-2"]), "fix: a\nfeat: b");
         assert_eq!(repo.git(&["status", "--porcelain"]), "?? c.txt");
+    }
+
+    fn group(message: &str, file: &str) -> CommitGroup {
+        CommitGroup {
+            message: message.into(),
+            files: vec![file.into()],
+        }
+    }
+
+    #[test]
+    fn keeps_files_outside_the_groups_staged() {
+        let repo = repo_with("one\n");
+        repo.write("a.txt", "two\n");
+        repo.write("b.txt", "staged\n");
+        repo.git(&["add", "b.txt"]);
+        commit_groups(repo.path(), &[group("fix: a", "a.txt")]).unwrap();
+        assert_eq!(repo.git(&["status", "--porcelain"]), "A  b.txt");
+    }
+
+    #[test]
+    fn refuses_a_partly_staged_file() {
+        let repo = repo_with("one\n");
+        repo.write("a.txt", "two\n");
+        repo.git(&["add", "a.txt"]);
+        repo.write("a.txt", "three\n");
+        assert!(commit_groups(repo.path(), &[group("fix: a", "a.txt")]).is_err());
+    }
+
+    #[test]
+    fn refuses_during_a_merge() {
+        let repo = repo_with("one\n");
+        repo.git(&["checkout", "-q", "-b", "side"]);
+        repo.write("a.txt", "side\n");
+        repo.commit_all("side");
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("a.txt", "main\n");
+        repo.commit_all("main");
+        let _ = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["merge", "-q", "side"])
+            .output();
+        repo.write("b.txt", "new\n");
+        assert!(commit_groups(repo.path(), &[group("x", "b.txt")]).is_err());
+    }
+
+    #[test]
+    fn a_failing_group_restores_the_index_and_names_the_commits_made() {
+        let repo = repo_with("one\n");
+        repo.write("a.txt", "two\n");
+        repo.write("b.txt", "staged\n");
+        repo.git(&["add", "b.txt"]);
+        repo.write(
+            "hook.sh",
+            "#!/bin/sh\ngrep -q fail \"$1\" && exit 1\nexit 0\n",
+        );
+        let hook = repo.path().join("hook.sh");
+        std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        std::fs::create_dir_all(repo.path().join("hooks")).unwrap();
+        std::fs::rename(&hook, repo.path().join("hooks/commit-msg")).unwrap();
+        repo.git(&["config", "core.hooksPath", "hooks"]);
+        let groups = [group("fix: a", "a.txt"), group("fail", "b.txt")];
+        let err = commit_groups(repo.path(), &groups).unwrap_err();
+        assert!(err.message.contains("Commits already created"));
+        assert_eq!(repo.git(&["status", "--porcelain"]), "A  b.txt\n?? hooks/");
     }
 
     #[test]

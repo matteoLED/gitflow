@@ -8,6 +8,7 @@ use serde::Serialize;
 use super::errors::{GitError, GitResult};
 use super::read::working_tree;
 use super::runner::{RunOptions, git, git_text, git_with};
+use super::validate;
 use super::write::checked_branch_name;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -99,8 +100,26 @@ fn split_subject(subject: &str) -> (Option<String>, String) {
     }
 }
 
-fn selector(index: u32) -> String {
-    format!("stash@{{{index}}}")
+/// `stash@{n}`, once checked to still be the stash the user picked: `refs/stash` is shared with agent
+/// worktrees and terminals, so the list may have shifted since it was shown.
+fn selector(repo: &Path, index: u32, hash: &str) -> GitResult<String> {
+    let hash = validate::object_id(hash)?;
+    let sel = format!("stash@{{{index}}}");
+    let current = git_text(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{sel}^{{commit}}"),
+        ],
+    );
+    match current {
+        Ok(current) if current.trim() == hash => Ok(sel),
+        _ => Err(GitError::invalid(
+            "The stash list changed — refresh it and try again.",
+        )),
+    }
 }
 
 pub fn push(repo: &Path, message: &str, include_untracked: bool) -> GitResult<()> {
@@ -126,8 +145,8 @@ pub fn push(repo: &Path, message: &str, include_untracked: bool) -> GitResult<()
 }
 
 /// Applies a stash, and drops it when `pop` and it applied cleanly.
-pub fn apply(repo: &Path, index: u32, pop: bool) -> GitResult<StashOutcome> {
-    let sel = selector(index);
+pub fn apply(repo: &Path, index: u32, hash: &str, pop: bool) -> GitResult<StashOutcome> {
+    let sel = selector(repo, index, hash)?;
     let verb = if pop { "pop" } else { "apply" };
     let conflicted =
         |repo: &Path| -> GitResult<bool> { Ok(working_tree(repo)?.iter().any(|e| e.conflicted)) };
@@ -142,20 +161,26 @@ pub fn apply(repo: &Path, index: u32, pop: bool) -> GitResult<StashOutcome> {
     }
 }
 
-pub fn drop(repo: &Path, index: u32) -> GitResult<()> {
-    git(repo, &["stash", "drop", "--quiet", &selector(index)]).map(|_| ())
+pub fn drop(repo: &Path, index: u32, hash: &str) -> GitResult<()> {
+    let sel = selector(repo, index, hash)?;
+    git(repo, &["stash", "drop", "--quiet", &sel]).map(|_| ())
 }
 
 /// Creates a branch at the commit the stash was taken on, switches to it and pops the stash there.
-pub fn branch(repo: &Path, index: u32, name: &str) -> GitResult<()> {
+pub fn branch(repo: &Path, index: u32, hash: &str, name: &str) -> GitResult<()> {
     let name = checked_branch_name(repo, name)?;
-    git(repo, &["stash", "branch", &name, &selector(index)]).map(|_| ())
+    let sel = selector(repo, index, hash)?;
+    git(repo, &["stash", "branch", &name, &sel]).map(|_| ())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::git::test_repo::TestRepo;
+
+    fn top(repo: &TestRepo) -> String {
+        repo.git(&["rev-parse", "stash@{0}"])
+    }
 
     fn repo_with_stash() -> TestRepo {
         let repo = TestRepo::new();
@@ -205,7 +230,7 @@ mod tests {
     #[test]
     fn pop_restores_changes_and_drops_the_stash() {
         let repo = repo_with_stash();
-        apply(repo.path(), 0, true).unwrap();
+        apply(repo.path(), 0, &top(&repo), true).unwrap();
         let restored = std::fs::read_to_string(repo.path().join("a.txt")).unwrap();
         assert_eq!(
             (restored.as_str(), list(repo.path()).unwrap().len()),
@@ -218,7 +243,7 @@ mod tests {
         let repo = repo_with_stash();
         repo.write("a.txt", "three\n");
         repo.commit_all("diverge");
-        let outcome = apply(repo.path(), 0, true).unwrap();
+        let outcome = apply(repo.path(), 0, &top(&repo), true).unwrap();
         assert_eq!(
             (outcome.conflicts, list(repo.path()).unwrap().len()),
             (true, 1)
@@ -228,14 +253,24 @@ mod tests {
     #[test]
     fn drop_removes_the_stash() {
         let repo = repo_with_stash();
-        drop(repo.path(), 0).unwrap();
+        drop(repo.path(), 0, &top(&repo)).unwrap();
         assert!(list(repo.path()).unwrap().is_empty());
     }
 
     #[test]
     fn branch_from_stash_switches_and_pops() {
         let repo = repo_with_stash();
-        branch(repo.path(), 0, "from-stash").unwrap();
+        branch(repo.path(), 0, &top(&repo), "from-stash").unwrap();
         assert_eq!(repo.git(&["branch", "--show-current"]), "from-stash");
+    }
+
+    #[test]
+    fn refuses_a_stash_index_that_shifted() {
+        let repo = repo_with_stash();
+        let picked = top(&repo);
+        repo.write("a.txt", "other\n");
+        push(repo.path(), "pushed meanwhile", false).unwrap();
+        assert!(drop(repo.path(), 0, &picked).is_err());
+        assert_eq!(list(repo.path()).unwrap().len(), 2);
     }
 }

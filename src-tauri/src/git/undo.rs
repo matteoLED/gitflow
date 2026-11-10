@@ -144,6 +144,9 @@ fn classify(subject: &str) -> Option<(UndoKind, String)> {
             .map(|rest| (kind, rest.to_string()))
     };
     prefixed("commit: ", UndoKind::Commit)
+        // A cherry-pick or revert adds one commit: undone like a commit, its changes kept staged.
+        .or_else(|| prefixed("cherry-pick: ", UndoKind::Commit))
+        .or_else(|| prefixed("revert: ", UndoKind::Commit))
         .or_else(|| prefixed("commit (amend): ", UndoKind::Amend))
         .or_else(|| prefixed("commit (merge): ", UndoKind::Merge))
         .or_else(|| {
@@ -309,6 +312,20 @@ mod tests {
 
     fn head_sha(repo: &TestRepo) -> String {
         repo.git(&["rev-parse", "HEAD"])
+    }
+
+    #[test]
+    fn a_cherry_pick_is_undone_like_a_commit() {
+        let (repo, first) = repo();
+        repo.git(&["checkout", "-q", "-b", "side"]);
+        repo.write("b.txt", "b\n");
+        let picked = repo.commit_all("b");
+        repo.git(&["checkout", "-q", "main"]);
+        repo.git(&["cherry-pick", &picked]);
+        assert_eq!(
+            (undo_last(&repo).kind, head_sha(&repo)),
+            (UndoKind::Commit, first)
+        );
     }
 
     #[test]

@@ -34,10 +34,28 @@ function parseHunks(patch: string): Hunk[] {
   return hunks;
 }
 
+/** Thrown when the selection would misplace a "\ No newline at end of file" marker (git would join two lines). */
+export class EndOfFileSelectionError extends Error {}
+
+/** A marker may only end the hunk, or follow a "-" line that only "+" lines come after (the old side's end). */
+function markersInPlace(lines: string[]): boolean {
+  return lines.every((line, i) => {
+    if (line[0] !== "\\" || i === lines.length - 1) return true;
+    const after = lines.slice(i + 1).filter((l) => l[0] !== "\\");
+    return lines[i - 1]?.[0] === "-" && after.every((l) => l[0] === "+");
+  });
+}
+
+/** New and deleted files apply as whole files: a partial patch can't add or remove the file itself. */
+export function supportsLineStaging(patch: string): boolean {
+  return !/^(new|deleted) file mode /m.test(patch);
+}
+
 /**
  * Hunks of a single-file unified diff reduced to the selected changed lines, for `git apply`.
  * `selected` holds indexes into the diff's lines as `parseUnifiedDiff` numbers them (context included).
  * `reverse` builds a patch meant for `git apply --reverse` (unstage, discard). Null when nothing is selected.
+ * Throws `EndOfFileSelectionError` when the end of a file without a final newline must be selected too.
  */
 export function buildPartialPatch(patch: string, selected: ReadonlySet<number>, reverse: boolean): string | null {
   let index = 0;
@@ -59,6 +77,7 @@ export function buildPartialPatch(patch: string, selected: ReadonlySet<number>, 
       if (line !== null) lines.push(line);
     }
     if (!picked) continue;
+    if (!markersInPlace(lines)) throw new EndOfFileSelectionError();
     out.push(header(hunk, lines, delta, reverse), ...lines);
     const added = lines.filter((l) => l[0] === "+").length;
     delta += added - lines.filter((l) => l[0] === "-").length;

@@ -1,3 +1,5 @@
+import { isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { OperationBar } from "@/features/conflicts/OperationBar";
 import { ShortcutsDialog } from "@/features/shortcuts/ShortcutsDialog";
@@ -352,9 +354,17 @@ function useAssistantShortcut() {
 }
 
 /** The views over a docked terminal (⌃`). */
+/** View › Reload (⌘R): the webview has no reload of its own in the app. */
+function onMenuReload() {
+  if (!isTauri()) return;
+  const unlisten = listen<string>("menu", ({ payload }) => payload === "reload" && location.reload());
+  return () => void unlisten.then((stop) => stop());
+}
+
 export function AppShell({ view }: { view: View }) {
   const repo = useWorkspaceStore((s) => s.repo);
   useEffect(watchForUpdates, []);
+  useEffect(onMenuReload, []);
   if (!repo) return <WelcomeScreen />;
   return <Workspace repo={repo} view={view} />;
 }

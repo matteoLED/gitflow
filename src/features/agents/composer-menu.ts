@@ -45,7 +45,9 @@ const sameMention = (a: Mention, b: Mention) => JSON.stringify(a) === JSON.strin
 /** A title as one token: its spaces become non-breaking ones, so it reads as typed but stays one chip. */
 function titleName(title: string): string {
   const short = title.length > MAX_TITLE ? `${title.slice(0, MAX_TITLE - 1).trimEnd()}…` : title;
+  // `@` would end the token (Dependabot's "Bump @types/node…"): dropped from the shown name.
   return short
+    .replace(/@/g, "")
     .trim()
     .replace(/[.,;:!?)\]]+$/, "")
     .replace(/[ \t\n]+/g, NBSP);

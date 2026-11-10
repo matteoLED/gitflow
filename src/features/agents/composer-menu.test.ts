@@ -58,6 +58,12 @@ describe("chips", () => {
     expect(mentionName(pr, {})).toBe("feat: add ics on app");
   });
 
+  it("keeps a title holding an @ as one chip", () => {
+    const bump = { ...pr, title: "Bump @types/node from 20 to 22" };
+    const name = mentionName(bump, {});
+    expect(segments(`@${name}`, { [name]: bump })[0].mention).toBe(bump);
+  });
+
   it("cuts the text around tagged items only", () => {
     expect(segments("see @app.ts and @x", mentions)).toEqual([
       { text: "see " },

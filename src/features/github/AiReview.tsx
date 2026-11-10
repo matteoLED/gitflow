@@ -59,9 +59,25 @@ async function diffLines(repoPath: string, head: string, base: string, paths: st
 }
 
 /** Runs the agent read-only on the PR diff, then turns its JSON answer into draft comments. */
+const MAX_COMMENTS = 100;
+const MAX_BODY = 65_000;
+
+/** Reviews being started: a double click before the run exists must not launch a second one. */
+const starting = new Set<string>();
+
 async function runAiReview(repoPath: string, pr: ActivePullRequest, base: string, agent: AgentKind) {
-  const t = getT();
   const key = reviewKeyOf(repoPath, pr.number);
+  if (starting.has(key)) return;
+  starting.add(key);
+  try {
+    await reviewWithAgent(repoPath, pr, base, agent, key);
+  } finally {
+    starting.delete(key);
+  }
+}
+
+async function reviewWithAgent(repoPath: string, pr: ActivePullRequest, base: string, agent: AgentKind, key: string) {
+  const t = getT();
   const store = useAiReviewStore.getState();
   const task = { kind: "ai-review-pull-request" as const, number: pr.number, base, head: pr.head };
   const runId = await startAgentRun(repoPath, agent, task, t("aiReview.runTitle", { number: pr.number }));
@@ -235,11 +251,12 @@ function usePostReview(repoPath: string, pr: ActivePullRequest, onPosted: () => 
         okLabel: t("aiReview.post"),
       });
       if (!confirmed) return false;
-      const comments = drafts.map((d) => ({
+      // GitHub takes at most 100 comments per review here, and the backend 65,536 characters per body.
+      const comments = drafts.slice(0, MAX_COMMENTS).map((d) => ({
         path: d.path,
         line: d.line,
         side: d.side,
-        body: `**${t(SEVERITY[d.severity].label)}** · ${d.body}`,
+        body: `**${t(SEVERITY[d.severity].label)}** · ${d.body}`.slice(0, MAX_BODY),
       }));
       await gitBackend.submitAiReview(repoPath, pr.number, head, summary, comments);
       return true;
