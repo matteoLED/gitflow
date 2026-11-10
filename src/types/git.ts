@@ -274,8 +274,10 @@ export type AgentInfo = { kind: AgentKind; installed: boolean; version: string |
 
 export type AgentTask =
   | { kind: "review-pull-request"; number: number; base: string; head: string }
+  | { kind: "ai-review-pull-request"; number: number; base: string; head: string }
   | { kind: "explain-commit"; hash: string }
   | { kind: "commit-message" }
+  | { kind: "split-commits" }
   | { kind: "custom"; prompt: string };
 
 export type StepKind = "info" | "prompt" | "thinking" | "message" | "tool" | "tool-result" | "result" | "error";
@@ -517,3 +519,58 @@ export type FileCommit = {
 };
 
 export type CommitPullRequest = { number: number; title: string; url: string };
+
+/** How `git apply` uses a partial patch: onto the index, off the index, or off the working tree. */
+export type PatchMode = "stage" | "unstage" | "discard";
+/** One commit of a split: its message and the files it takes. */
+export type CommitGroup = { message: string; files: string[] };
+
+/** History search, run by `git log` (`--grep`, `--author`, `-S`/`-G`, `--since`/`--until`, `-- <path>`). */
+export type HistorySearch = {
+  message?: string;
+  author?: string;
+  path?: string;
+  content?: string;
+  /** Message, author and content are regular expressions instead of plain text. */
+  regex?: boolean;
+  since?: string;
+  until?: string;
+};
+
+export type SubmoduleState = "upToDate" | "uninitialized" | "outOfDate" | "modified" | "conflicted";
+
+export type Submodule = {
+  path: string;
+  recorded: string;
+  checkedOut: string | null;
+  state: SubmoduleState;
+};
+
+export type LfsStatus = { patterns: string[] };
+
+/** A stash with what the stash list shows; `base` is the commit it was taken on (its diff base). */
+export type StashEntry = {
+  index: number;
+  hash: string;
+  base: string;
+  /** Commit holding the untracked files it saved, if any. */
+  untracked: string | null;
+  branch: string | null;
+  message: string;
+  createdAt: string;
+  fileCount: number;
+};
+
+export type StashOutcome = { conflicts: boolean };
+
+export type UndoKind = "commit" | "amend" | "merge" | "rebase" | "pull" | "reset" | "checkout" | "branchDelete";
+
+/** The last undoable operation; sent back as is to undo it (the backend checks nothing moved since). */
+export type UndoAction = {
+  kind: UndoKind;
+  label: string;
+  branch: string | null;
+  target: string;
+  current: string;
+  at: number;
+};

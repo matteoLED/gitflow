@@ -72,7 +72,7 @@ function BlameCard({ repoPath, card, onClose }: { repoPath: string; card: Card; 
       <PopoverContent
         align="start"
         onOpenAutoFocus={(e) => e.preventDefault()}
-        className="flex w-80 flex-col gap-2 p-3 font-sans text-[12px]"
+        className="flex w-80 flex-col gap-2 p-3 font-mono text-[12px]"
       >
         {uncommitted ? (
           <p className="text-muted-foreground">{t("blame.notCommitted")}</p>

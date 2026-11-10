@@ -8,7 +8,7 @@ use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, GitError, GitResult};
-use super::runner::{NETWORK_TIMEOUT, RunOptions, gh, git, git_text, git_with};
+use super::runner::{NETWORK_TIMEOUT, RunOptions, gh, gh_with_input, git, git_text, git_with};
 use super::validate;
 
 const AVATAR_HOST: &str = "https://avatars.githubusercontent.com";
@@ -732,6 +732,69 @@ pub fn submit_review(repo: &Path, number: u32, event: ReviewEvent, body: &str) -
     gh(&require_gh()?, repo, &args).map(|_| ())
 }
 
+/// One line comment of a review posted at once (an AI review the user kept and confirmed).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DraftComment {
+    pub path: String,
+    pub line: u32,
+    pub side: String,
+    pub body: String,
+}
+
+const MAX_REVIEW_COMMENTS: usize = 100;
+
+/// The `POST pulls/{n}/reviews` payload: one COMMENT review carrying every line comment.
+fn review_payload(
+    commit: &str,
+    body: &str,
+    comments: &[DraftComment],
+) -> GitResult<serde_json::Value> {
+    let commit = validate::object_id(commit)?;
+    let body = review_body(body)?;
+    if comments.len() > MAX_REVIEW_COMMENTS {
+        return Err(GitError::invalid("Too many comments for one review."));
+    }
+    let comments = comments
+        .iter()
+        .map(|c| {
+            if c.line == 0 || (c.side != "LEFT" && c.side != "RIGHT") {
+                return Err(GitError::invalid("Invalid diff line."));
+            }
+            Ok(serde_json::json!({
+                "path": validate::relative_path(&c.path)?,
+                "line": c.line,
+                "side": c.side,
+                "body": review_body(&c.body)?,
+            }))
+        })
+        .collect::<GitResult<Vec<_>>>()?;
+    Ok(serde_json::json!({
+        "commit_id": commit,
+        "event": "COMMENT",
+        "body": body,
+        "comments": comments,
+    }))
+}
+
+/// Posts one review (event COMMENT) with its line comments. The JSON goes through stdin: no shell, no `@file`.
+pub fn submit_review_with_comments(
+    repo: &Path,
+    number: u32,
+    commit: &str,
+    body: &str,
+    comments: &[DraftComment],
+) -> GitResult<()> {
+    let payload = review_payload(commit, body, comments)?.to_string();
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/reviews");
+    gh_with_input(
+        &require_gh()?,
+        repo,
+        &["api", "--method", "POST", &endpoint, "--input", "-"],
+        payload.as_bytes(),
+    )
+    .map(|_| ())
+}
+
 pub fn github_user(repo: &Path) -> GitResult<GithubUser> {
     let jq = "{login: .login, name: .name, avatarUrl: .avatar_url}";
     let out = gh(
@@ -881,6 +944,35 @@ mod tests {
         assert!(open_in_browser("http://example.com/").is_err());
         assert!(open_in_browser("https://github.com/a b").is_err());
         assert!(open_in_browser("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn review_payloads_validate_every_comment() {
+        let ok = DraftComment {
+            path: "src/a.ts".into(),
+            line: 3,
+            side: "RIGHT".into(),
+            body: "Off by one".into(),
+        };
+        let payload =
+            review_payload(&"a".repeat(40), "Summary", std::slice::from_ref(&ok)).unwrap();
+        assert_eq!(
+            (
+                payload["event"].as_str(),
+                payload["comments"][0]["line"].as_u64()
+            ),
+            (Some("COMMENT"), Some(3))
+        );
+        let escape = DraftComment {
+            path: "../etc/passwd".into(),
+            ..ok.clone()
+        };
+        assert!(review_payload(&"a".repeat(40), "Summary", &[escape]).is_err());
+        let side = DraftComment {
+            side: "MIDDLE".into(),
+            ..ok
+        };
+        assert!(review_payload(&"a".repeat(40), "Summary", &[side]).is_err());
     }
 
     #[test]

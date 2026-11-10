@@ -5,6 +5,7 @@ import { App, createQueryClient } from "./App";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useNoticesStore } from "@/stores/notices-store";
 import { useUiStore } from "@/stores/ui-store";
+import { useHistorySearchStore } from "@/features/history/history-search-store";
 import { gitBackend } from "@/lib/tauri-git";
 import type { ChangedFile, CommitSummary, RefsSnapshot, WorkingTreeEntry } from "@/types/git";
 
@@ -144,13 +145,19 @@ describe("history view", () => {
     expect(useWorkspaceStore.getState().selectedCommitHash).toBe(COMMITS[1].hash);
   });
 
-  it("shows an empty state when the filter matches nothing", async () => {
+  it("searches the whole history through git log", async () => {
     renderApp();
     await within(await commitList()).findByText("Commit number 1");
     // Focus directly: with 0×0 jsdom rects, the panel group treats any click as a separator drag.
-    screen.getByRole("searchbox", { name: "Filter commits" }).focus();
-    await userEvent.keyboard("zzz-no-match");
-    expect(screen.getByText("No matching commits")).toBeInTheDocument();
+    screen.getByRole("searchbox", { name: "Search history" }).focus();
+    await userEvent.keyboard("author:mat fix");
+    await waitFor(() =>
+      expect(backend.listCommits).toHaveBeenLastCalledWith(
+        REPO.path,
+        expect.objectContaining({ filters: expect.objectContaining({ author: "mat", message: "fix" }) }),
+      ),
+    );
+    useHistorySearchStore.getState().setQuery("", true);
   });
 
   it("asks for the history of a branch when it is clicked", async () => {

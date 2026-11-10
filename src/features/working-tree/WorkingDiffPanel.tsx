@@ -6,6 +6,7 @@ import { useWorkspaceStore, type SelectedChange } from "@/stores/workspace-store
 import { DiffBody, DiffCard } from "@/features/diff/DiffCard";
 import { ViewOptions } from "@/features/diff/ViewOptions";
 import { groupChanges } from "./group-changes";
+import { useLineStaging } from "./line-staging";
 import { useT, type MessageKey } from "@/i18n";
 
 const SIDE_LABEL = {
@@ -18,6 +19,7 @@ function WorkingDiff({ repoPath, change }: { repoPath: string; change: SelectedC
   const t = useT();
   const diff = useWorkingDiff(repoPath, change.path, change.previousPath, change.side);
   const [open, setOpen] = useState(true);
+  const { staging, toolbar } = useLineStaging(repoPath, change, diff.data?.binary ? undefined : diff.data?.patch);
   const status = change.side === "untracked" ? "untracked" : change.previousPath ? "renamed" : "modified";
   return (
     <>
@@ -25,13 +27,14 @@ function WorkingDiff({ repoPath, change }: { repoPath: string; change: SelectedC
         <p data-tauri-drag-region className="text-xs text-muted-foreground">
           {t(SIDE_LABEL[change.side])}
         </p>
-        <span className="ml-auto">
+        <span className="ml-auto flex items-center gap-2">
+          {toolbar}
           <ViewOptions />
         </span>
       </PanelHeader>
       <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pt-1 pb-3">
         <DiffCard file={{ ...change, status }} open={open} onToggle={() => setOpen(!open)}>
-          <DiffBody path={change.path} diff={diff.data} error={diff.error} loading={diff.isPending} />
+          <DiffBody path={change.path} diff={diff.data} error={diff.error} loading={diff.isPending} staging={staging} />
         </DiffCard>
       </div>
     </>

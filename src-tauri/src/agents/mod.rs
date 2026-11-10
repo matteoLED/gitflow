@@ -117,10 +117,18 @@ pub enum AgentTask {
         base: String,
         head: String,
     },
+    /// Same review, as strict JSON line comments the user edits before posting them on GitHub.
+    AiReviewPullRequest {
+        number: u32,
+        base: String,
+        head: String,
+    },
     ExplainCommit {
         hash: String,
     },
     CommitMessage,
+    /// Groups the pending changes into commits, as strict JSON the user edits before committing.
+    SplitCommits,
     Custom {
         prompt: String,
     },
@@ -207,6 +215,23 @@ fn build_prompt(task: &AgentTask, locale: &str, mode: Mode) -> GitResult<String>
                  Skip praise. {READ_ONLY} {lang}"
             )
         }
+        AgentTask::AiReviewPullRequest { number, base, head } => {
+            let (base, head) = (validate::object_id(base)?, validate::object_id(head)?);
+            format!(
+                "Review pull request #{number} of this repository. Its full diff is `git diff {base}...{head}`; \
+                 read the changed files for context when needed. Report only real problems: bugs, security, \
+                 regressions, risky changes, missing tests, and questions worth asking. Skip praise and style \
+                 nits a linter would catch.\n\
+                 Output ONLY one JSON object, no prose and no code fence, with exactly this shape:\n\
+                 {{\"summary\": string, \"comments\": [{{\"path\": string, \"line\": integer, \
+                 \"side\": \"RIGHT\" | \"LEFT\", \"severity\": \"bug\" | \"risk\" | \"nit\" | \"question\", \
+                 \"body\": string}}]}}\n\
+                 `summary` is 2-3 lines of Markdown. `path` is relative to the repository root. `line` must be a \
+                 line shown in that diff: its number in the new file with side RIGHT (added or unchanged lines), \
+                 or in the old file with side LEFT (removed lines). `body` is Markdown with a concrete fix. \
+                 At most 30 comments. {READ_ONLY} {lang}"
+            )
+        }
         AgentTask::ExplainCommit { hash } => {
             let hash = validate::object_id(hash)?;
             format!(
@@ -218,6 +243,14 @@ fn build_prompt(task: &AgentTask, locale: &str, mode: Mode) -> GitResult<String>
             "Write a commit message for the staged changes (`git diff --cached`). Conventional Commits, English, \
              imperative mood, subject under 72 characters, optional short body explaining why. Output only the \
              message: no code fences, no commentary. {READ_ONLY}"
+        ),
+        AgentTask::SplitCommits => format!(
+            "Group the pending changes of this repository (below) into a few focused commits, in the order they \
+             should be made. Output ONLY a JSON array, no prose and no code fence, with this shape:\n\
+             [{{\"message\": string, \"files\": [string]}}]\n\
+             `message` is a Conventional Commits message in English (imperative subject under 72 characters). \
+             `files` holds paths from the changed-paths list only; a path appears in at most one commit. \
+             {READ_ONLY}"
         ),
         AgentTask::Custom { prompt } => {
             let prompt = prompt.trim();
@@ -399,6 +432,10 @@ pub fn start(
         ));
     }
     let mut prompt = build_prompt(task, locale, settings.mode)?;
+    if matches!(task, AgentTask::SplitCommits) {
+        prompt.push_str("\n\n");
+        prompt.push_str(&crate::git::staging::change_summary(repo)?);
+    }
     // Claude Code reads images from disk with its Read tool; Codex also gets them through --image.
     if !settings.images.is_empty() {
         prompt.push_str("\n\nImages attached by the user (look at them first):");
@@ -583,6 +620,19 @@ mod tests {
             hash: "HEAD; rm -rf /".into(),
         };
         assert!(build_prompt(&task, "en", Mode::Plan).is_err());
+    }
+
+    #[test]
+    fn ai_reviews_ask_for_json_on_the_three_dot_diff() {
+        let task = AgentTask::AiReviewPullRequest {
+            number: 7,
+            base: "a".repeat(40),
+            head: "b".repeat(40),
+        };
+        let prompt = build_prompt(&task, "en", Mode::Plan).unwrap();
+        assert!(
+            prompt.contains("...") && prompt.contains("\"severity\"") && prompt.contains(READ_ONLY)
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import { useShallow } from "zustand/react/shallow";
+import { useHistorySearchStore } from "@/features/history/history-search-store";
 import { DataUnavailable } from "@/components/states";
 import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { FolderOpen, GitCommitHorizontal, GitPullRequest, List, ListTree, SearchX, Triangle } from "lucide-react";
@@ -300,7 +301,9 @@ export function ChangedFilesPanel({ repoPath }: { repoPath: string }) {
       historyRev: s.historyRev,
     })),
   );
-  const commit = useCommits(repoPath, historyRev)
+  // Same search as the commit list: a match deep in history is found in its results.
+  const search = useHistorySearchStore((s) => s.search);
+  const commit = useCommits(repoPath, historyRev, search)
     .data?.pages.flat()
     .find((c) => c.hash === hash);
   return (

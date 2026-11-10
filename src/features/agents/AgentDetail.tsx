@@ -7,6 +7,7 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  Columns2,
   ExternalLink,
   FileCode2,
   GitCommitHorizontal,
@@ -42,6 +43,8 @@ import { useComposerMenu } from "./ComposerMenu";
 import { RunSettingsBar } from "./RunSettingsBar";
 import { ChatThread } from "./ChatThread";
 import { startAgentRun, useInstalledAgents } from "./use-agents";
+import { ParallelBoard } from "./ParallelBoard";
+import { fanOutAgents, type FanOut } from "./parallel-board";
 import { AttachButton, AttachmentStrip, useAttachments } from "./attachments";
 
 const AGENTS: { kind: AgentKind; name: string; Icon: typeof ClaudeIcon; hint: MessageKey }[] = [
@@ -100,6 +103,44 @@ function AgentMenu() {
             </DropdownMenuItem>
           );
         })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+const FAN_OUTS: FanOut[] = ["off", "mixed", "twice"];
+
+/** "Run on N agents": the same prompt in two isolated worktrees, side by side on the Parallel agents board. */
+function FanOutMenu({ value, onChange }: { value: FanOut; onChange: (value: FanOut) => void }) {
+  const t = useT();
+  const preferredAgent = useAgentsStore((s) => s.preferredAgent);
+  const agent = AGENTS.find((a) => a.kind === preferredAgent)?.name ?? "";
+  const labels: Record<FanOut, string> = {
+    off: t("run.parallelOff"),
+    mixed: t("run.parallelMixed"),
+    twice: t("run.parallelTwice", { agent }),
+  };
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label={t("run.parallelTitle")}
+        title={t("run.parallelHint")}
+        className={cn(
+          "flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-[12px] text-muted-foreground outline-none hover:bg-white/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-white/10",
+          value !== "off" && "text-primary",
+        )}
+      >
+        <Columns2 aria-hidden className="size-3.5" />
+        {labels[value]}
+        <ChevronDown aria-hidden className="size-3 opacity-70" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="start" className="min-w-48 rounded-xl p-1">
+        {FAN_OUTS.map((option) => (
+          <DropdownMenuItem key={option} onSelect={() => onChange(option)} className="gap-2 px-2 py-1.5 text-[12.5px]">
+            <Check aria-hidden className={cn("size-3.5", option !== value && "invisible")} />
+            {labels[option]}
+          </DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -170,11 +211,21 @@ function Composer({ repoPath }: { repoPath: string }) {
   } = useComposerMenu(repoPath, prompt, setPrompt, NEW_TASK_FIELD);
   const [starting, setStarting] = useState(false);
   const attachments = useAttachments();
+  const [fanOut, setFanOut] = useState<FanOut>("off");
   const run = async (task: AgentTask, title: string, images: string[] = []) => {
     setStarting(true);
-    const id = await startAgentRun(repoPath, preferredAgent, task, title, undefined, images);
+    // Only free-form requests fan out: ready-made tasks just read.
+    const agents = task.kind === "custom" ? fanOutAgents(fanOut, preferredAgent) : [preferredAgent];
+    const group = agents.length > 1 ? crypto.randomUUID() : undefined;
+    let first: string | null = null;
+    for (const agent of agents) {
+      // One after the other: concurrent `git worktree add` would contend for the repository's locks.
+      const id = await startAgentRun(repoPath, agent, task, title, undefined, images, group);
+      first ??= id;
+    }
     setStarting(false);
-    if (id) select({ type: "run", id });
+    if (group) select({ type: "board" });
+    else if (first) select({ type: "run", id: first });
   };
   const runCustom = () => {
     const images = attachments.items.map((a) => a.path);
@@ -223,6 +274,7 @@ function Composer({ repoPath }: { repoPath: string }) {
             <AttachButton attachments={attachments} />
             <AgentMenu />
             <RunSettingsBar agent={preferredAgent} canIsolate />
+            <FanOutMenu value={fanOut} onChange={setFanOut} />
             <Button
               size="icon-sm"
               aria-label={t("agents.run")}
@@ -484,6 +536,8 @@ export function AgentDetail({ repoPath }: { repoPath: string }) {
         <AgentDefinitionEditor key="new" repoPath={repoPath} target={null} />
       ) : selection.type === "usage" ? (
         <UsageView repoPath={repoPath} />
+      ) : selection.type === "board" ? (
+        <ParallelBoard repoPath={repoPath} />
       ) : selection.type === "workflow" ? (
         <WorkflowView key={selection.id} repoPath={repoPath} id={selection.id} />
       ) : (

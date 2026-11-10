@@ -33,6 +33,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Markdown } from "@/features/agents/Markdown";
 import { startAgentWithNotice } from "@/features/agents/use-agents";
+import { AiLineDrafts } from "@/features/github/AiReview";
 import { openInEditor } from "@/stores/editor-store";
 import { CreateIssueDialog } from "@/features/linear/CreateIssue";
 import { useT } from "@/i18n";
@@ -587,7 +588,16 @@ export function LineThreads({ line }: { line: DiffLine }) {
   const key = keyOf(target);
   const threads = ctx.threads.get(key) ?? [];
   const composing = ctx.composer === key;
-  if (threads.length === 0 && !composing) return null;
+  const drafts = (standalone: boolean) => (
+    <AiLineDrafts
+      repoPath={ctx.repoPath}
+      number={ctx.pr.number}
+      path={ctx.path}
+      target={target}
+      standalone={standalone}
+    />
+  );
+  if (threads.length === 0 && !composing) return drafts(true);
   const send = async (body: string, toAgent: boolean) => {
     if (toAgent) {
       const where = `${ctx.path}:${target.line}${target.side === "LEFT" ? " (removed line)" : ""}`;
@@ -608,6 +618,7 @@ export function LineThreads({ line }: { line: DiffLine }) {
       {threads.map((thread) => (
         <Thread key={thread.id} thread={thread} ctx={ctx} />
       ))}
+      {drafts(false)}
       {composing && (
         <div className={BOX}>
           <Composer

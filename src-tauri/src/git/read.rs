@@ -57,12 +57,81 @@ pub fn list_refs(repo: &Path) -> GitResult<RefsSnapshot> {
     Ok(snapshot)
 }
 
-/// History display filters, applied by git itself so pagination stays correct.
-#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// History display filters and search, applied by git itself so pagination stays correct.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct LogFilters {
     pub first_parent: bool,
     pub no_merges: bool,
+    /// `--grep`: commit message.
+    pub message: Option<String>,
+    /// `--author`: name or email.
+    pub author: Option<String>,
+    /// Pathspec after `--` (with `--follow` when it names a single file).
+    pub path: Option<String>,
+    /// Pickaxe: `-S` (added/removed string), or `-G` (regex on changed lines) when `regex`.
+    pub content: Option<String>,
+    /// Treats message/author/content as regular expressions instead of plain text.
+    pub regex: bool,
+    pub since: Option<String>,
+    pub until: Option<String>,
+}
+
+/// A trimmed, non-empty search value; each one becomes a single argv entry, never shell text.
+fn search_term(value: &Option<String>) -> GitResult<Option<&str>> {
+    let Some(value) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    if value.len() > 500 || value.chars().any(char::is_control) {
+        return Err(GitError::invalid("Invalid search text."));
+    }
+    Ok(Some(value))
+}
+
+impl LogFilters {
+    /// Options for `git log` (before the revision), plus the pathspec (after `--`).
+    fn search_args(&self, repo: &Path) -> GitResult<(Vec<String>, Option<String>)> {
+        let mut args = Vec::new();
+        let (message, author) = (search_term(&self.message)?, search_term(&self.author)?);
+        if message.is_some() || author.is_some() {
+            args.push("--regexp-ignore-case".to_string());
+            args.push(
+                if self.regex {
+                    "--extended-regexp"
+                } else {
+                    "--fixed-strings"
+                }
+                .to_string(),
+            );
+        }
+        if let Some(text) = message {
+            args.push(format!("--grep={text}"));
+        }
+        if let Some(text) = author {
+            args.push(format!("--author={text}"));
+        }
+        if let Some(text) = search_term(&self.content)? {
+            args.push(format!("{}{text}", if self.regex { "-G" } else { "-S" }));
+        }
+        if let Some(date) = search_term(&self.since)? {
+            args.push(format!("--since={date}"));
+        }
+        if let Some(date) = search_term(&self.until)? {
+            // A bare day means "through the end of that day", not its first second.
+            let whole_day = date.len() == 10 && date.bytes().filter(|b| *b == b'-').count() == 2;
+            let end = if whole_day { " 23:59:59" } else { "" };
+            args.push(format!("--until={date}{end}"));
+        }
+        let path = match search_term(&self.path)? {
+            Some(path) => Some(validate::relative_path(path.trim_end_matches('/'))?.to_string()),
+            None => None,
+        };
+        // `--follow` only works with one file; for folders it would silently show nothing useful.
+        if path.as_ref().is_some_and(|p| repo.join(p).is_file()) {
+            args.push("--follow".to_string());
+        }
+        Ok((args, path))
+    }
 }
 
 pub fn list_commits(
@@ -93,7 +162,10 @@ pub fn list_commits(
     if filters.no_merges {
         args.push("--no-merges");
     }
+    let (search, path) = filters.search_args(repo)?;
+    args.extend(search.iter().map(String::as_str));
     args.extend(["--end-of-options", rev, "--"]);
+    args.extend(path.as_deref());
     Ok(parser::parse_log(&git(repo, &args)?))
 }
 
@@ -416,6 +488,64 @@ mod tests {
             .map(|c| c.hash)
             .collect();
         assert_eq!(hashes, vec![second, first]);
+    }
+
+    fn search(repo: &TestRepo, filters: LogFilters) -> Vec<String> {
+        list_commits(repo.path(), None, 0, 50, filters)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.subject)
+            .collect()
+    }
+
+    #[test]
+    fn search_by_message_is_case_insensitive_plain_text() {
+        let (repo, _, _) = repo_with_history();
+        let filters = LogFilters {
+            message: Some("SEC(".into()), // not a valid regex: taken literally
+            ..LogFilters::default()
+        };
+        assert!(search(&repo, filters).is_empty());
+    }
+
+    #[test]
+    fn search_by_message_finds_matching_commits() {
+        let (repo, _, _) = repo_with_history();
+        let filters = LogFilters {
+            message: Some("initial".into()),
+            ..LogFilters::default()
+        };
+        assert_eq!(search(&repo, filters), vec!["Initial commit"]);
+    }
+
+    #[test]
+    fn search_by_content_uses_the_pickaxe() {
+        let (repo, _, _) = repo_with_history();
+        let filters = LogFilters {
+            content: Some("three".into()),
+            ..LogFilters::default()
+        };
+        assert_eq!(search(&repo, filters), vec!["Second"]);
+    }
+
+    #[test]
+    fn search_by_file_follows_renames() {
+        let (repo, _, _) = repo_with_history();
+        let filters = LogFilters {
+            path: Some("my logo é.png".into()),
+            ..LogFilters::default()
+        };
+        assert_eq!(search(&repo, filters), vec!["Second", "Initial commit"]);
+    }
+
+    #[test]
+    fn search_rejects_paths_outside_the_repo() {
+        let (repo, _, _) = repo_with_history();
+        let filters = LogFilters {
+            path: Some("../x".into()),
+            ..LogFilters::default()
+        };
+        assert!(list_commits(repo.path(), None, 0, 50, filters).is_err());
     }
 
     #[test]

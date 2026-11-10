@@ -22,6 +22,7 @@ import { RepoSwitcher } from "@/features/repositories/RepoSwitcher";
 import { useCheckout } from "./use-checkout";
 import { BranchSwitcher } from "./BranchSwitcher";
 import { useT } from "@/i18n";
+import { useStashStore } from "@/features/stash/stash-store";
 
 const ROW =
   "flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] outline-none transition-colors hover:bg-white/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
@@ -268,9 +269,14 @@ export function BranchesList({ repo, query }: { repo: RepositoryInfo; query: str
         );
       case "stash":
         return (
-          <p title={row.message} className="truncate px-2 py-1 text-[12px] text-sidebar-foreground">
-            {row.message}
-          </p>
+          <button
+            type="button"
+            title={row.message}
+            onClick={() => useStashStore.getState().show()}
+            className={cn(ROW, "text-sidebar-foreground")}
+          >
+            <span className="truncate">{row.message}</span>
+          </button>
         );
       case "empty":
         return <p className="px-2 py-1 text-[12px] text-muted-foreground">{t(EMPTY_LABEL[row.reason])}</p>;

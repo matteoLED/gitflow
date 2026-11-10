@@ -4,6 +4,10 @@ import { Sparkles, SquareSlash } from "lucide-react";
 import { FileIcon } from "@/components/file-icon";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { fuzzyFilter } from "@/features/editor/fuzzy";
+import { StateIcon } from "@/features/github/PullRequestList";
+import { StateDot } from "@/features/linear/LinearList";
+import { useWorkspaceIssues } from "@/features/linear/linear-queries";
+import { usePullRequests } from "@/lib/git-queries";
 import { useT } from "@/i18n";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
@@ -15,14 +19,33 @@ import {
   segments,
   triggerAt,
   matchCommands,
+  type Mention,
   type Mentions,
 } from "./composer-menu";
 
-type Item = { key: string; value: string; node: ReactNode };
+type Item = { key: string; value: string; node: ReactNode; mention?: Mention };
+
+/** A tagged item's icon: the file's, the pull request's state, the issue's status. */
+function MentionIcon({ mention, className }: { mention: Mention; className?: string }) {
+  if (mention.kind === "file") return <FileIcon path={mention.path} className={cn("size-3.5", className)} />;
+  if (mention.kind === "pr")
+    return (
+      <span className={cn("grid size-3.5 place-items-center", className)}>
+        <StateIcon pr={mention} />
+      </span>
+    );
+  return (
+    <span className={cn("grid size-3.5 place-items-center", className)}>
+      <StateDot state={{ type: mention.stateType, color: mention.color, name: "" }} />
+    </span>
+  );
+}
+
+const SHOWN = { pr: 6, issue: 6, file: 30 };
 
 /**
  * Completion in the agent composer, as in Claude Code: `/` opening the message lists custom commands and
- * skills, `@` anywhere lists the repository's files. ↑↓ to pick, ↵ or ⇥ to insert, esc to dismiss.
+ * skills, `@` anywhere lists pull requests, Linear issues and the repository's files. ↑↓ to pick, ↵ or ⇥ to insert, esc to dismiss.
  * The list floats in a popover anchored to the composer, so it flips and shrinks to stay on screen.
  */
 export function useComposerMenu(
@@ -53,6 +76,39 @@ export function useComposerMenu(
     enabled: !!repoPath && trigger?.kind === "mention",
     staleTime: 30_000,
   });
+  const prs = usePullRequests(repoPath ?? "").data;
+  const issues = useWorkspaceIssues().data;
+  const candidates = useMemo(() => {
+    const all: { label: string; detail: string; mention: Mention }[] = [];
+    for (const pr of prs ?? [])
+      if (pr.state === "OPEN")
+        all.push({
+          label: pr.title,
+          detail: `#${pr.number}`,
+          mention: {
+            kind: "pr",
+            number: pr.number,
+            title: pr.title,
+            url: pr.url,
+            state: pr.state,
+            isDraft: pr.isDraft,
+          },
+        });
+    for (const issue of issues ?? [])
+      all.push({
+        label: issue.title,
+        detail: issue.identifier,
+        mention: {
+          kind: "issue",
+          identifier: issue.identifier,
+          title: issue.title,
+          url: issue.url,
+          color: issue.state.color,
+          stateType: issue.state.type,
+        },
+      });
+    return all;
+  }, [prs, issues]);
   const items: Item[] = useMemo(() => {
     if (!trigger) return [];
     if (trigger.kind === "slash")
@@ -79,32 +135,56 @@ export function useComposerMenu(
             </>
           ),
         }));
-    return fuzzyFilter(trigger.query, files.data ?? [], 40).map((path) => {
-      const slash = path.lastIndexOf("/");
-      return {
-        key: path,
-        value: path,
+    // Pull requests and issues match on "#770 title" / "MNT-897 title"; files on their path.
+    const byKey = new Map(candidates.map((c) => [`${c.detail} ${c.label}`, c]));
+    const q = trigger.query;
+    const pick = (keys: string[], max: number) => (q ? fuzzyFilter(q, keys, max) : keys.slice(0, max));
+    const work = pick([...byKey.keys()], q ? 12 : SHOWN.pr + SHOWN.issue).flatMap((key) => {
+      const c = byKey.get(key);
+      return c ? [c] : [];
+    });
+    const paths = pick(files.data ?? [], q ? 30 : SHOWN.file);
+    return [
+      ...work.map((c) => ({
+        key: `${c.mention.kind}:${c.detail}`,
+        value: c.detail,
+        mention: c.mention,
         node: (
           <>
-            <FileIcon path={path} className="size-3.5 shrink-0" />
-            <span className="shrink-0 text-[12.5px]">{path.slice(slash + 1)}</span>
-            <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground">
-              {path.slice(0, Math.max(slash, 0))}
-            </span>
+            <MentionIcon mention={c.mention} className="shrink-0" />
+            <span className="min-w-0 flex-1 truncate text-[12.5px]">{c.label}</span>
+            <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{c.detail}</span>
           </>
         ),
-      };
-    });
-  }, [commands.data, files.data, t, trigger]);
+      })),
+      ...paths.map((path) => {
+        const slash = path.lastIndexOf("/");
+        return {
+          key: path,
+          value: path,
+          mention: { kind: "file", path } as const,
+          node: (
+            <>
+              <FileIcon path={path} className="size-3.5 shrink-0" />
+              <span className="shrink-0 text-[12.5px]">{path.slice(slash + 1)}</span>
+              <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground">
+                {path.slice(0, Math.max(slash, 0))}
+              </span>
+            </>
+          ),
+        };
+      }),
+    ];
+  }, [candidates, commands.data, files.data, t, trigger]);
   const open = !!trigger && dismissed !== draft && items.length > 0;
   const current = Math.min(index, items.length - 1);
 
   const pick = (item: Item) => {
     if (!trigger) return;
     let value = item.value;
-    if (trigger.kind === "mention") {
-      value = mentionName(item.value, mentions);
-      setMentions({ ...mentions, [value]: item.value });
+    if (trigger.kind === "mention" && item.mention) {
+      value = mentionName(item.mention, mentions);
+      setMentions({ ...mentions, [value]: item.mention });
     }
     const [next, at] = complete(draft, caret, trigger, value);
     setDraft(next);
@@ -166,7 +246,7 @@ export function useComposerMenu(
       >
         <div
           role="listbox"
-          aria-label={t(trigger?.kind === "mention" ? "slash.files" : "slash.title")}
+          aria-label={t(trigger?.kind === "mention" ? "slash.mentions" : "slash.title")}
           className="max-h-[min(18rem,calc(var(--radix-popover-content-available-height)-8px))] overflow-y-auto p-1"
         >
           {items.map((item, i) => (
@@ -204,17 +284,13 @@ export function useComposerMenu(
       )}
     >
       {segments(draft, mentions).map((part, i) =>
-        part.path === undefined ? (
+        part.mention === undefined ? (
           part.text
         ) : (
-          <span
-            key={i}
-            title={part.path}
-            className="rounded-[4px] bg-white/[0.08] outline-2 outline-white/[0.08] outline-solid"
-          >
+          <span key={i} className="rounded-[4px] bg-white/[0.08] outline-2 outline-white/[0.08] outline-solid">
             <span className="relative">
               <span className="invisible">@</span>
-              <FileIcon path={part.path} className="absolute top-1/2 left-0 size-3.5 -translate-y-1/2" />
+              <MentionIcon mention={part.mention} className="absolute top-1/2 left-0 -translate-y-1/2" />
             </span>
             {part.text.slice(1)}
           </span>

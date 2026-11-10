@@ -1,13 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ask } from "@tauri-apps/plugin-dialog";
 import { Copy, GitBranchPlus, GitMerge, GitPullRequestArrow, Trash2 } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { useT } from "@/i18n";
-import { toGitError } from "@/lib/errors";
-import { invalidateRepo, useRefs } from "@/lib/git-queries";
-import { gitBackend } from "@/lib/tauri-git";
-import { useNoticesStore } from "@/stores/notices-store";
 import type { Worktree } from "@/types/git";
+import { useWorktreeActions } from "./use-worktree-actions";
 
 const BUTTON =
   "flex h-6 items-center gap-1.5 rounded-md px-2 text-[12px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40";
@@ -28,47 +23,14 @@ export function WorktreeBar({
   running: boolean;
 }) {
   const t = useT();
-  const client = useQueryClient();
-  const notify = useNoticesStore((s) => s.notify);
-  const current = useRefs(repoPath).data?.head.branch ?? null;
-  const status = useQuery({
-    queryKey: ["agent-worktree", repoPath, worktree.path],
-    queryFn: () => gitBackend.agentWorktreeStatus(repoPath, worktree.path),
-    refetchInterval: running ? 5_000 : 30_000,
-    retry: false,
-  });
-  const act = useMutation({
-    mutationFn: (action: () => Promise<unknown>) => action(),
-    onSettled: () => {
-      void invalidateRepo(client, repoPath);
-      void client.invalidateQueries({ queryKey: ["agent-worktree", repoPath] });
-    },
-    onError: (error) => {
-      const { message, detail } = toGitError(error);
-      notify({ tone: "error", title: t("worktree.failed"), detail: detail ? `${message}\n${detail}` : message });
-    },
-  });
-  const merge = () =>
-    act.mutate(async () => {
-      await gitBackend.mergeAgentWorktree(repoPath, worktree.path, title);
-      notify({ tone: "success", title: t("worktree.merged", { branch: worktree.branch }) });
-    });
-  const publish = () =>
-    act.mutate(async () => {
-      const url = await gitBackend.publishAgentWorktree(repoPath, worktree.path, title, t("worktree.prBody"));
-      notify({ tone: "success", title: t("worktree.published", { branch: worktree.branch }), detail: url });
-      if (url) await gitBackend.openGithubUrl(url);
-    });
-  const remove = async () => {
-    const sure = await ask(t("worktree.removeConfirm", { branch: worktree.branch }), {
-      kind: "warning",
-      okLabel: t("worktree.remove"),
-    });
-    if (sure) act.mutate(() => gitBackend.removeAgentWorktree(repoPath, worktree.path, true));
-  };
+  const { status, current, changes, busy, merge, publish, remove } = useWorktreeActions(
+    repoPath,
+    worktree,
+    title,
+    running,
+  );
   // Removed (here or by hand): nothing left to act on.
   if (status.isError) return null;
-  const changes = status.data ? status.data.changed + status.data.ahead : 0;
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-white/[0.06] bg-primary/[0.05] px-4 text-[12.5px]">
       <GitBranchPlus aria-hidden className="size-3.5 shrink-0 text-primary" />
@@ -97,10 +59,10 @@ export function WorktreeBar({
         </span>
       )}
       <div className="ml-auto flex shrink-0 items-center gap-1">
-        {act.isPending && <BrailleLoader className="text-primary" />}
+        {busy && <BrailleLoader className="text-primary" />}
         <button
           type="button"
-          disabled={running || changes === 0 || act.isPending || !current}
+          disabled={running || changes === 0 || busy || !current}
           title={running ? t("worktree.waitAgent") : undefined}
           onClick={publish}
           className={`${BUTTON} text-foreground hover:bg-white/[0.08]`}
@@ -110,7 +72,7 @@ export function WorktreeBar({
         </button>
         <button
           type="button"
-          disabled={running || changes === 0 || act.isPending}
+          disabled={running || changes === 0 || busy}
           title={running ? t("worktree.waitAgent") : undefined}
           onClick={merge}
           className={`${BUTTON} bg-primary text-primary-foreground hover:bg-primary/90`}
@@ -120,7 +82,7 @@ export function WorktreeBar({
         </button>
         <button
           type="button"
-          disabled={running || act.isPending}
+          disabled={running || busy}
           onClick={() => void remove()}
           className={`${BUTTON} text-muted-foreground hover:bg-removed/20 hover:text-removed-foreground`}
         >

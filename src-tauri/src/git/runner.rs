@@ -33,6 +33,13 @@ impl Default for RunOptions<'_> {
     }
 }
 
+/// PATH plus the usual Homebrew folders: an app opened from the Finder doesn't get the shell's PATH,
+/// and `git lfs` (or LFS filters during a submodule checkout) need `git-lfs` from there.
+pub fn extended_path() -> String {
+    let current = std::env::var("PATH").unwrap_or_default();
+    format!("{current}:/opt/homebrew/bin:/usr/local/bin")
+}
+
 pub fn git(repo: &Path, args: &[&str]) -> GitResult<Vec<u8>> {
     git_with(repo, args, &RunOptions::default())
 }
@@ -59,6 +66,29 @@ pub fn gh(program: &Path, repo: &Path, args: &[&str]) -> GitResult<Vec<u8>> {
         args,
         &RunOptions {
             timeout: Duration::from_secs(15),
+            ..RunOptions::default()
+        },
+    )
+}
+
+/// `gh` with a body on stdin (`gh api --input -`), for JSON payloads that `-f` fields can't express.
+pub fn gh_with_input(
+    program: &Path,
+    repo: &Path,
+    args: &[&str],
+    input: &[u8],
+) -> GitResult<Vec<u8>> {
+    let mut cmd = Command::new(program);
+    cmd.current_dir(repo)
+        .args(args)
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("NO_COLOR", "1");
+    execute(
+        cmd,
+        args,
+        &RunOptions {
+            timeout: Duration::from_secs(30),
+            stdin: Some(input),
             ..RunOptions::default()
         },
     )

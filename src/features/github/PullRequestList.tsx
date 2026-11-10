@@ -49,7 +49,7 @@ function matches(pr: PullRequest, query: string): boolean {
   return haystack.includes(query.toLowerCase());
 }
 
-export function StateIcon({ pr }: { pr: PullRequest }) {
+export function StateIcon({ pr }: { pr: Pick<PullRequest, "state" | "isDraft"> }) {
   const t = useT();
   const className = "size-3.5 shrink-0";
   if (pr.state === "MERGED")

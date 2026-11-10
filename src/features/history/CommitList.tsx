@@ -19,29 +19,27 @@ import { buildGraph, type GraphRow } from "./graph";
 import { stackOf } from "@/features/github/stacks";
 import { useOpenPullRequest } from "@/features/github/PullRequestList";
 import { useViewSettings } from "@/stores/view-settings-store";
-import { FilterInput, PanelHeader, PanelLoading, PanelMessage, PanelToolbar } from "@/components/layout/panel";
+import { PanelHeader, PanelLoading, PanelMessage, PanelToolbar } from "@/components/layout/panel";
 import { useCommits, usePullRequests, useRefs } from "@/lib/git-queries";
 import { formatCommitDate } from "@/lib/format-date";
 import { nextListIndex } from "@/lib/list-navigation";
 import { cn } from "@/lib/utils";
 import { splitSubject } from "@/lib/commit-subject";
 import { HistoryOptions } from "./HistoryOptions";
+import { Highlight, HistorySearchBar } from "./HistorySearchBar";
+import { useHistorySearchStore } from "./history-search-store";
+import { isEmptySearch } from "./search-query";
 import { CommitMenu, type CommitActions } from "./CommitMenu";
 import { RebaseDialog } from "./RebaseDialog";
 import { useRewrite } from "./use-rewrite";
 import { gitBackend } from "@/lib/tauri-git";
 import { useWorkspaceStore } from "@/stores/workspace-store";
-import type { CommitRef, CommitSummary } from "@/types/git";
+import type { CommitRef, CommitSummary, HistorySearch } from "@/types/git";
 import { useT } from "@/i18n";
 
 const REF_ICONS = { head: Crosshair, branch: GitBranch, remote: Cloud, tag: Tag } as const;
 const ROW_HEIGHT = 46;
 const rowId = (hash: string) => `commit-${hash}`;
-
-function matches(commit: CommitSummary, query: string): boolean {
-  const q = query.toLowerCase();
-  return [commit.subject, commit.author, commit.hash].some((field) => field.toLowerCase().includes(q));
-}
 
 const MAX_BADGES = 2;
 
@@ -126,9 +124,11 @@ type CommitRowProps = {
   graph: GraphRow | null;
   graphWidth: number;
   actions: CommitActions;
+  /** Search terms to highlight (none for regular expressions). */
+  terms: HistorySearch;
 };
 
-function CommitRow({ commit, selected, top, onSelect, graph, graphWidth, actions }: CommitRowProps) {
+function CommitRow({ commit, selected, top, onSelect, graph, graphWidth, actions, terms }: CommitRowProps) {
   const t = useT();
   const badges = badgesOf(commit.refs);
   const { title, pr } = splitSubject(commit.subject);
@@ -155,11 +155,15 @@ function CommitRow({ commit, selected, top, onSelect, graph, graphWidth, actions
             className="absolute top-[11px] left-[7px] size-2 rounded-full border-2 border-primary bg-panel"
           />
         )}
-        <span className="truncate text-[12.5px] font-medium text-foreground">{title}</span>
+        <span className="truncate text-[12.5px] font-medium text-foreground">
+          <Highlight text={title} term={terms.message} />
+        </span>
         <span className="flex min-w-0 items-center gap-2 text-[11.5px] text-muted-foreground">
           {/* Badges clip at this box's edge instead of squeezing, so the date always stays readable. */}
           <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-            <span className="max-w-[45%] shrink-0 truncate">{commit.author}</span>
+            <span className="max-w-[45%] shrink-0 truncate">
+              <Highlight text={commit.author} term={terms.author} />
+            </span>
             {pr && (
               <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] text-foreground/85">
                 <GitPullRequest aria-hidden className="size-3" />#{pr}
@@ -333,20 +337,23 @@ export function CommitList({ repoPath }: { repoPath: string }) {
       selectCommit: s.selectCommit,
     })),
   );
-  const history = useCommits(repoPath, historyRev);
-  const [query, setQuery] = useState("");
-  const loaded = useMemo(() => history.data?.pages.flat() ?? [], [history.data]);
-  const commits = useMemo(() => (query ? loaded.filter((c) => matches(c, query)) : loaded), [loaded, query]);
+  const search = useHistorySearchStore((s) => s.search);
+  const searching = !isEmptySearch(search);
+  const terms = search.regex ? {} : search;
+  const history = useCommits(repoPath, historyRev, search);
+  const commits = useMemo(() => history.data?.pages.flat() ?? [], [history.data]);
   const selectedIndex = commits.findIndex((c) => c.hash === selectedCommitHash);
-  // The graph needs the unbroken history: a text filter shows plain dots instead.
+  // The graph needs the unbroken history: a search shows plain dots instead.
   const { firstParentOnly, hideMerges } = useViewSettings(
     useShallow((s) => ({ firstParentOnly: s.firstParentOnly, hideMerges: s.hideMerges })),
   );
   const graph = useMemo(() => {
     // Without merges there's no branch shape to draw; first-parent history follows one parent only.
-    if (query || hideMerges) return null;
-    return buildGraph(firstParentOnly ? loaded.map((c) => ({ hash: c.hash, parents: c.parents.slice(0, 1) })) : loaded);
-  }, [loaded, query, hideMerges, firstParentOnly]);
+    if (searching || hideMerges) return null;
+    return buildGraph(
+      firstParentOnly ? commits.map((c) => ({ hash: c.hash, parents: c.parents.slice(0, 1) })) : commits,
+    );
+  }, [commits, searching, hideMerges, firstParentOnly]);
   const graphWidth = graph ? laneX(Math.min(Math.max(1, ...graph.map((r) => r.lanes)), MAX_LANES)) + 8 : 26;
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -361,7 +368,6 @@ export function CommitList({ repoPath }: { repoPath: string }) {
   const lastVisible = items.at(-1)?.index ?? 0;
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = history;
 
-  // ponytail: the filter only searches loaded pages; add `git log --grep/--author` server-side if that's not enough
   useEffect(() => {
     if (hasNextPage && !isFetchingNextPage && lastVisible >= commits.length - 30) void fetchNextPage();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage, lastVisible, commits.length]);
@@ -398,7 +404,7 @@ export function CommitList({ repoPath }: { repoPath: string }) {
     <section aria-label={t("history.section")} className="flex h-full flex-col bg-panel">
       <HistoryHeader repoPath={repoPath} />
       <PanelToolbar className="mt-1">
-        <FilterInput label={t("history.filter")} value={query} onValueChange={setQuery} className="flex-1" />
+        <HistorySearchBar />
       </PanelToolbar>
       <div className="mt-4" />
       <IncomingCommits repoPath={repoPath} />
@@ -409,7 +415,7 @@ export function CommitList({ repoPath }: { repoPath: string }) {
       ) : history.isPending ? (
         <PanelLoading title={t("history.loading")} variant="grid-wave" />
       ) : commits.length === 0 ? (
-        query ? (
+        searching ? (
           <PanelMessage icon={<SearchX />} title={t("history.noMatch")} hint={t("history.noMatchHint")} />
         ) : (
           <PanelMessage icon={<GitCommitHorizontal />} title={t("history.empty")} hint={t("history.emptyHint")} />
@@ -437,6 +443,7 @@ export function CommitList({ repoPath }: { repoPath: string }) {
                   graph={graph?.[item.index] ?? null}
                   graphWidth={graphWidth}
                   actions={actions}
+                  terms={terms}
                 />
               );
             })}

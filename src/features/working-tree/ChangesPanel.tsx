@@ -1,7 +1,7 @@
 import { useShallow } from "zustand/react/shallow";
 import { DataUnavailable } from "@/components/states";
 import { useMemo, useState } from "react";
-import { CircleCheck, Minus, Plus, Sparkles } from "lucide-react";
+import { CircleCheck, Minus, Plus, Sparkles, Split } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { pickAgent } from "@/features/agents/AgentButton";
 import { startAgentRun, useInstalledAgents } from "@/features/agents/use-agents";
@@ -18,6 +18,12 @@ import { FILE_STATUS } from "@/features/changed-files/file-status";
 import { groupChanges, pathsOf, type ChangeItem } from "./group-changes";
 import { useT } from "@/i18n";
 import { BranchStatus, RecentCommits } from "./BranchContext";
+import { LfsBadge, LfsSection, SubmodulesSection } from "./RepoModules";
+import { StashButton } from "@/features/stash/StashButton";
+import { parseCommitPlan } from "./commit-plan";
+import { SplitPlanDialog } from "./SplitPlanDialog";
+import { useNoticesStore } from "@/stores/notices-store";
+import type { AgentTask, CommitGroup } from "@/types/git";
 
 type ChangeRowProps = { item: ChangeItem; action: "stage" | "unstage" | null; onAction: () => void; busy: boolean };
 
@@ -48,6 +54,7 @@ function ChangeRow({ item, action, onAction, busy }: ChangeRowProps) {
           {status.letter}
         </span>
         <span className="truncate font-mono text-[12.5px]">{item.path.slice(slash + 1)}</span>
+        <LfsBadge path={item.path} />
         <span className="truncate font-mono text-[11.5px] text-muted-foreground">
           {item.path.slice(0, Math.max(slash, 0))}
         </span>
@@ -106,9 +113,8 @@ function Group({ title, items, action, run, busy }: GroupProps) {
   );
 }
 
-/** Asks the preferred agent for a message describing the staged changes, then fills it in. */
-function useGeneratedMessage(repoPath: string, onMessage: (message: string) => void) {
-  const t = useT();
+/** Runs a one-shot task on the preferred agent, then hands its final answer to `onAnswer`. */
+function useAgentAnswer(repoPath: string, task: AgentTask, title: string, onAnswer: (answer: string) => void) {
   const installed = useInstalledAgents().data;
   const preferred = useAgentsStore((s) => s.preferredAgent);
   const [pending, setPending] = useState(false);
@@ -117,14 +123,14 @@ function useGeneratedMessage(repoPath: string, onMessage: (message: string) => v
   const generate = async () => {
     if (!agent) return;
     setPending(true);
-    const id = await startAgentRun(repoPath, agent, { kind: "commit-message" }, t("agents.commitMessage"));
+    const id = await startAgentRun(repoPath, agent, task, title);
     if (!id) return setPending(false);
-    // Waits for the run to end, then fills the message with the agent's answer.
+    // Waits for the run to end, then hands over the agent's answer.
     const settle = () => {
       const run = useAgentsStore.getState().runs.find((r) => r.id === id);
       if (!run || run.status === "running") return false;
       const answer = run.status === "done" ? finalAnswer(run) : null;
-      if (answer) onMessage(answer.trim());
+      if (answer) onAnswer(answer.trim());
       setPending(false);
       return true;
     };
@@ -134,17 +140,72 @@ function useGeneratedMessage(repoPath: string, onMessage: (message: string) => v
   return { available: agent !== null, pending, generate };
 }
 
-function CommitForm({ repoPath, stagedCount }: { repoPath: string; stagedCount: number }) {
+/** "Split into commits with AI": asks the agent for a plan, validates it, then shows it for editing. */
+function AiSplit({ repoPath, changed }: { repoPath: string; changed: string[] }) {
+  const t = useT();
+  const notify = useNoticesStore((s) => s.notify);
+  const [plan, setPlan] = useState<CommitGroup[] | null>(null);
+  const planner = useAgentAnswer(repoPath, { kind: "split-commits" }, t("aiSplit.agentTitle"), (answer) => {
+    try {
+      setPlan(parseCommitPlan(answer, new Set(changed)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      notify({ tone: "error", title: t("aiSplit.invalid", { message }), detail: answer });
+    }
+  });
+  if (!planner.available) return null;
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        disabled={changed.length === 0 || planner.pending}
+        onClick={() => void planner.generate()}
+        className="h-7 gap-1.5 text-[13px]"
+      >
+        {planner.pending ? <BrailleLoader /> : <Sparkles aria-hidden className="size-3.5 text-primary" />}
+        {planner.pending ? t("aiSplit.pending") : t("aiSplit.button")}
+      </Button>
+      {plan && <SplitPlanDialog repoPath={repoPath} plan={plan} changed={changed} onClose={() => setPlan(null)} />}
+    </>
+  );
+}
+
+/** Split mode: one commit at a time from what is staged; the step number tells which commit is next. */
+function SplitBanner({ step, onStop }: { step: number; onStop: () => void }) {
+  const t = useT();
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/[0.06] px-2.5 py-2">
+      <p className="flex-1 text-[12px] text-muted-foreground">
+        <span className="font-medium text-foreground">{t("split.step", { number: step })}</span> · {t("split.hint")}
+      </p>
+      <Button type="button" variant="ghost" size="xs" onClick={onStop}>
+        {t("split.stop")}
+      </Button>
+    </div>
+  );
+}
+
+function CommitForm({ repoPath, stagedCount, changed }: { repoPath: string; stagedCount: number; changed: string[] }) {
   const t = useT();
   const [message, setMessage] = useState("");
-  const generated = useGeneratedMessage(repoPath, setMessage);
+  const [splitStep, setSplitStep] = useState<number | null>(null);
+  const generated = useAgentAnswer(repoPath, { kind: "commit-message" }, t("agents.commitMessage"), setMessage);
   const commit = useGitAction(repoPath, {
     run: () => gitBackend.createCommit(repoPath, message),
     success: t("changes.committed"),
     failure: t("changes.commitFailed"),
   });
   const canCommit = stagedCount > 0 && message.trim().length > 0 && !commit.isPending;
-  const submit = () => canCommit && commit.mutate(undefined, { onSuccess: () => setMessage("") });
+  const submit = () =>
+    canCommit &&
+    commit.mutate(undefined, {
+      onSuccess: () => {
+        setMessage("");
+        setSplitStep((step) => (step === null ? null : step + 1));
+      },
+    });
 
   return (
     <form
@@ -154,6 +215,7 @@ function CommitForm({ repoPath, stagedCount }: { repoPath: string; stagedCount: 
         submit();
       }}
     >
+      {splitStep !== null && <SplitBanner step={splitStep} onStop={() => setSplitStep(null)} />}
       <Textarea
         aria-label={t("changes.message")}
         placeholder={t("changes.messagePlaceholder")}
@@ -184,6 +246,22 @@ function CommitForm({ repoPath, stagedCount }: { repoPath: string; stagedCount: 
         {commit.isPending && <BrailleLoader />}
         {stagedCount === 0 ? t("changes.stageFirst") : t.plural("changes.commit", stagedCount)}
       </Button>
+      <div className="flex flex-wrap gap-1">
+        {splitStep === null && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={changed.length === 0}
+            onClick={() => setSplitStep(1)}
+            className="h-7 gap-1.5 text-[13px]"
+          >
+            <Split aria-hidden className="size-3.5" />
+            {t("split.start")}
+          </Button>
+        )}
+        <AiSplit repoPath={repoPath} changed={changed} />
+      </div>
     </form>
   );
 }
@@ -192,6 +270,14 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const t = useT();
   const tree = useWorkingTree(repoPath);
   const groups = useMemo(() => groupChanges(tree.data ?? []), [tree.data]);
+  // What a commit may take (both sides of a rename): the same set the backend checks a split plan against.
+  const changed = useMemo(
+    () =>
+      (tree.data ?? [])
+        .filter((e) => !e.conflicted)
+        .flatMap((e) => [e.path, ...(e.previousPath ? [e.previousPath] : [])]),
+    [tree.data],
+  );
   const stage = useGitAction<string[]>(repoPath, {
     run: (paths) => gitBackend.stageFiles(repoPath, paths),
     failure: t("changes.stageFailed"),
@@ -209,6 +295,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
         <h2 data-tauri-drag-region className="text-sm font-semibold">
           {t("changes.title")}
         </h2>
+        <StashButton repoPath={repoPath} />
       </PanelHeader>
       <BranchStatus repoPath={repoPath} />
       {tree.isError ? (
@@ -240,10 +327,12 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
           />
           <Group title={t("changes.staged")} items={groups.staged} action="unstage" run={unstage.mutate} busy={busy} />
           <Group title={t("changes.unstaged")} items={groups.unstaged} action="stage" run={stage.mutate} busy={busy} />
+          <SubmodulesSection repoPath={repoPath} />
+          <LfsSection repoPath={repoPath} />
           <RecentCommits repoPath={repoPath} />
         </div>
       )}
-      <CommitForm repoPath={repoPath} stagedCount={groups.staged.length} />
+      <CommitForm repoPath={repoPath} stagedCount={groups.staged.length} changed={changed} />
     </section>
   );
 }

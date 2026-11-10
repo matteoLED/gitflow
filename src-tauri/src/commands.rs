@@ -223,6 +223,16 @@ pub async fn agent_worktree_status(
 }
 
 #[tauri::command]
+pub async fn agent_worktree_diff(repo_path: String, path: String) -> GitResult<String> {
+    blocking(move || worktrees::diff(&repo(&repo_path)?, &path)).await
+}
+
+#[tauri::command]
+pub async fn compare_agent_worktrees(repo_path: String, a: String, b: String) -> GitResult<String> {
+    blocking(move || worktrees::compare(&repo(&repo_path)?, &a, &b)).await
+}
+
+#[tauri::command]
 pub async fn publish_agent_worktree(
     repo_path: String,
     path: String,
@@ -922,6 +932,25 @@ pub async fn unstage_files(repo_path: String, paths: Vec<String>) -> GitResult<(
 }
 
 #[tauri::command]
+pub async fn apply_hunks(
+    repo_path: String,
+    path: String,
+    hunks: String,
+    mode: crate::git::staging::PatchMode,
+) -> GitResult<()> {
+    blocking(move || crate::git::staging::apply_hunks(&repo(&repo_path)?, &path, &hunks, mode))
+        .await
+}
+
+#[tauri::command]
+pub async fn commit_groups(
+    repo_path: String,
+    groups: Vec<crate::git::staging::CommitGroup>,
+) -> GitResult<Vec<String>> {
+    blocking(move || crate::git::staging::commit_groups(&repo(&repo_path)?, &groups)).await
+}
+
+#[tauri::command]
 pub async fn create_commit(repo_path: String, message: String) -> GitResult<String> {
     blocking(move || write::commit(&repo(&repo_path)?, &message)).await
 }
@@ -943,8 +972,14 @@ pub async fn delete_branch(
     merged_head: Option<String>,
     force: bool,
 ) -> GitResult<String> {
-    blocking(move || write::delete_branch(&repo(&repo_path)?, &name, merged_head.as_deref(), force))
-        .await
+    blocking(move || {
+        let repo = repo(&repo_path)?;
+        let tip = write::delete_branch(&repo, &name, merged_head.as_deref(), force)?;
+        // Best effort: failing to remember it for ⌘Z mustn't turn a done deletion into an error.
+        let _ = crate::git::undo::record_deleted_branch(&repo, &name, &tip);
+        Ok(tip)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -968,7 +1003,13 @@ pub async fn restore_remote_branch(
 
 #[tauri::command]
 pub async fn restore_branch(repo_path: String, name: String, tip: String) -> GitResult<()> {
-    blocking(move || write::restore_branch(&repo(&repo_path)?, &name, &tip)).await
+    blocking(move || {
+        let repo = repo(&repo_path)?;
+        write::restore_branch(&repo, &name, &tip)?;
+        let _ = crate::git::undo::forget_deleted_branch(&repo, &name);
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -995,4 +1036,97 @@ pub async fn push(repo_path: String) -> GitResult<()> {
 #[tauri::command]
 pub async fn save_attachment(data: String, extension: String) -> GitResult<String> {
     blocking(move || crate::attachments::save(&data, &extension)).await
+}
+
+/// Posts the AI review the user kept and confirmed: one COMMENT review with its line comments.
+#[tauri::command]
+pub async fn submit_ai_review(
+    repo_path: String,
+    number: u32,
+    commit: String,
+    body: String,
+    comments: Vec<github::DraftComment>,
+) -> GitResult<()> {
+    blocking(move || {
+        github::submit_review_with_comments(&repo(&repo_path)?, number, &commit, &body, &comments)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_submodules(
+    repo_path: String,
+) -> GitResult<Vec<crate::git::submodules::Submodule>> {
+    blocking(move || crate::git::submodules::list(&repo(&repo_path)?)).await
+}
+
+/// Explicit click only: may clone from the network.
+#[tauri::command]
+pub async fn update_submodules(repo_path: String, path: Option<String>) -> GitResult<()> {
+    blocking(move || crate::git::submodules::init_update(&repo(&repo_path)?, path.as_deref())).await
+}
+
+/// `None` when git-lfs isn't installed.
+#[tauri::command]
+pub async fn lfs_status(repo_path: String) -> GitResult<Option<crate::git::lfs::LfsStatus>> {
+    blocking(move || Ok(crate::git::lfs::status(&repo(&repo_path)?))).await
+}
+
+#[tauri::command]
+pub async fn lfs_tracked_paths(repo_path: String, paths: Vec<String>) -> GitResult<Vec<String>> {
+    blocking(move || crate::git::lfs::tracked_paths(&repo(&repo_path)?, &paths)).await
+}
+
+/// Explicit click only: downloads LFS objects.
+#[tauri::command]
+pub async fn lfs_pull(repo_path: String) -> GitResult<()> {
+    blocking(move || crate::git::lfs::pull(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn lfs_track(repo_path: String, pattern: String) -> GitResult<()> {
+    blocking(move || crate::git::lfs::track(&repo(&repo_path)?, &pattern)).await
+}
+
+#[tauri::command]
+pub async fn list_stashes(repo_path: String) -> GitResult<Vec<crate::git::stash::StashEntry>> {
+    blocking(move || crate::git::stash::list(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn create_stash(
+    repo_path: String,
+    message: String,
+    include_untracked: bool,
+) -> GitResult<()> {
+    blocking(move || crate::git::stash::push(&repo(&repo_path)?, &message, include_untracked)).await
+}
+
+#[tauri::command]
+pub async fn apply_stash(
+    repo_path: String,
+    index: u32,
+    pop: bool,
+) -> GitResult<crate::git::stash::StashOutcome> {
+    blocking(move || crate::git::stash::apply(&repo(&repo_path)?, index, pop)).await
+}
+
+#[tauri::command]
+pub async fn drop_stash(repo_path: String, index: u32) -> GitResult<()> {
+    blocking(move || crate::git::stash::drop(&repo(&repo_path)?, index)).await
+}
+
+#[tauri::command]
+pub async fn branch_from_stash(repo_path: String, index: u32, name: String) -> GitResult<()> {
+    blocking(move || crate::git::stash::branch(&repo(&repo_path)?, index, &name)).await
+}
+
+#[tauri::command]
+pub async fn last_undo(repo_path: String) -> GitResult<Option<crate::git::undo::UndoAction>> {
+    blocking(move || crate::git::undo::last(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn undo_last(repo_path: String, action: crate::git::undo::UndoAction) -> GitResult<()> {
+    blocking(move || crate::git::undo::undo(&repo(&repo_path)?, &action)).await
 }

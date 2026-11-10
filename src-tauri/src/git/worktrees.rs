@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use super::errors::{GitError, GitResult};
-use super::runner::{git, git_text};
+use super::runner::{RunOptions, git, git_text, git_with};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,6 +122,63 @@ fn status_at(repo: &Path, root: &Path, path: &str) -> GitResult<WorktreeStatus> 
     Ok(WorktreeStatus { changed, ahead })
 }
 
+/// Full-file context, like the app's other diffs: the viewer folds unchanged runs itself.
+const FULL_CONTEXT: &str = "--unified=1000000";
+
+/// Everything the agent did since its branch left the current one: its commits plus what it left uncommitted
+/// (new files included), as one multi-file patch.
+pub fn diff(repo: &Path, path: &str) -> GitResult<String> {
+    diff_at(repo, &root(repo)?, path)
+}
+
+fn diff_at(repo: &Path, root: &Path, path: &str) -> GitResult<String> {
+    let worktree = owned(repo, root, path)?;
+    let dir = Path::new(&worktree.path);
+    let base = git_text(repo, &["merge-base", "HEAD", &worktree.branch])?;
+    let base = base.trim();
+    // Diffing the merge base against the working tree covers commits and uncommitted edits at once.
+    let mut patch = git_text(dir, &["diff", "--no-ext-diff", "-M", FULL_CONTEXT, base])?;
+    let untracked = git_text(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    let opts = RunOptions {
+        ok_codes: &[1], // `--no-index` exits 1 when the files differ
+        ..RunOptions::default()
+    };
+    for file in untracked.split('\0').filter(|f| !f.is_empty()) {
+        let args = [
+            "diff",
+            "--no-ext-diff",
+            "--no-index",
+            FULL_CONTEXT,
+            "--",
+            "/dev/null",
+            file,
+        ];
+        patch.push_str(&String::from_utf8_lossy(&git_with(dir, &args, &opts)?));
+    }
+    Ok(patch)
+}
+
+/// The committed difference between two agents' branches (`git diff a b`): what `b` has that `a` doesn't.
+pub fn compare(repo: &Path, a: &str, b: &str) -> GitResult<String> {
+    compare_at(repo, &root(repo)?, a, b)
+}
+
+fn compare_at(repo: &Path, root: &Path, a: &str, b: &str) -> GitResult<String> {
+    let (a, b) = (owned(repo, root, a)?, owned(repo, root, b)?);
+    git_text(
+        repo,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "-M",
+            FULL_CONTEXT,
+            &a.branch,
+            &b.branch,
+            "--",
+        ],
+    )
+}
+
 /// Brings the agent's work into the current branch: what it left uncommitted is committed on its branch first
 /// (with `message`), then merged. Conflicts stop the merge like any other, for the user to resolve.
 pub fn merge(repo: &Path, path: &str, message: &str) -> GitResult<()> {
@@ -221,6 +278,35 @@ mod tests {
         remove_at(repo.path(), &root, &worktree.path, true).unwrap();
         assert!(list_at(repo.path(), &root).unwrap().is_empty());
         assert!(repo.git(&["branch", "--list", &worktree.branch]).is_empty());
+    }
+
+    #[test]
+    fn the_diff_covers_commits_uncommitted_edits_and_new_files() {
+        let (repo, _dir, root) = setup();
+        let worktree = create_at(repo.path(), &root).unwrap();
+        let dir = Path::new(&worktree.path);
+        fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        git(dir, &["commit", "-qam", "two"]).unwrap();
+        fs::write(dir.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        fs::write(dir.join("new.txt"), "fresh\n").unwrap();
+        let patch = diff_at(repo.path(), &root, &worktree.path).unwrap();
+        assert!(
+            ["+two", "+three", "+fresh", "b/new.txt"]
+                .iter()
+                .all(|s| patch.contains(s))
+        );
+    }
+
+    #[test]
+    fn comparing_two_worktrees_diffs_their_branches() {
+        let (repo, _dir, root) = setup();
+        let a = create_at(repo.path(), &root).unwrap();
+        let b = create_at(repo.path(), &root).unwrap();
+        fs::write(Path::new(&b.path).join("a.txt"), "other\n").unwrap();
+        git(Path::new(&b.path), &["commit", "-qam", "b"]).unwrap();
+        let patch = compare_at(repo.path(), &root, &a.path, &b.path).unwrap();
+        assert!(patch.contains("-one") && patch.contains("+other"));
+        assert!(compare_at(repo.path(), &root, &a.path, "/tmp").is_err());
     }
 
     #[test]

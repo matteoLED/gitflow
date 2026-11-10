@@ -66,7 +66,7 @@ class GhostWidget extends WidgetType {
 }
 
 const theme = EditorView.theme({
-  ".cm-blame-gutter": { width: "176px", fontFamily: "var(--font-sans)", fontSize: "11.5px", cursor: "pointer" },
+  ".cm-blame-gutter": { width: "176px", fontFamily: "var(--code-font)", fontSize: "11.5px", cursor: "pointer" },
   ".cm-blame-gutter .cm-gutterElement": { padding: "0 12px 0 10px", overflow: "hidden" },
   ".cm-blame-entry": { color: "#6b6e76", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   ".cm-blame-gutter .cm-gutterElement:hover .cm-blame-entry": { color: "#aeb0b5" },
@@ -76,7 +76,7 @@ const theme = EditorView.theme({
     gap: "6px",
     verticalAlign: "top",
     marginLeft: "3.5em",
-    fontFamily: "var(--font-sans)",
+    fontFamily: "var(--code-font)",
     fontSize: "11.5px",
     color: "#5d5f66",
     cursor: "pointer",

@@ -21,6 +21,7 @@ const SECTIONS: Section[] = [
       { keys: ["⌘", "⇧", "P"], label: "shortcuts.preview" },
       { keys: ["⌘", "⇧", "L"], label: "shortcuts.linear" },
       { keys: ["⌘", ","], label: "shortcuts.settings" },
+      { keys: ["⌘", "Z"], label: "shortcuts.undo" },
     ],
   },
   {

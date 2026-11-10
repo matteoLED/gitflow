@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import {
+  Archive,
+  Undo2,
   ArrowDown,
   ArrowUp,
   Bot,
@@ -9,6 +11,7 @@ import {
   Keyboard,
   Plus,
   RefreshCw,
+  Search,
   Settings,
   SquareTerminal,
 } from "lucide-react";
@@ -30,12 +33,15 @@ import { useWorkspaceIssues } from "@/features/linear/linear-queries";
 import { STATUS } from "@/features/work/WorkPage";
 import { useWorkItems } from "@/features/work/use-work-items";
 import { useT } from "@/i18n";
+import { useHistorySearchStore } from "@/features/history/history-search-store";
 import { gitBackend } from "@/lib/tauri-git";
 import { useAgentsStore } from "@/stores/agents-store";
 import { useLinearStore } from "@/stores/linear-store";
 import { checkForUpdate } from "@/features/updates/updater";
 import { useUiStore } from "@/stores/ui-store";
 import { useWorkStore } from "@/stores/work-store";
+import { useStashStore } from "@/features/stash/stash-store";
+import { useUndo } from "@/features/undo/use-undo";
 import { useWorkspaceStore, type View } from "@/stores/workspace-store";
 import type { RepositoryInfo } from "@/types/git";
 
@@ -68,6 +74,7 @@ function Commands({ repo, close }: { repo: RepositoryInfo; close: () => void }) 
   const issues = useWorkspaceIssues().data ?? [];
   const runs = useAgentsStore((s) => s.runs).filter((r) => r.repoPath === repo.path && r.thread === r.id);
   const { open: openPr } = useOpenPullRequest(repo.path);
+  const undo = useUndo(repo.path);
   const action = (run: () => Promise<unknown>, success: string, failure: string) => ({ run, success, failure });
   const fetch = useGitAction(
     repo.path,
@@ -99,6 +106,15 @@ function Commands({ repo, close }: { repo: RepositoryInfo; close: () => void }) 
         <CommandGroup heading={t("palette.actions")}>
           <CommandItem
             onSelect={run(() => {
+              useHistorySearchStore.getState().requestFocus();
+              setView("history");
+            })}
+          >
+            <Search />
+            {t("palette.searchHistory")}
+          </CommandItem>
+          <CommandItem
+            onSelect={run(() => {
               useWorkStore.getState().setFilter("inbox");
               setView("work");
             })}
@@ -126,6 +142,15 @@ function Commands({ repo, close }: { repo: RepositoryInfo; close: () => void }) 
           <CommandItem onSelect={run(() => push.mutate())}>
             <ArrowUp />
             Push
+          </CommandItem>
+          <CommandItem onSelect={run(() => void undo())}>
+            <Undo2 />
+            {t("undo.action")}
+            <CommandShortcut>⌘Z</CommandShortcut>
+          </CommandItem>
+          <CommandItem onSelect={run(() => useStashStore.getState().show())}>
+            <Archive />
+            {t("stash.open")}
           </CommandItem>
           <CommandItem onSelect={run(() => useUiStore.getState().setTerminalOpen(!useUiStore.getState().terminalOpen))}>
             <SquareTerminal />

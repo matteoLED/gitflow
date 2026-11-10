@@ -35,23 +35,42 @@ describe("composer completion", () => {
   });
 });
 
-describe("file chips", () => {
-  const mentions = { "app.ts": "src/app.ts" };
+describe("chips", () => {
+  const app = { kind: "file", path: "src/app.ts" } as const;
+  const pr = {
+    kind: "pr",
+    number: 770,
+    title: "feat: add ics on app.",
+    url: "https://github.com/o/r/pull/770",
+    state: "OPEN",
+    isDraft: false,
+  } as const;
+  const mentions = { "app.ts": app };
 
   it("names a file by its basename unless another tagged file has it", () => {
-    expect([mentionName("src/app.ts", {}), mentionName("lib/app.ts", mentions)]).toEqual(["app.ts", "lib/app.ts"]);
+    expect([mentionName(app, {}), mentionName({ kind: "file", path: "lib/app.ts" }, mentions)]).toEqual([
+      "app.ts",
+      "lib/app.ts",
+    ]);
   });
 
-  it("cuts the text around tagged files only", () => {
+  it("names a pull request by its title, kept as one token", () => {
+    expect(mentionName(pr, {})).toBe("feat: add ics on app");
+  });
+
+  it("cuts the text around tagged items only", () => {
     expect(segments("see @app.ts and @x", mentions)).toEqual([
       { text: "see " },
-      { text: "@app.ts", path: "src/app.ts" },
+      { text: "@app.ts", mention: app },
       { text: " and @x" },
     ]);
   });
 
-  it("sends the full path of each chip", () => {
-    expect(expandMentions("@app.ts, fix it", mentions)).toBe("@src/app.ts, fix it");
+  it("spells each chip out for the agent", () => {
+    const name = mentionName(pr, {});
+    expect(expandMentions(`@app.ts, see @${name}`, { ...mentions, [name]: pr })).toBe(
+      '@src/app.ts, see pull request #770 "feat: add ics on app." (https://github.com/o/r/pull/770)',
+    );
   });
 
   it("finds the chip right before the caret", () => {

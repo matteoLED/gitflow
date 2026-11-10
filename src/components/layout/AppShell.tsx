@@ -1,6 +1,8 @@
 import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { OperationBar } from "@/features/conflicts/OperationBar";
 import { ShortcutsDialog } from "@/features/shortcuts/ShortcutsDialog";
+import { StashDialog } from "@/features/stash/StashDialog";
+import { useUndoShortcut } from "@/features/undo/use-undo";
 import { CommandPalette } from "@/features/command/CommandPalette";
 import { WorkList } from "@/features/work/WorkList";
 import { WorkPage } from "@/features/work/WorkPage";
@@ -361,6 +363,7 @@ function Workspace({ repo, view }: { repo: RepositoryInfo; view: View }) {
   useRepoWatcher(repo.path);
   useDesktopNotifications(repo.path);
   useAssistantShortcut();
+  useUndoShortcut(repo.path);
   const assistantOpen = useUiStore((s) => s.assistantOpen);
   return (
     <div className="flex h-full flex-col bg-sidebar">
@@ -381,6 +384,7 @@ function Workspace({ repo, view }: { repo: RepositoryInfo; view: View }) {
       <TerminalDock key={repo.path} repoPath={repo.path} />
       <CommandPalette repo={repo} />
       <ShortcutsDialog />
+      <StashDialog repoPath={repo.path} />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useShallow } from "zustand/react/shallow";
 import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BarChart3, ChevronRight, Plus, TriangleAlert } from "lucide-react";
+import { BarChart3, ChevronRight, Columns2, Plus, TriangleAlert } from "lucide-react";
 import { ClaudeIcon } from "./agent-icons";
 import { AgentDefinitionsSection } from "./AgentDefinitions";
 import { useT } from "@/i18n";
@@ -186,6 +186,14 @@ export function AgentsList({ repoPath, query }: { repoPath: string; query: strin
           >
             <BarChart3 aria-hidden className="size-3.5 text-muted-foreground" />
             {t("usage.open")}
+          </button>
+          <button
+            type="button"
+            onClick={() => select({ type: "board" })}
+            className={cn(item, selection.type === "board" && "bg-white/[0.08] text-foreground")}
+          >
+            <Columns2 aria-hidden className="size-3.5 text-muted-foreground" />
+            {t("board.open")}
           </button>
           <ul>
             <AppRuns repoPath={repoPath} query={query} />

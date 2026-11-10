@@ -1,7 +1,7 @@
 import { type QueryClient, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { gitBackend } from "@/lib/tauri-git";
 import { useViewSettings } from "@/stores/view-settings-store";
-import type { WorkingSide } from "@/types/git";
+import type { HistorySearch, WorkingSide } from "@/types/git";
 
 export const COMMITS_PAGE_SIZE = 200;
 
@@ -12,10 +12,10 @@ export function useRefs(repoPath: string) {
   return useQuery({ queryKey: [...repoKey(repoPath), "refs"], queryFn: () => gitBackend.listRefs(repoPath) });
 }
 
-export function useCommits(repoPath: string, rev: string | null) {
+export function useCommits(repoPath: string, rev: string | null, search: HistorySearch = {}) {
   const firstParent = useViewSettings((s) => s.firstParentOnly);
   const noMerges = useViewSettings((s) => s.hideMerges);
-  const filters = { firstParent, noMerges };
+  const filters = { ...search, firstParent, noMerges };
   return useInfiniteQuery({
     queryKey: [...repoKey(repoPath), "commits", rev, filters],
     queryFn: ({ pageParam }) =>
@@ -153,3 +153,29 @@ export function useCommitPullRequest(repoPath: string, sha: string | null) {
     retry: false,
   });
 }
+
+export function useSubmodules(repoPath: string) {
+  return useQuery({
+    queryKey: [...repoKey(repoPath), "submodules"],
+    queryFn: () => gitBackend.listSubmodules(repoPath),
+  });
+}
+
+export function useLfsStatus(repoPath: string) {
+  return useQuery({ queryKey: [...repoKey(repoPath), "lfs"], queryFn: () => gitBackend.lfsStatus(repoPath) });
+}
+
+/** Which working-tree paths Git LFS handles; nothing is asked when git-lfs isn't installed. */
+export function useLfsPaths(repoPath: string): ReadonlySet<string> {
+  const installed = !!useLfsStatus(repoPath).data;
+  const paths = (useWorkingTree(repoPath).data ?? []).map((e) => e.path);
+  const tracked = useQuery({
+    queryKey: [...repoKey(repoPath), "lfs-paths", paths],
+    queryFn: () => gitBackend.lfsTrackedPaths(repoPath, paths),
+    enabled: installed && paths.length > 0,
+    select: (list) => new Set(list),
+  });
+  return tracked.data ?? EMPTY_SET;
+}
+
+const EMPTY_SET: ReadonlySet<string> = new Set();

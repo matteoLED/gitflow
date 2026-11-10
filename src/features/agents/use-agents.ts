@@ -51,6 +51,8 @@ export async function startAgentRun(
   continuation?: Continuation,
   /** Paths from saveAttachment, sent with this message only. */
   images: string[] = [],
+  /** Launched alongside other runs on the same prompt: always isolated, and grouped on the Parallel board. */
+  group?: string,
 ) {
   try {
     const locale = useLocaleStore.getState().locale;
@@ -59,7 +61,7 @@ export async function startAgentRun(
     // Isolation: a new free-form conversation gets its own worktree; follow-ups keep working in the same one.
     const worktree = continuation
       ? runs.find((r) => r.thread === continuation.thread && r.worktree)?.worktree
-      : task.kind === "custom" && runSettings.isolated
+      : task.kind === "custom" && (runSettings.isolated || group)
         ? await gitBackend.createAgentWorktree(repoPath)
         : undefined;
     const base = task.kind === "custom" ? runSettings : { ...runSettings, mode: "plan" as const };
@@ -68,7 +70,7 @@ export async function startAgentRun(
     const thread = continuation?.thread ?? id;
     useAgentsStore
       .getState()
-      .addRun({ id, repoPath, agent, task, title, startedAt: new Date().toISOString(), thread, worktree });
+      .addRun({ id, repoPath, agent, task, title, startedAt: new Date().toISOString(), thread, worktree, group });
     return id;
   } catch (error) {
     const { message, detail } = toGitError(error);

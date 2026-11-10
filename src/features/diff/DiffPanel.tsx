@@ -19,6 +19,7 @@ import { ViewOptions } from "./ViewOptions";
 import { FileActions } from "./FileActions";
 import { AgentButton } from "@/features/agents/AgentButton";
 import { ReviewButton } from "@/features/github/ReviewButton";
+import { AiReviewButton } from "@/features/github/AiReview";
 import { useT } from "@/i18n";
 
 const cardId = (path: string) => `diff-${path}`;
@@ -158,6 +159,7 @@ function CommitDiffs({ repoPath, hash, base }: { repoPath: string; hash: string;
   return (
     <>
       <PanelHeader className="justify-end gap-1">
+        {pullRequest && <AiReviewButton repoPath={repoPath} pr={pullRequest} />}
         {pullRequest && <ReviewButton repoPath={repoPath} pr={pullRequest} />}
         {pullRequest && <ReviewProgress pr={pullRequest} paths={paths} />}
         <AgentButton repoPath={repoPath} />

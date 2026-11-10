@@ -1,6 +1,14 @@
 // Typed client for the Rust Git commands. The UI never builds command lines: it only calls these.
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  StashEntry,
+  StashOutcome,
+  UndoAction,
+  CommitGroup,
+  PatchMode,
+  HistorySearch,
+  LfsStatus,
+  Submodule,
   BlameHunk,
   FileCommit,
   CommitPullRequest,
@@ -66,7 +74,12 @@ export const gitBackend = {
   listRefs: (repoPath: string) => invoke<RefsSnapshot>("list_refs", { repoPath }),
   listCommits: (
     repoPath: string,
-    options: { rev: string | null; skip: number; limit: number; filters: { firstParent: boolean; noMerges: boolean } },
+    options: {
+      rev: string | null;
+      skip: number;
+      limit: number;
+      filters: HistorySearch & { firstParent: boolean; noMerges: boolean };
+    },
   ) => invoke<CommitSummary[]>("list_commits", { repoPath, ...options }),
   /** Files of a commit against its first parent, or against `base` (a pull request's merge-base). */
   listCommitFiles: (repoPath: string, hash: string, base: string | null = null) =>
@@ -216,6 +229,14 @@ export const gitBackend = {
   ) => invoke<null>("comment_line", { repoPath, number, commit, path, line, side, body }),
   replyReviewComment: (repoPath: string, number: number, commentId: number, body: string) =>
     invoke<null>("reply_review_comment", { repoPath, number, commentId, body }),
+  /** One COMMENT review on `commit` with every line comment, through `gh api`. */
+  submitAiReview: (
+    repoPath: string,
+    number: number,
+    commit: string,
+    body: string,
+    comments: { path: string; line: number; side: "LEFT" | "RIGHT"; body: string }[],
+  ) => invoke<null>("submit_ai_review", { repoPath, number, commit, body, comments }),
   /** Every file of the working tree, `.gitignore` respected. */
   /** The merge, rebase, cherry-pick or revert in progress, if any. */
   getOperation: (repoPath: string) => invoke<Operation | null>("get_operation", { repoPath }),
@@ -236,6 +257,11 @@ export const gitBackend = {
   agentWorktreeStatus: (repoPath: string, path: string) =>
     invoke<WorktreeStatus>("agent_worktree_status", { repoPath, path }),
   /** Commits what the agent left, then merges its branch into the current one. */
+  /** Multi-file patch: the agent's commits plus its uncommitted work, against where its branch forked. */
+  agentWorktreeDiff: (repoPath: string, path: string) => invoke<string>("agent_worktree_diff", { repoPath, path }),
+  /** Multi-file patch of `git diff <branch of a> <branch of b>`. */
+  compareAgentWorktrees: (repoPath: string, a: string, b: string) =>
+    invoke<string>("compare_agent_worktrees", { repoPath, a, b }),
   mergeAgentWorktree: (repoPath: string, path: string, message: string) =>
     invoke<null>("merge_agent_worktree", { repoPath, path, message }),
   /** Commits what's left, pushes the agent's branch and opens a PR into the current branch; resolves with its URL. */
@@ -306,6 +332,11 @@ export const gitBackend = {
   stageFiles: (repoPath: string, paths: string[]) => invoke<null>("stage_files", { repoPath, paths }),
   unstageFiles: (repoPath: string, paths: string[]) => invoke<null>("unstage_files", { repoPath, paths }),
   createCommit: (repoPath: string, message: string) => invoke<string>("create_commit", { repoPath, message }),
+  /** Applies hunks of one file's diff (from `buildPartialPatch`) to the index or, for discard, the working tree. */
+  applyHunks: (repoPath: string, path: string, hunks: string, mode: PatchMode) =>
+    invoke<null>("apply_hunks", { repoPath, path, hunks, mode }),
+  /** For each group: resets the index, stages its files, commits. Returns the new hashes. */
+  commitGroups: (repoPath: string, groups: CommitGroup[]) => invoke<string[]>("commit_groups", { repoPath, groups }),
   switchBranch: (repoPath: string, name: string) => invoke<null>("switch_branch", { repoPath, name }),
   /** Checks out `origin/x` as a local tracking branch (or switches to it if it exists); returns its name. */
   checkoutRemoteBranch: (repoPath: string, remoteRef: string) =>
@@ -325,4 +356,23 @@ export const gitBackend = {
   fetch: (repoPath: string) => invoke<null>("fetch", { repoPath }),
   pull: (repoPath: string) => invoke<null>("pull", { repoPath }),
   push: (repoPath: string) => invoke<null>("push", { repoPath }),
+  listSubmodules: (repoPath: string) => invoke<Submodule[]>("list_submodules", { repoPath }),
+  /** `git submodule update --init --recursive` (all, or one path). Explicit click only. */
+  updateSubmodules: (repoPath: string, path: string | null) => invoke<null>("update_submodules", { repoPath, path }),
+  /** null when git-lfs isn't installed. */
+  lfsStatus: (repoPath: string) => invoke<LfsStatus | null>("lfs_status", { repoPath }),
+  lfsTrackedPaths: (repoPath: string, paths: string[]) => invoke<string[]>("lfs_tracked_paths", { repoPath, paths }),
+  lfsPull: (repoPath: string) => invoke<null>("lfs_pull", { repoPath }),
+  lfsTrack: (repoPath: string, pattern: string) => invoke<null>("lfs_track", { repoPath, pattern }),
+  listStashes: (repoPath: string) => invoke<StashEntry[]>("list_stashes", { repoPath }),
+  createStash: (repoPath: string, message: string, includeUntracked: boolean) =>
+    invoke<null>("create_stash", { repoPath, message, includeUntracked }),
+  /** Apply (or pop: drops it once applied cleanly). With conflicts the stash is kept. */
+  applyStash: (repoPath: string, index: number, pop: boolean) =>
+    invoke<StashOutcome>("apply_stash", { repoPath, index, pop }),
+  dropStash: (repoPath: string, index: number) => invoke<null>("drop_stash", { repoPath, index }),
+  branchFromStash: (repoPath: string, index: number, name: string) =>
+    invoke<null>("branch_from_stash", { repoPath, index, name }),
+  lastUndo: (repoPath: string) => invoke<UndoAction | null>("last_undo", { repoPath }),
+  undoLast: (repoPath: string, action: UndoAction) => invoke<null>("undo_last", { repoPath, action }),
 };

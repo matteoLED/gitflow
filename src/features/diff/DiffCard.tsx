@@ -12,9 +12,12 @@ import { cn } from "@/lib/utils";
 import type { DiffLine, FileDiff, FileStatus } from "@/types/git";
 import { buildSegments, CONTEXT_LINES, EXPAND_STEP, revealGap, type GapReveal, type Segment } from "./diff-model";
 import { parseUnifiedDiff } from "./parse-unified-diff";
+import { changeBlocks } from "./partial-patch";
 import { highlightDiff, type LineTokens, cachedTokens } from "./syntax-client";
 import { toSplitRows } from "./split-rows";
 import { useT } from "@/i18n";
+import { specialPatch } from "./special-patch";
+import { SpecialPatchNote } from "./SpecialPatchNote";
 import { ImageDiff, isImage, type ImageSource } from "./ImageDiff";
 import { CommentButton, LineThreads } from "./LineComments";
 
@@ -29,8 +32,19 @@ const ROW_STYLES: Record<DiffLine["kind"], { row: string; number: string }> = {
 
 type TokenOf = (line: DiffLine) => LineTokens[number] | undefined;
 
+/** Line selection and hunk actions of a working-tree diff; lines are identified by their index in the diff. */
+export type LineStaging = {
+  selected: ReadonlySet<number>;
+  /** "only" on click, "range" on shift-click or drag, "toggle" on ⌘-click or keyboard. */
+  onPick: (index: number, how: "only" | "range" | "toggle") => void;
+  /** Buttons shown on the first line of each run of changed lines. */
+  hunkActions: (block: number[]) => ReactNode;
+};
+
+type StagingContext = LineStaging & { indexOf: Map<DiffLine, number>; blocks: Map<number, number[]> };
+
 /** Everything a row needs to render, resolved once per file. */
-type RenderContext = { tokenOf: TokenOf; gutter: string; wrap: boolean; split: boolean };
+type RenderContext = { tokenOf: TokenOf; gutter: string; wrap: boolean; split: boolean; staging?: StagingContext };
 
 function Code({ line, tokenOf }: { line: DiffLine; tokenOf: TokenOf }) {
   const tokens = tokenOf(line);
@@ -50,6 +64,47 @@ function codeClass(wrap: boolean) {
   return cn("min-w-0 flex-1 pr-4 text-[#d4d4d8]", wrap ? "break-words whitespace-pre-wrap" : "whitespace-pre");
 }
 
+function PickableNumber({ line, value, ctx }: { line: DiffLine; value: number | null; ctx: RenderContext }) {
+  const t = useT();
+  const staging = ctx.staging;
+  const index = staging?.indexOf.get(line);
+  if (!staging || index === undefined || line.kind === "context") {
+    return <LineNumber value={value} kind={line.kind} gutter={ctx.gutter} />;
+  }
+  const selected = staging.selected.has(index);
+  return (
+    <button
+      type="button"
+      aria-label={t("staging.pickLine", { line: value ?? "" })}
+      aria-pressed={selected}
+      style={{ width: ctx.gutter }}
+      onMouseDown={(e) => {
+        e.preventDefault(); // no text selection while dragging over the gutter
+        staging.onPick(index, e.shiftKey ? "range" : e.metaKey ? "toggle" : "only");
+      }}
+      onMouseEnter={(e) => e.buttons === 1 && staging.onPick(index, "range")}
+      onClick={(e) => e.detail === 0 && staging.onPick(index, "toggle")}
+      className={cn(
+        "shrink-0 cursor-pointer pr-4 text-right tabular-nums outline-none select-none hover:bg-white/[0.08] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+        ROW_STYLES[line.kind].number,
+        selected && "bg-primary/30 text-foreground hover:bg-primary/40",
+      )}
+    >
+      {value}
+    </button>
+  );
+}
+
+function HunkActions({ line, ctx }: { line: DiffLine; ctx: RenderContext }) {
+  const block = ctx.staging?.blocks.get(ctx.staging.indexOf.get(line) ?? -1);
+  if (!ctx.staging || !block) return null;
+  return (
+    <div className="absolute top-0 right-1 z-10 flex gap-1 font-sans opacity-40 group-hover/line:opacity-100 focus-within:opacity-100">
+      {ctx.staging.hunkActions(block)}
+    </div>
+  );
+}
+
 function LineNumber({ value, kind, gutter }: { value: number | null; kind: DiffLine["kind"]; gutter: string }) {
   return (
     <span
@@ -66,11 +121,8 @@ function Line({ line, ctx }: { line: DiffLine; ctx: RenderContext }) {
     <>
       <div className={cn("group/line relative flex", ROW_STYLES[line.kind].row)}>
         <CommentButton line={line} />
-        <LineNumber
-          value={line.kind === "removed" ? line.oldLine : line.newLine}
-          kind={line.kind}
-          gutter={ctx.gutter}
-        />
+        <HunkActions line={line} ctx={ctx} />
+        <PickableNumber line={line} value={line.kind === "removed" ? line.oldLine : line.newLine} ctx={ctx} />
         <span className="sr-only">{line.kind === "context" ? "" : `${line.kind}:`}</span>
         <span className={codeClass(ctx.wrap)}>
           <Code line={line} tokenOf={ctx.tokenOf} />
@@ -87,7 +139,8 @@ function Half({ line, side, ctx }: { line: DiffLine | null; side: "left" | "righ
     <div className={cn("group/line relative flex min-w-0", ROW_STYLES[line.kind].row)}>
       {/* A context line appears on both sides: only the new one takes comments. */}
       {(side === "right" || line.kind === "removed") && <CommentButton line={line} />}
-      <LineNumber value={side === "left" ? line.oldLine : line.newLine} kind={line.kind} gutter={ctx.gutter} />
+      <HunkActions line={line} ctx={ctx} />
+      <PickableNumber line={line} value={side === "left" ? line.oldLine : line.newLine} ctx={ctx} />
       <span className="sr-only">{line.kind === "context" ? "" : `${line.kind}:`}</span>
       <span className={codeClass(true)}>
         <Code line={line} tokenOf={ctx.tokenOf} />
@@ -225,7 +278,9 @@ function Note({ children }: { children: ReactNode }) {
   return <p className="px-4 py-3 text-xs text-muted-foreground">{children}</p>;
 }
 
-function DiffLines({ path, lines, expandAll }: { path: string; lines: DiffLine[]; expandAll: boolean }) {
+type DiffLinesProps = { path: string; lines: DiffLine[]; expandAll: boolean; staging?: LineStaging };
+
+function DiffLines({ path, lines, expandAll, staging }: DiffLinesProps) {
   const t = useT();
   const { layout, wrapLines, syntaxHighlighting } = useViewSettings(
     useShallow((s) => ({ layout: s.layout, wrapLines: s.wrapLines, syntaxHighlighting: s.syntaxHighlighting })),
@@ -236,6 +291,13 @@ function DiffLines({ path, lines, expandAll }: { path: string; lines: DiffLine[]
   );
   const [reveals, setReveals] = useState<Record<number, GapReveal>>({});
   const tokenOf = useTokens(path, lines, syntaxHighlighting);
+  const lookup = useMemo(
+    () => ({
+      indexOf: new Map(lines.map((line, i) => [line, i])),
+      blocks: new Map(changeBlocks(lines).map((block) => [block[0], block])),
+    }),
+    [lines],
+  );
   const maxLine = lines.reduce((max, l) => Math.max(max, l.newLine ?? 0, l.oldLine ?? 0), 0);
   const split = layout === "split";
   // Split halves always wrap: two independent horizontal scrolls would be unusable.
@@ -244,6 +306,7 @@ function DiffLines({ path, lines, expandAll }: { path: string; lines: DiffLine[]
     gutter: `${Math.max(String(maxLine).length, 3) + 4}ch`,
     wrap: wrapLines || split,
     split,
+    staging: staging && { ...staging, ...lookup },
   };
 
   return (
@@ -281,9 +344,11 @@ type DiffBodyProps = {
   expandAll?: boolean;
   /** Where to read a binary image from, to show it instead of "binary file". */
   image?: ImageSource & { status: FileStatus };
+  /** Makes changed lines selectable, with per-hunk actions (working-tree diffs). */
+  staging?: LineStaging;
 };
 
-export function DiffBody({ path, diff, error, loading, expandAll = false, image }: DiffBodyProps) {
+export function DiffBody({ path, diff, error, loading, expandAll = false, image, staging }: DiffBodyProps) {
   const t = useT();
   const lines = useMemo(() => parseUnifiedDiff(diff?.patch ?? "").flatMap((h) => h.lines), [diff?.patch]);
   if (error) return <Note>{t("diff.loadError", { message: toGitError(error).message })}</Note>;
@@ -297,8 +362,10 @@ export function DiffBody({ path, diff, error, loading, expandAll = false, image 
   }
   if (diff.binary && image && isImage(path)) return <ImageDiff path={path} status={image.status} source={image} />;
   if (diff.binary) return <Note>{t("diff.binary")}</Note>;
+  const special = specialPatch(diff.patch);
+  if (special) return <SpecialPatchNote path={path} special={special} />;
   if (lines.length === 0) return <Note>{t("diff.noText")}</Note>;
-  return <DiffLines path={path} lines={lines} expandAll={expandAll} />;
+  return <DiffLines path={path} lines={lines} expandAll={expandAll} staging={staging} />;
 }
 
 export type DiffCardFile = {

@@ -1,6 +1,15 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { AgentScope, AgentKind, AgentRunEvent, AgentStep, AgentTask, AgentUsage, RunSettings, Worktree } from "@/types/git";
+import type {
+  AgentScope,
+  AgentKind,
+  AgentRunEvent,
+  AgentStep,
+  AgentTask,
+  AgentUsage,
+  RunSettings,
+  Worktree,
+} from "@/types/git";
 
 export type RunStatus = "running" | "done" | "failed" | "cancelled";
 
@@ -19,6 +28,8 @@ export type AgentRun = {
   thread: string;
   /** The isolated worktree the conversation works in, if it was started in one. */
   worktree?: Worktree;
+  /** Shared by conversations launched together on the same prompt ("Run on N agents"), to compare them. */
+  group?: string;
   /** Latest known context fill and cost of this run. */
   usage?: Partial<AgentUsage>;
 };
@@ -33,6 +44,7 @@ function mergeUsage(previous: Partial<AgentUsage> | undefined, next: AgentUsage)
 export type AgentSelection =
   | { type: "new" }
   | { type: "usage" }
+  | { type: "board" }
   | { type: "definition"; scope: AgentScope; name: string }
   | { type: "new-definition" }
   | { type: "run"; id: string }
