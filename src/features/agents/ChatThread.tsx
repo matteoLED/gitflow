@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useComposerMenu } from "./ComposerMenu";
 import {
   ArrowUp,
   Brain,
@@ -258,9 +259,14 @@ type ChatThreadProps = {
   placeholder?: string;
   /** Mode / model / effort pickers shown under the message. */
   settings?: React.ReactNode;
+  /** The composer takes the focus whenever this changes (e.g. code just attached from the editor). */
+  focusKey?: unknown;
 };
 
 /** Conversation view, like Zed's agent panel: transcript on top, a composer to keep going at the bottom. */
+const COMPOSER_FIELD =
+  "field-sizing-content max-h-48 min-h-[60px] resize-none rounded-none border-0 bg-transparent px-3.5 pt-3 pb-0 text-[14px] leading-[1.45] shadow-none placeholder:text-muted-foreground/70 focus-visible:ring-0 md:text-[14px] dark:bg-transparent";
+
 export function ChatThread({
   steps,
   running,
@@ -272,6 +278,7 @@ export function ChatThread({
   compact = false,
   placeholder,
   settings,
+  focusKey,
 }: ChatThreadProps) {
   const t = useT();
   const [draft, setDraft] = useState("");
@@ -305,8 +312,18 @@ export function ChatThread({
     return () => window.removeEventListener("keydown", onKey);
   }, [running, onStop]);
 
+  const {
+    menu: completion,
+    chips,
+    onKeyDown: completeKey,
+    onSelect: trackCaret,
+    onScroll: syncChips,
+    expand,
+    anchor: composerRef,
+    input: inputRef,
+  } = useComposerMenu(root, draft, setDraft, COMPOSER_FIELD);
   const send = () => {
-    const text = draft.trim();
+    const text = expand(draft.trim());
     const images = attachments.items.map((a) => a.path);
     if ((!text && images.length === 0) || running || !onSend || attachments.saving) return;
     onSend(text || t("attach.lookAtThis"), images);
@@ -314,7 +331,11 @@ export function ChatThread({
     attachments.clear();
     stick.current = true;
   };
+  useEffect(() => {
+    if (focusKey) inputRef.current?.focus();
+  }, [focusKey, inputRef]);
   const onKeyDown = (e: KeyboardEvent) => {
+    if (completeKey(e)) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -382,22 +403,30 @@ export function ChatThread({
           </div>
         )}
         <div
+          ref={composerRef}
           onDragOver={(e) => e.preventDefault()}
           onDrop={attachments.onDrop}
-          className="mx-auto max-w-[780px] rounded-xl border border-white/[0.07] bg-[color-mix(in_oklab,var(--foreground)_5%,var(--background))] transition-colors focus-within:border-white/[0.14]"
+          className="relative mx-auto max-w-[780px] rounded-xl border border-white/[0.07] bg-[color-mix(in_oklab,var(--foreground)_5%,var(--background))] transition-colors focus-within:border-white/[0.14]"
         >
+          {completion}
           {context && <div className="flex flex-wrap gap-1.5 px-2.5 pt-2.5">{context}</div>}
           <AttachmentStrip attachments={attachments} />
-          <Textarea
-            onPaste={attachments.onPaste}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-            disabled={!onSend}
-            aria-label={t("agents.message")}
-            placeholder={onSend ? (placeholder ?? t("agents.continuePlaceholder")) : t("agents.cannotContinue")}
-            className="field-sizing-content max-h-48 min-h-[60px] resize-none rounded-none border-0 bg-transparent px-3.5 pt-3 pb-0 text-[14px] leading-[1.45] shadow-none placeholder:text-muted-foreground/70 focus-visible:ring-0 md:text-[14px] dark:bg-transparent"
-          />
+          <div className="relative">
+            {chips}
+            <Textarea
+              ref={inputRef}
+              onSelect={trackCaret}
+              onScroll={syncChips}
+              onPaste={attachments.onPaste}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={onKeyDown}
+              disabled={!onSend}
+              aria-label={t("agents.message")}
+              placeholder={onSend ? (placeholder ?? t("agents.continuePlaceholder")) : t("agents.cannotContinue")}
+              className={cn(COMPOSER_FIELD, "relative text-transparent caret-foreground")}
+            />
+          </div>
           <div className="flex items-center gap-1.5 px-2 pt-1 pb-2">
             {onSend && <AttachButton attachments={attachments} />}
             {/* Grows so a trailing item of `settings` (the context ring) can sit by the send button. */}

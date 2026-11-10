@@ -18,6 +18,8 @@ pub struct RunOptions<'a> {
     pub stdin: Option<&'a [u8]>,
     /// Exit codes treated as success besides 0 (`git diff --no-index` exits 1 when files differ).
     pub ok_codes: &'a [i32],
+    /// Extra environment, e.g. the editors a non-interactive rebase uses instead of the user's.
+    pub env: &'a [(&'a str, &'a str)],
 }
 
 impl Default for RunOptions<'_> {
@@ -26,6 +28,7 @@ impl Default for RunOptions<'_> {
             timeout: READ_TIMEOUT,
             stdin: None,
             ok_codes: &[],
+            env: &[],
         }
     }
 }
@@ -39,7 +42,9 @@ pub fn git_text(repo: &Path, args: &[&str]) -> GitResult<String> {
 }
 
 pub fn git_with(repo: &Path, args: &[&str], opts: &RunOptions) -> GitResult<Vec<u8>> {
-    execute(git_command(repo, args), args, opts)
+    let mut cmd = git_command(repo, args);
+    cmd.envs(opts.env.iter().copied());
+    execute(cmd, args, opts)
 }
 
 /// Runs `gh` (an absolute path found by the caller) in `repo`, using the user's own GitHub login.

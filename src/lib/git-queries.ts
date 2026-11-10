@@ -87,6 +87,14 @@ export function useGitIdentity() {
   return useQuery({ queryKey: ["git-identity"], queryFn: gitBackend.getGitIdentity });
 }
 
+/** The merge/rebase/cherry-pick/revert in progress; refreshed by the repository watcher like the working tree. */
+export function useOperation(repoPath: string) {
+  return useQuery({
+    queryKey: [...repoKey(repoPath), "operation"],
+    queryFn: () => gitBackend.getOperation(repoPath),
+  });
+}
+
 export function useWorkingTree(repoPath: string) {
   return useQuery({
     queryKey: [...repoKey(repoPath), "working-tree"],
@@ -113,5 +121,35 @@ export function invalidateRepo(client: QueryClient, repoPath: string, kinds?: st
       const kind = String(queryKey[2]);
       return kinds ? kinds.includes(kind) : !IMMUTABLE.has(kind);
     },
+  });
+}
+
+/** Who last changed each line of a working-tree file; refreshed on save and by the repository watcher. */
+export function useBlame(repoPath: string, path: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: [...repoKey(repoPath), "blame", path],
+    queryFn: () => gitBackend.blameFile(repoPath, path ?? ""),
+    enabled: enabled && path !== null,
+    retry: false, // untracked files have no blame
+  });
+}
+
+export function useFileHistory(repoPath: string, path: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...repoKey(repoPath), "file-history", path],
+    queryFn: () => gitBackend.fileHistory(repoPath, path),
+    enabled,
+    retry: false,
+  });
+}
+
+/** Keyed by sha (a commit's pull request doesn't change); a missing gh just means no link. */
+export function useCommitPullRequest(repoPath: string, sha: string | null) {
+  return useQuery({
+    queryKey: ["commit-pr", repoPath, sha],
+    queryFn: () => gitBackend.commitPullRequest(repoPath, sha ?? ""),
+    enabled: sha !== null && !/^0+$/.test(sha),
+    staleTime: Infinity,
+    retry: false,
   });
 }

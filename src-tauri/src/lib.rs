@@ -26,14 +26,43 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             commands::open_repository,
             commands::list_refs,
+            commands::get_operation,
+            commands::list_slash_commands,
+            commands::create_agent_worktree,
+            commands::list_agent_worktrees,
+            commands::agent_worktree_status,
+            commands::merge_agent_worktree,
+            commands::publish_agent_worktree,
+            commands::remove_agent_worktree,
+            commands::continue_operation,
+            commands::abort_operation,
+            commands::skip_rebase_commit,
+            commands::cherry_pick_commit,
+            commands::revert_commit,
+            commands::rebase_plan,
+            commands::interactive_rebase,
+            commands::resolve_with_side,
             commands::list_files,
             commands::read_file,
             commands::write_file,
             commands::line_changes,
+            commands::blame_file,
+            commands::file_history,
+            commands::commit_pull_request,
             commands::search_files,
+            commands::replace_in_files,
+            commands::create_file,
+            commands::create_dir,
+            commands::rename_path,
+            commands::duplicate_file,
+            commands::delete_path,
+            commands::reveal_path,
             commands::lsp_start,
             commands::lsp_send,
             commands::lsp_stop,

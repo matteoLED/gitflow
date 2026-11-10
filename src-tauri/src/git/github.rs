@@ -65,7 +65,7 @@ fn find_gh() -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-fn require_gh() -> GitResult<PathBuf> {
+pub(crate) fn require_gh() -> GitResult<PathBuf> {
     find_gh().ok_or_else(|| {
         GitError::new(
             ErrorKind::GitNotFound,

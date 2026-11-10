@@ -152,6 +152,9 @@ pub struct RunSettings {
     /// Images pasted into the message (paths from `attachments::save` only).
     #[serde(default)]
     pub images: Vec<String>,
+    /// Run in this agent worktree of the repository instead of the repository itself.
+    #[serde(default)]
+    pub worktree: Option<String>,
 }
 
 impl Default for RunSettings {
@@ -161,6 +164,7 @@ impl Default for RunSettings {
             model: None,
             effort: None,
             images: Vec::new(),
+            worktree: None,
         }
     }
 }
@@ -416,7 +420,12 @@ pub fn start(
             return Err(GitError::invalid("Invalid conversation id."));
         }
     }
-    let mut cmd = command(kind, &program, repo, settings, resume);
+    // An isolated run works in its own worktree, which must be one the app made for this repository.
+    let cwd = match &settings.worktree {
+        Some(path) => crate::git::worktrees::checked_path(repo, path)?,
+        None => repo.to_path_buf(),
+    };
+    let mut cmd = command(kind, &program, &cwd, settings, resume);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -629,6 +638,7 @@ mod tests {
             model: Some("opus".into()),
             effort: Some("high".into()),
             images: Vec::new(),
+            worktree: None,
         };
         let args: Vec<_> = command(
             AgentKind::Claude,
@@ -676,6 +686,7 @@ mod tests {
             model: Some("--dangerously-skip-permissions".into()),
             effort: None,
             images: Vec::new(),
+            worktree: None,
         };
         assert!(settings.validate().is_ok()); // a lone value after --model is never parsed as a flag…
         let bad = RunSettings {
@@ -683,6 +694,7 @@ mod tests {
             model: Some("opus; rm -rf /".into()),
             effort: None,
             images: Vec::new(),
+            worktree: None,
         };
         assert!(bad.validate().is_err()); // …and anything that isn't a model name is refused
     }

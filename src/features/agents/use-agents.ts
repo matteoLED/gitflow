@@ -55,11 +55,20 @@ export async function startAgentRun(
   try {
     const locale = useLocaleStore.getState().locale;
     // Ready-made tasks (review, explain, commit message) only read; free requests use the composer's mode.
-    const { runSettings } = useAgentsStore.getState();
-    const settings = { ...(task.kind === "custom" ? runSettings : { ...runSettings, mode: "plan" as const }), images };
+    const { runSettings, runs } = useAgentsStore.getState();
+    // Isolation: a new free-form conversation gets its own worktree; follow-ups keep working in the same one.
+    const worktree = continuation
+      ? runs.find((r) => r.thread === continuation.thread && r.worktree)?.worktree
+      : task.kind === "custom" && runSettings.isolated
+        ? await gitBackend.createAgentWorktree(repoPath)
+        : undefined;
+    const base = task.kind === "custom" ? runSettings : { ...runSettings, mode: "plan" as const };
+    const settings = { ...base, images, worktree: worktree?.path ?? null };
     const id = await gitBackend.startAgentRun(repoPath, agent, task, locale, continuation?.resume ?? null, settings);
     const thread = continuation?.thread ?? id;
-    useAgentsStore.getState().addRun({ id, repoPath, agent, task, title, startedAt: new Date().toISOString(), thread });
+    useAgentsStore
+      .getState()
+      .addRun({ id, repoPath, agent, task, title, startedAt: new Date().toISOString(), thread, worktree });
     return id;
   } catch (error) {
     const { message, detail } = toGitError(error);

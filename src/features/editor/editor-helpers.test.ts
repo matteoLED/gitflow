@@ -27,6 +27,14 @@ describe("visibleRows", () => {
     ]);
   });
 
+  it("shows empty folders created in the tree", () => {
+    expect(visibleRows(buildTree(["a.md"], ["new/sub"]), new Set(["new"])).map((r) => r.path)).toEqual([
+      "new",
+      "new/sub",
+      "a.md",
+    ]);
+  });
+
   it("names the folders to open to reveal a file", () => {
     expect(parentsOf("src/lib/a.ts")).toEqual(["src", "src/lib"]);
   });

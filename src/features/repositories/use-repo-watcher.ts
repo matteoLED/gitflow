@@ -22,8 +22,8 @@ export function useRepoWatcher(repoPath: string) {
       .then(({ listen }) =>
         listen<RepoChanged>("repo-changed", ({ payload }) => {
           if (payload.repoPath !== repoPath) return;
-          const kinds = ["working-tree", "working-diff"];
-          if (payload.git) kinds.push("refs", "commits");
+          const kinds = ["working-tree", "working-diff", "operation", "blame"];
+          if (payload.git) kinds.push("refs", "commits", "file-history");
           void invalidateRepo(client, repoPath, kinds);
         }),
       )

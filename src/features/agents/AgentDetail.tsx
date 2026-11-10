@@ -37,6 +37,8 @@ import { ContextMeter, UsageRing, threadUsage } from "./ContextMeter";
 import { contextWindowOf, costOf } from "./pricing";
 import { UsageView } from "./UsageView";
 import { AgentDefinitionEditor } from "./AgentDefinitions";
+import { WorktreeBar } from "./WorktreeBar";
+import { useComposerMenu } from "./ComposerMenu";
 import { RunSettingsBar } from "./RunSettingsBar";
 import { ChatThread } from "./ChatThread";
 import { startAgentRun, useInstalledAgents } from "./use-agents";
@@ -146,6 +148,9 @@ function usePresets(): Preset[] {
   return presets;
 }
 
+const NEW_TASK_FIELD =
+  "max-h-72 min-h-28 resize-none border-0 bg-transparent px-4 pt-3.5 text-[14px] shadow-none focus-visible:ring-0 md:text-[14px] dark:bg-transparent";
+
 function Composer({ repoPath }: { repoPath: string }) {
   const t = useT();
   const { preferredAgent, select } = useAgentsStore(
@@ -153,6 +158,16 @@ function Composer({ repoPath }: { repoPath: string }) {
   );
   const presets = usePresets();
   const [prompt, setPrompt] = useState("");
+  const {
+    menu: completion,
+    chips,
+    onKeyDown: completeKey,
+    onSelect: trackCaret,
+    onScroll: syncChips,
+    expand,
+    anchor: composerRef,
+    input: inputRef,
+  } = useComposerMenu(repoPath, prompt, setPrompt, NEW_TASK_FIELD);
   const [starting, setStarting] = useState(false);
   const attachments = useAttachments();
   const run = async (task: AgentTask, title: string, images: string[] = []) => {
@@ -164,7 +179,7 @@ function Composer({ repoPath }: { repoPath: string }) {
   const runCustom = () => {
     const images = attachments.items.map((a) => a.path);
     if ((!prompt.trim() && images.length === 0) || attachments.saving) return;
-    const text = prompt.trim() || t("attach.lookAtThis");
+    const text = expand(prompt.trim()) || t("attach.lookAtThis");
     attachments.clear();
     void run({ kind: "custom", prompt: text }, text.slice(0, 80), images);
   };
@@ -175,30 +190,39 @@ function Composer({ repoPath }: { repoPath: string }) {
         <h1 className="font-display text-[28px]">{t("agents.composerTitle")}</h1>
         <p className="mt-1 text-[13.5px] text-muted-foreground">{t("agents.composerHint")}</p>
         <div
+          ref={composerRef}
           onDragOver={(e) => e.preventDefault()}
           onDrop={attachments.onDrop}
-          className="surface mt-7 rounded-2xl shadow-[0_12px_40px_rgb(0_0_0/0.35)] transition-colors focus-within:border-primary/40"
+          className="relative mt-7 rounded-xl border border-white/[0.07] bg-[color-mix(in_oklab,var(--foreground)_5%,var(--background))] transition-colors focus-within:border-white/[0.14]"
         >
+          {completion}
           <AttachmentStrip attachments={attachments} />
-          <Textarea
-            onPaste={attachments.onPaste}
-            autoFocus
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.metaKey && e.key === "Enter") {
-                e.preventDefault();
-                runCustom();
-              }
-            }}
-            aria-label={t("agents.customLabel")}
-            placeholder={t("agents.customPlaceholder")}
-            className="max-h-72 min-h-28 resize-none border-0 bg-transparent px-4 pt-3.5 text-[14px] shadow-none focus-visible:ring-0 md:text-[14px] dark:bg-transparent"
-          />
+          <div className="relative">
+            {chips}
+            <Textarea
+              ref={inputRef}
+              onSelect={trackCaret}
+              onScroll={syncChips}
+              onPaste={attachments.onPaste}
+              autoFocus
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (completeKey(e)) return;
+                if (e.metaKey && e.key === "Enter") {
+                  e.preventDefault();
+                  runCustom();
+                }
+              }}
+              aria-label={t("agents.customLabel")}
+              placeholder={t("agents.customPlaceholder")}
+              className={cn(NEW_TASK_FIELD, "relative text-transparent caret-foreground")}
+            />
+          </div>
           <div className="flex items-center gap-1.5 px-2.5 pb-2.5">
             <AttachButton attachments={attachments} />
             <AgentMenu />
-            <RunSettingsBar agent={preferredAgent} />
+            <RunSettingsBar agent={preferredAgent} canIsolate />
             <Button
               size="icon-sm"
               aria-label={t("agents.run")}
@@ -288,6 +312,7 @@ function RunView({ repoPath, run }: { repoPath: string; run: AgentRun }) {
         <span className="text-[12px] text-muted-foreground">{agentName}</span>
         {live && <StopButton runId={live.id} />}
       </PanelHeader>
+      {run.worktree && <WorktreeBar repoPath={repoPath} worktree={run.worktree} title={run.title} running={!!live} />}
       <ChatThread
         steps={runs.flatMap((r) => r.steps)}
         running={!!live}

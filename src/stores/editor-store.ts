@@ -18,9 +18,15 @@ type EditorState = {
   open: (repo: string, path: string) => void;
   close: (repo: string, path: string) => void;
   toggleFolder: (repo: string, folder: string, open?: boolean) => void;
+  /** A file or folder moved in the tree: its tabs and open folders follow. */
+  renamePath: (repo: string, from: string, to: string) => void;
+  /** A file or folder deleted: its tabs close. */
+  removePath: (repo: string, path: string) => void;
 };
 
 const EMPTY: RepoEditor = { tabs: [], active: null, folders: [] };
+/** `path` is `base` or inside it. */
+export const isUnder = (path: string, base: string) => path === base || path.startsWith(`${base}/`);
 export const editorOf = (s: EditorState, repo: string) => s.repos[repo] ?? EMPTY;
 
 export const useEditorStore = create<EditorState>()(
@@ -54,6 +60,17 @@ export const useEditorStore = create<EditorState>()(
             const next = open ?? !isOpen;
             if (next === isOpen) return r;
             return { ...r, folders: next ? [...r.folders, folder] : r.folders.filter((f) => f !== folder) };
+          }),
+        renamePath: (repo, from, to) =>
+          update(repo, (r) => {
+            const moved = (p: string) => (isUnder(p, from) ? to + p.slice(from.length) : p);
+            return { tabs: r.tabs.map(moved), active: r.active && moved(r.active), folders: r.folders.map(moved) };
+          }),
+        removePath: (repo, path) =>
+          update(repo, (r) => {
+            const tabs = r.tabs.filter((p) => !isUnder(p, path));
+            const active = r.active && isUnder(r.active, path) ? (tabs[tabs.length - 1] ?? null) : r.active;
+            return { tabs, active, folders: r.folders.filter((f) => !isUnder(f, path)) };
           }),
       };
     },

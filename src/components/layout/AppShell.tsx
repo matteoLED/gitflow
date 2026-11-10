@@ -1,4 +1,6 @@
 import { lazy, Suspense, useEffect, type ReactNode } from "react";
+import { OperationBar } from "@/features/conflicts/OperationBar";
+import { ShortcutsDialog } from "@/features/shortcuts/ShortcutsDialog";
 import { CommandPalette } from "@/features/command/CommandPalette";
 import { WorkList } from "@/features/work/WorkList";
 import { WorkPage } from "@/features/work/WorkPage";
@@ -29,6 +31,8 @@ import { Columns } from "@/components/layout/Columns";
 import { TerminalDock } from "@/features/terminal/TerminalDock";
 import { useUiStore } from "@/stores/ui-store";
 import { useRepoWatcher } from "@/features/repositories/use-repo-watcher";
+import { watchForUpdates } from "@/features/updates/updater";
+import { useDesktopNotifications } from "@/features/notifications/use-desktop-notifications";
 
 // Opened on demand: kept out of the startup bundle.
 const AgentDetail = lazy(() => import("@/features/agents/AgentDetail").then((m) => ({ default: m.AgentDetail })));
@@ -348,20 +352,25 @@ function useAssistantShortcut() {
 /** The views over a docked terminal (⌃`). */
 export function AppShell({ view }: { view: View }) {
   const repo = useWorkspaceStore((s) => s.repo);
+  useEffect(watchForUpdates, []);
   if (!repo) return <WelcomeScreen />;
   return <Workspace repo={repo} view={view} />;
 }
 
 function Workspace({ repo, view }: { repo: RepositoryInfo; view: View }) {
   useRepoWatcher(repo.path);
+  useDesktopNotifications(repo.path);
   useAssistantShortcut();
   const assistantOpen = useUiStore((s) => s.assistantOpen);
   return (
     <div className="flex h-full flex-col bg-sidebar">
       <TabSync />
       <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1">
-          <Layout repo={repo} view={view} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1">
+            <Layout repo={repo} view={view} />
+          </div>
+          <OperationBar repoPath={repo.path} />
         </div>
         {assistantOpen && (
           <Suspense fallback={null}>
@@ -371,6 +380,7 @@ function Workspace({ repo, view }: { repo: RepositoryInfo; view: View }) {
       </div>
       <TerminalDock key={repo.path} repoPath={repo.path} />
       <CommandPalette repo={repo} />
+      <ShortcutsDialog />
     </div>
   );
 }

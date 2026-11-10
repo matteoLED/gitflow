@@ -64,6 +64,8 @@
 /* V1 is dark-only: tokens live on :root. Values sampled from the reference design, then lifted for contrast. */
 :root {
   color-scheme: dark;
+  /* `@theme inline` doesn't emit its variables: CodeMirror's themes read the UI font from here. */
+  --font-sans: "Inter Variable", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   /* Berkeley Mono is licensed per machine: used when installed locally, never bundled (see @font-face above). */
   --code-font:
     "Berkeley Mono", "Berkeley Mono Trial Fixed", "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;

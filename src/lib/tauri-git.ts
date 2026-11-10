@@ -1,6 +1,9 @@
 // Typed client for the Rust Git commands. The UI never builds command lines: it only calls these.
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  BlameHunk,
+  FileCommit,
+  CommitPullRequest,
   ChangedFile,
   CommitSummary,
   FileDiff,
@@ -10,8 +13,18 @@ import type {
   PullRequest,
   EditorFile,
   LineChange,
+  Operation,
+  RebaseCommit,
+  RebaseStep,
+  RewriteOutcome,
+  Worktree,
+  WorktreeStatus,
   Reaction,
   SearchResults,
+  MatchOptions,
+  ReplaceRequest,
+  ReplaceOutcome,
+  SlashCommand,
   ReviewThread,
   RepositoryInfo,
   WorkingSide,
@@ -204,15 +217,60 @@ export const gitBackend = {
   replyReviewComment: (repoPath: string, number: number, commentId: number, body: string) =>
     invoke<null>("reply_review_comment", { repoPath, number, commentId, body }),
   /** Every file of the working tree, `.gitignore` respected. */
+  /** The merge, rebase, cherry-pick or revert in progress, if any. */
+  getOperation: (repoPath: string) => invoke<Operation | null>("get_operation", { repoPath }),
+  continueOperation: (repoPath: string) => invoke<null>("continue_operation", { repoPath }),
+  abortOperation: (repoPath: string) => invoke<null>("abort_operation", { repoPath }),
+  cherryPickCommit: (repoPath: string, hash: string) =>
+    invoke<RewriteOutcome>("cherry_pick_commit", { repoPath, hash }),
+  revertCommit: (repoPath: string, hash: string) => invoke<RewriteOutcome>("revert_commit", { repoPath, hash }),
+  rebasePlan: (repoPath: string, from: string) => invoke<RebaseCommit[]>("rebase_plan", { repoPath, from }),
+  /** Refuses with `alreadyPushed` unless `confirmed` when the rewritten commits are on a remote. */
+  interactiveRebase: (repoPath: string, from: string, steps: RebaseStep[], confirmed: boolean) =>
+    invoke<RewriteOutcome>("interactive_rebase", { repoPath, from, steps, confirmed }),
+  skipRebaseCommit: (repoPath: string) => invoke<null>("skip_rebase_commit", { repoPath }),
+  /** Resolves whole files with one side, then marks them resolved. */
+  resolveWithSide: (repoPath: string, paths: string[], theirs: boolean) =>
+    invoke<null>("resolve_with_side", { repoPath, paths, theirs }),
+  createAgentWorktree: (repoPath: string) => invoke<Worktree>("create_agent_worktree", { repoPath }),
+  agentWorktreeStatus: (repoPath: string, path: string) =>
+    invoke<WorktreeStatus>("agent_worktree_status", { repoPath, path }),
+  /** Commits what the agent left, then merges its branch into the current one. */
+  mergeAgentWorktree: (repoPath: string, path: string, message: string) =>
+    invoke<null>("merge_agent_worktree", { repoPath, path, message }),
+  /** Commits what's left, pushes the agent's branch and opens a PR into the current branch; resolves with its URL. */
+  publishAgentWorktree: (repoPath: string, path: string, title: string, body: string) =>
+    invoke<string>("publish_agent_worktree", { repoPath, path, title, body }),
+  removeAgentWorktree: (repoPath: string, path: string, deleteBranch: boolean) =>
+    invoke<null>("remove_agent_worktree", { repoPath, path, deleteBranch }),
+  /** Claude Code's custom commands and skills, project then user. */
+  listSlashCommands: (repoPath: string) => invoke<SlashCommand[]>("list_slash_commands", { repoPath }),
   listFiles: (repoPath: string) => invoke<string[]>("list_files", { repoPath }),
   readFile: (repoPath: string, path: string) => invoke<EditorFile>("read_file", { repoPath, path }),
   /** Saves atomically; refuses (changedOnDisk) when the file changed since `expectedMtime`. Returns the new mtime. */
   writeFile: (repoPath: string, path: string, content: string, expectedMtime: number | null) =>
     invoke<number>("write_file", { repoPath, path, content, expectedMtime }),
   /** Lines matching `query` across the working tree (git grep). */
-  searchFiles: (repoPath: string, query: string, regex: boolean, caseSensitive: boolean) =>
-    invoke<SearchResults>("search_files", { repoPath, query, regex, caseSensitive }),
+  searchFiles: (repoPath: string, query: string, options: MatchOptions) =>
+    invoke<SearchResults>("search_files", { repoPath, query, options }),
+  /** Replaces with the search's semantics; files in `skip` (unsaved in the editor) are left alone. */
+  replaceInFiles: (repoPath: string, request: ReplaceRequest) =>
+    invoke<ReplaceOutcome>("replace_in_files", { repoPath, request }),
+  createFile: (repoPath: string, path: string) => invoke<null>("create_file", { repoPath, path }),
+  createDir: (repoPath: string, path: string) => invoke<null>("create_dir", { repoPath, path }),
+  renamePath: (repoPath: string, from: string, to: string) => invoke<null>("rename_path", { repoPath, from, to }),
+  /** Returns the copy's path ("name copy.ext"). */
+  duplicateFile: (repoPath: string, path: string) => invoke<string>("duplicate_file", { repoPath, path }),
+  /** Moves to the macOS Trash. */
+  deletePath: (repoPath: string, path: string) => invoke<null>("delete_path", { repoPath, path }),
+  revealPath: (repoPath: string, path: string) => invoke<null>("reveal_path", { repoPath, path }),
   lineChanges: (repoPath: string, path: string) => invoke<LineChange[]>("line_changes", { repoPath, path }),
+  blameFile: (repoPath: string, path: string) => invoke<BlameHunk[]>("blame_file", { repoPath, path }),
+  /** Commits touching the file, newest first, following renames. */
+  fileHistory: (repoPath: string, path: string) => invoke<FileCommit[]>("file_history", { repoPath, path }),
+  /** The pull request that introduced a commit, via gh; null when there's none. */
+  commitPullRequest: (repoPath: string, sha: string) =>
+    invoke<CommitPullRequest | null>("commit_pull_request", { repoPath, sha }),
   /** Writes that image to `dest`, a path picked in the save dialog. */
   saveImage: (repoPath: string, hash: string, base: string | null, path: string, oldSide: boolean, dest: string) =>
     invoke<null>("save_image", { repoPath, hash, base, path, oldSide, dest }),

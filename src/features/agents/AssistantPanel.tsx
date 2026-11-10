@@ -23,7 +23,10 @@ import { formatAge } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import { useAgentsStore, threadRuns, type AgentRun } from "@/stores/agents-store";
 import { runOf, usePreviewStore } from "@/stores/preview-store";
-import { useUiStore } from "@/stores/ui-store";
+import { useUiStore, type CodeSelection } from "@/stores/ui-store";
+import { editorOf, useEditorStore } from "@/stores/editor-store";
+import { FileIcon } from "@/components/file-icon";
+import { selectionPrompt } from "@/features/editor/AskAgent";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { usePreviewTargets } from "@/features/preview/PreviewList";
 import { pickAgent } from "./AgentButton";
@@ -31,11 +34,11 @@ import { LinearIcon } from "@/features/linear/LinearIcon";
 import { useOpenIssue } from "@/features/linear/linear-queries";
 import { ContextMeter } from "./ContextMeter";
 import { RunSettingsBar } from "./RunSettingsBar";
-import { ClaudeIcon } from "./agent-icons";
+import { ClaudeIcon, CodexIcon } from "./agent-icons";
 import { ChatThread, CONTEXT_SEPARATOR } from "./ChatThread";
 import { startAgentRun, useInstalledAgents } from "./use-agents";
 
-type Chip = { kind: "preview" | "pr" | "commit" | "issue"; icon: ReactNode; label: string; detail: string };
+type Chip = { kind: "preview" | "pr" | "commit" | "issue" | "file"; icon: ReactNode; label: string; detail: string };
 
 /** What the user is looking at right now, as chips for them and as plain facts for the agent. */
 function useContextChips(repoPath: string): Chip[] {
@@ -44,6 +47,7 @@ function useContextChips(repoPath: string): Chip[] {
   const targets = usePreviewTargets(repoPath).data ?? [];
   const chips: Chip[] = [];
   const issue = useOpenIssue().data;
+  const file = useEditorStore((s) => editorOf(s, repoPath).active);
   // Same default as the preview panel: the first app when none was picked yet.
   const target = targets.find((x) => x.id === selected) ?? targets[0];
   const run = runOf(runs, target?.id ?? null);
@@ -53,6 +57,14 @@ function useContextChips(repoPath: string): Chip[] {
       icon: <Globe className="size-3" />,
       label: target.name,
       detail: `The user is previewing the app ${target.name} (${target.framework}, folder ${target.dir})${run.url ? ` running at ${run.url}` : ""}.`,
+    });
+  }
+  if (view === "editor" && file) {
+    chips.push({
+      kind: "file",
+      icon: <FileIcon path={file} className="size-3" />,
+      label: file.slice(file.lastIndexOf("/") + 1),
+      detail: `The user has ${file} open in the editor.`,
     });
   }
   if (pullRequest) {
@@ -81,6 +93,38 @@ function useContextChips(repoPath: string): Chip[] {
     });
   }
   return chips;
+}
+
+/** Code attached from the editor (⌘L), as a card above the message: Arc/Dia's page card for a selection. */
+function SelectionCard({ selection, onRemove }: { selection: CodeSelection; onRemove: () => void }) {
+  const t = useT();
+  const name = selection.path.slice(selection.path.lastIndexOf("/") + 1);
+  const lines =
+    selection.to > selection.from
+      ? t("assistant.lines", { from: selection.from, to: selection.to })
+      : t("assistant.line", { line: selection.from });
+  return (
+    <div
+      title={`${selection.path}\n\n${selection.code}`}
+      className="group/card relative flex max-w-[260px] items-center gap-2.5 rounded-xl bg-white/[0.06] py-1.5 pr-3 pl-1.5"
+    >
+      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-black/40">
+        <FileIcon path={selection.path} className="size-4" />
+      </span>
+      <span className="min-w-0 leading-tight">
+        <span className="block truncate text-[12.5px] text-foreground">{name}</span>
+        <span className="block truncate text-[11.5px] text-muted-foreground">{lines}</span>
+      </span>
+      <button
+        type="button"
+        aria-label={t("assistant.removeSelection")}
+        onClick={onRemove}
+        className="absolute -top-1.5 -right-1.5 grid size-4 place-items-center rounded-full bg-popover text-muted-foreground opacity-0 shadow ring-1 ring-white/10 group-hover/card:opacity-100 hover:text-foreground focus-visible:opacity-100"
+      >
+        <X className="size-2.5" />
+      </button>
+    </div>
+  );
 }
 
 /** Notion-AI-like starters for what's on screen; the last one always applies. */
@@ -166,7 +210,8 @@ function HistoryMenu({ repoPath, current }: { repoPath: string; current: string 
     const past: Entry[] = (sessions.data?.pages.flat() ?? [])
       .filter((s) => !known.has(s.id))
       .map((s) => ({
-        thread: `session:${s.id}`,
+        // Codex sessions carry their agent in the thread, so the follow-up resumes them with Codex.
+        thread: s.agent === "codex" ? `session:codex:${s.id}` : `session:${s.id}`,
         title: s.title,
         last: s.updatedAt ?? s.startedAt ?? "",
         assistant: false,
@@ -237,6 +282,8 @@ function HistoryMenu({ repoPath, current }: { repoPath: string; current: string 
               >
                 {c.running ? (
                   <BrailleLoader className="shrink-0 text-primary" />
+                ) : c.session && c.thread.startsWith("session:codex:") ? (
+                  <CodexIcon className="size-3.5 shrink-0" />
                 ) : c.session ? (
                   <ClaudeIcon className="size-3.5 shrink-0 text-[#d97757]" />
                 ) : c.assistant ? (
@@ -330,9 +377,12 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
   const setOpen = useUiStore((s) => s.setAssistantOpen);
   const { runs, assistantThread, setAssistantThread, preferredAgent, select } = useAgentsStore();
   const installed = useInstalledAgents().data;
-  const pastSession = assistantThread?.startsWith("session:") ? assistantThread.slice(8) : null;
-  const agent = pastSession ? "claude" : pickAgent(installed, preferredAgent);
+  const past = assistantThread?.startsWith("session:") ? assistantThread.slice(8) : null;
+  const pastCodex = !!past?.startsWith("codex:");
+  const pastSession = pastCodex ? (past?.slice(6) ?? null) : past;
+  const agent = pastSession ? (pastCodex ? "codex" : "claude") : pickAgent(installed, preferredAgent);
   const chips = useContextChips(repoPath);
+  const askSelection = useUiStore((s) => s.askSelection);
   const suggestions = useSuggestions(chips);
   const repo = useWorkspaceStore((s) => s.repo);
   const view = useWorkspaceStore((s) => s.view);
@@ -352,7 +402,8 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
     if (!agent || sending) return;
     setSending(true);
     let prompt = message;
-    if (!assistantThread || !resume) {
+    // A slash command must open the message for Claude Code to run it: no context preamble then.
+    if ((!assistantThread || !resume) && !message.startsWith("/")) {
       // First message: say where the user is. Later ones continue the same conversation.
       const page = view === "preview" ? await gitBackend.previewViewUrl().catch(() => null) : null;
       const facts = [
@@ -361,6 +412,10 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
         page ? `The page currently shown is ${page}.` : null,
       ].filter(Boolean);
       prompt = `${facts.join("\n")}${CONTEXT_SEPARATOR}${message}`;
+    }
+    if (askSelection) {
+      prompt = `${prompt}\n\n${selectionPrompt(askSelection)}`;
+      useUiStore.getState().askAbout(null);
     }
     const id = await startAgentRun(
       repoPath,
@@ -409,14 +464,14 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
         </header>
         <ChatThread
           compact
-          placeholder={assistantThread ? undefined : t("assistant.placeholder")}
+          placeholder={askSelection ? t("assistant.askCode") : assistantThread ? undefined : t("assistant.placeholder")}
           steps={[...(sessionSteps.data ?? []), ...thread.flatMap((r) => r.steps)]}
           running={!!live || sending}
           agentLabel={agentName}
           settings={
             agent && (
               <>
-                <RunSettingsBar agent={agent} />
+                <RunSettingsBar agent={agent} canIsolate={!assistantThread} />
                 <ContextMeter runs={thread} agent={agent} />
               </>
             )
@@ -448,17 +503,29 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
               </ul>
             </div>
           }
+          focusKey={askSelection}
           context={
-            !assistantThread &&
-            chips.map((chip) => (
-              <span
-                key={chip.label}
-                className="flex items-center gap-1 rounded-md bg-white/[0.07] px-1.5 py-0.5 text-[11.5px] text-foreground/90"
-              >
-                {chip.icon}
-                {chip.label}
-              </span>
-            ))
+            (askSelection || !assistantThread) && [
+              askSelection && (
+                <SelectionCard
+                  key="selection"
+                  selection={askSelection}
+                  onRemove={() => useUiStore.getState().askAbout(null)}
+                />
+              ),
+              ...(assistantThread ? [] : chips)
+                // The card already names the file the code comes from.
+                .filter((chip) => !(askSelection && chip.kind === "file"))
+                .map((chip) => (
+                  <span
+                    key={chip.label}
+                    className="flex items-center gap-1 rounded-md bg-white/[0.07] px-1.5 py-0.5 text-[11.5px] text-foreground/90"
+                  >
+                    {chip.icon}
+                    {chip.label}
+                  </span>
+                )),
+            ]
           }
         />
       </aside>

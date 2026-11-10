@@ -12,6 +12,10 @@ pub enum ErrorKind {
     Io,
     /// A file changed on disk since it was read: saving would overwrite someone else's edit.
     ChangedOnDisk,
+    /// Uncommitted changes in tracked files: rewriting history now could lose or tangle them.
+    DirtyWorkingTree,
+    /// The commits to rewrite are already on a remote: going on means a force-push later.
+    AlreadyPushed,
 }
 
 /// Error sent to the frontend: a readable `message` plus raw Git output in `detail` for diagnosis.

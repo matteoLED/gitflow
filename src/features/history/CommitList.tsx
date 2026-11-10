@@ -26,6 +26,10 @@ import { nextListIndex } from "@/lib/list-navigation";
 import { cn } from "@/lib/utils";
 import { splitSubject } from "@/lib/commit-subject";
 import { HistoryOptions } from "./HistoryOptions";
+import { CommitMenu, type CommitActions } from "./CommitMenu";
+import { RebaseDialog } from "./RebaseDialog";
+import { useRewrite } from "./use-rewrite";
+import { gitBackend } from "@/lib/tauri-git";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { CommitRef, CommitSummary } from "@/types/git";
 import { useT } from "@/i18n";
@@ -121,64 +125,67 @@ type CommitRowProps = {
   onSelect: () => void;
   graph: GraphRow | null;
   graphWidth: number;
+  actions: CommitActions;
 };
 
-function CommitRow({ commit, selected, top, onSelect, graph, graphWidth }: CommitRowProps) {
+function CommitRow({ commit, selected, top, onSelect, graph, graphWidth, actions }: CommitRowProps) {
   const t = useT();
   const badges = badgesOf(commit.refs);
   const { title, pr } = splitSubject(commit.subject);
   const extra = badges.length - MAX_BADGES;
   return (
-    <div
-      id={rowId(commit.hash)}
-      role="option"
-      aria-selected={selected}
-      onClick={onSelect}
-      title={`${commit.subject}\n${commit.hash.slice(0, 10)} · ${commit.author}`}
-      style={{ transform: `translateY(${top}px)`, height: ROW_HEIGHT, paddingLeft: graphWidth }}
-      className={cn(
-        "absolute inset-x-0 flex cursor-default flex-col justify-center gap-0.5 overflow-hidden rounded-lg pr-3 hover:bg-white/[0.07]",
-        selected && "bg-white/[0.06] hover:bg-white/[0.09]",
-      )}
-    >
-      {graph ? (
-        <GraphCell row={graph} merge={commit.parents.length > 1} selected={selected} />
-      ) : (
-        <span
-          aria-hidden
-          className="absolute top-[11px] left-[7px] size-2 rounded-full border-2 border-primary bg-panel"
-        />
-      )}
-      <span className="truncate text-[12.5px] font-medium text-foreground">{title}</span>
-      <span className="flex min-w-0 items-center gap-2 text-[11.5px] text-muted-foreground">
-        {/* Badges clip at this box's edge instead of squeezing, so the date always stays readable. */}
-        <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-          <span className="max-w-[45%] shrink-0 truncate">{commit.author}</span>
-          {pr && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] text-foreground/85">
-              <GitPullRequest aria-hidden className="size-3" />#{pr}
-            </span>
-          )}
-          {badges.slice(0, MAX_BADGES).map((badge) => (
-            <RefBadge key={`${badge.kind}:${badge.name}`} badge={badge} />
-          ))}
-          {extra > 0 && (
-            <span
-              title={badges
-                .slice(MAX_BADGES)
-                .map((b) => b.name)
-                .join(", ")}
-              className="shrink-0 text-[11px]"
-            >
-              +{extra}
-            </span>
-          )}
+    <CommitMenu commit={commit} actions={actions}>
+      <div
+        id={rowId(commit.hash)}
+        role="option"
+        aria-selected={selected}
+        onClick={onSelect}
+        title={`${commit.subject}\n${commit.hash.slice(0, 10)} · ${commit.author}`}
+        style={{ transform: `translateY(${top}px)`, height: ROW_HEIGHT, paddingLeft: graphWidth }}
+        className={cn(
+          "absolute inset-x-0 flex cursor-default flex-col justify-center gap-0.5 overflow-hidden rounded-lg pr-3 hover:bg-white/[0.07]",
+          selected && "bg-white/[0.06] hover:bg-white/[0.09]",
+        )}
+      >
+        {graph ? (
+          <GraphCell row={graph} merge={commit.parents.length > 1} selected={selected} />
+        ) : (
+          <span
+            aria-hidden
+            className="absolute top-[11px] left-[7px] size-2 rounded-full border-2 border-primary bg-panel"
+          />
+        )}
+        <span className="truncate text-[12.5px] font-medium text-foreground">{title}</span>
+        <span className="flex min-w-0 items-center gap-2 text-[11.5px] text-muted-foreground">
+          {/* Badges clip at this box's edge instead of squeezing, so the date always stays readable. */}
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+            <span className="max-w-[45%] shrink-0 truncate">{commit.author}</span>
+            {pr && (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] text-foreground/85">
+                <GitPullRequest aria-hidden className="size-3" />#{pr}
+              </span>
+            )}
+            {badges.slice(0, MAX_BADGES).map((badge) => (
+              <RefBadge key={`${badge.kind}:${badge.name}`} badge={badge} />
+            ))}
+            {extra > 0 && (
+              <span
+                title={badges
+                  .slice(MAX_BADGES)
+                  .map((b) => b.name)
+                  .join(", ")}
+                className="shrink-0 text-[11px]"
+              >
+                +{extra}
+              </span>
+            )}
+          </span>
+          <time dateTime={commit.authoredAt} className="shrink-0 tabular-nums">
+            {formatCommitDate(commit.authoredAt, undefined, t.locale)}
+          </time>
         </span>
-        <time dateTime={commit.authoredAt} className="shrink-0 tabular-nums">
-          {formatCommitDate(commit.authoredAt, undefined, t.locale)}
-        </time>
-      </span>
-    </div>
+      </div>
+    </CommitMenu>
   );
 }
 
@@ -359,6 +366,26 @@ export function CommitList({ repoPath }: { repoPath: string }) {
     if (hasNextPage && !isFetchingNextPage && lastVisible >= commits.length - 30) void fetchNextPage();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage, lastVisible, commits.length]);
 
+  const rewrite = useRewrite(repoPath);
+  const [rebaseFrom, setRebaseFrom] = useState<string | null>(null);
+  const actions: CommitActions = {
+    cherryPick:
+      historyRev === null
+        ? undefined
+        : (c) =>
+            rewrite.mutate({
+              run: () => gitBackend.cherryPickCommit(repoPath, c.hash),
+              success: t("rewrite.cherryPicked", { sha: c.hash.slice(0, 7) }),
+            }),
+    revert: (c) =>
+      rewrite.mutate({
+        run: () => gitBackend.revertCommit(repoPath, c.hash),
+        success: t("rewrite.reverted", { sha: c.hash.slice(0, 7) }),
+      }),
+    rebaseFrom: historyRev === null ? (c) => setRebaseFrom(c.hash) : undefined,
+    busy: rewrite.isPending,
+  };
+
   const onKeyDown = (event: KeyboardEvent) => {
     const next = nextListIndex(event.key, selectedIndex, commits.length);
     if (next === null) return;
@@ -409,6 +436,7 @@ export function CommitList({ repoPath }: { repoPath: string }) {
                   onSelect={() => selectCommit(commit.hash)}
                   graph={graph?.[item.index] ?? null}
                   graphWidth={graphWidth}
+                  actions={actions}
                 />
               );
             })}
@@ -421,6 +449,7 @@ export function CommitList({ repoPath }: { repoPath: string }) {
           )}
         </div>
       )}
+      <RebaseDialog repoPath={repoPath} from={rebaseFrom} onClose={() => setRebaseFrom(null)} />
     </section>
   );
 }

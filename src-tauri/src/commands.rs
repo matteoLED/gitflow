@@ -10,7 +10,7 @@ use crate::git::github::{GithubUser, PullRequest, PullRequestRange, ReviewEvent}
 use crate::git::identity::GitIdentity;
 use crate::git::model::*;
 use crate::git::read::{self, LogFilters, WorkingSide};
-use crate::git::{files, github, identity, validate, write};
+use crate::git::{conflicts, files, github, identity, rewrite, validate, worktrees, write};
 use crate::linear;
 use crate::preview;
 use crate::preview_view;
@@ -58,15 +58,76 @@ pub async fn write_file(
 pub async fn search_files(
     repo_path: String,
     query: String,
-    regex: bool,
-    case_sensitive: bool,
+    options: files::MatchOptions,
 ) -> GitResult<files::SearchResults> {
-    blocking(move || files::search(&repo(&repo_path)?, &query, regex, case_sensitive)).await
+    blocking(move || files::search(&repo(&repo_path)?, &query, options)).await
+}
+
+#[tauri::command]
+pub async fn replace_in_files(
+    repo_path: String,
+    request: files::ReplaceRequest,
+) -> GitResult<files::ReplaceOutcome> {
+    blocking(move || files::replace(&repo(&repo_path)?, &request)).await
+}
+
+#[tauri::command]
+pub async fn create_file(repo_path: String, path: String) -> GitResult<()> {
+    blocking(move || files::create_file(&repo(&repo_path)?, &path)).await
+}
+
+#[tauri::command]
+pub async fn create_dir(repo_path: String, path: String) -> GitResult<()> {
+    blocking(move || files::create_dir(&repo(&repo_path)?, &path)).await
+}
+
+#[tauri::command]
+pub async fn rename_path(repo_path: String, from: String, to: String) -> GitResult<()> {
+    blocking(move || files::rename_path(&repo(&repo_path)?, &from, &to)).await
+}
+
+#[tauri::command]
+pub async fn duplicate_file(repo_path: String, path: String) -> GitResult<String> {
+    blocking(move || files::duplicate_file(&repo(&repo_path)?, &path)).await
+}
+
+#[tauri::command]
+pub async fn delete_path(repo_path: String, path: String) -> GitResult<()> {
+    blocking(move || files::delete_path(&repo(&repo_path)?, &path)).await
+}
+
+#[tauri::command]
+pub async fn reveal_path(repo_path: String, path: String) -> GitResult<()> {
+    blocking(move || files::reveal_path(&repo(&repo_path)?, &path)).await
 }
 
 #[tauri::command]
 pub async fn line_changes(repo_path: String, path: String) -> GitResult<Vec<files::LineChange>> {
     blocking(move || files::line_changes(&repo(&repo_path)?, &path)).await
+}
+
+#[tauri::command]
+pub async fn blame_file(
+    repo_path: String,
+    path: String,
+) -> GitResult<Vec<crate::git::blame::BlameHunk>> {
+    blocking(move || crate::git::blame::blame_file(&repo(&repo_path)?, &path)).await
+}
+
+#[tauri::command]
+pub async fn file_history(
+    repo_path: String,
+    path: String,
+) -> GitResult<Vec<crate::git::blame::FileCommit>> {
+    blocking(move || crate::git::blame::file_history(&repo(&repo_path)?, &path)).await
+}
+
+#[tauri::command]
+pub async fn commit_pull_request(
+    repo_path: String,
+    sha: String,
+) -> GitResult<Option<crate::git::blame::CommitPullRequest>> {
+    blocking(move || crate::git::blame::commit_pull_request(&repo(&repo_path)?, &sha)).await
 }
 
 #[tauri::command]
@@ -86,6 +147,114 @@ pub fn lsp_send(id: String, message: String) -> GitResult<()> {
 #[tauri::command]
 pub fn lsp_stop(id: String) {
     crate::lsp::stop(&id)
+}
+
+#[tauri::command]
+pub async fn get_operation(repo_path: String) -> GitResult<Option<conflicts::Operation>> {
+    blocking(move || conflicts::operation(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn continue_operation(repo_path: String) -> GitResult<()> {
+    blocking(move || conflicts::continue_operation(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn abort_operation(repo_path: String) -> GitResult<()> {
+    blocking(move || conflicts::abort_operation(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn skip_rebase_commit(repo_path: String) -> GitResult<()> {
+    blocking(move || conflicts::skip_commit(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn cherry_pick_commit(repo_path: String, hash: String) -> GitResult<rewrite::Outcome> {
+    blocking(move || rewrite::cherry_pick(&repo(&repo_path)?, &hash)).await
+}
+
+#[tauri::command]
+pub async fn revert_commit(repo_path: String, hash: String) -> GitResult<rewrite::Outcome> {
+    blocking(move || rewrite::revert(&repo(&repo_path)?, &hash)).await
+}
+
+#[tauri::command]
+pub async fn rebase_plan(repo_path: String, from: String) -> GitResult<Vec<rewrite::RebaseCommit>> {
+    blocking(move || rewrite::rebase_plan(&repo(&repo_path)?, &from)).await
+}
+
+#[tauri::command]
+pub async fn interactive_rebase(
+    repo_path: String,
+    from: String,
+    steps: Vec<rewrite::RebaseStep>,
+    confirmed: bool,
+) -> GitResult<rewrite::Outcome> {
+    blocking(move || rewrite::interactive_rebase(&repo(&repo_path)?, &from, &steps, confirmed))
+        .await
+}
+
+#[tauri::command]
+pub async fn resolve_with_side(
+    repo_path: String,
+    paths: Vec<String>,
+    theirs: bool,
+) -> GitResult<()> {
+    blocking(move || conflicts::take_side(&repo(&repo_path)?, &paths, theirs)).await
+}
+
+#[tauri::command]
+pub async fn create_agent_worktree(repo_path: String) -> GitResult<worktrees::Worktree> {
+    blocking(move || worktrees::create(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn list_agent_worktrees(repo_path: String) -> GitResult<Vec<worktrees::Worktree>> {
+    blocking(move || worktrees::list(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn agent_worktree_status(
+    repo_path: String,
+    path: String,
+) -> GitResult<worktrees::WorktreeStatus> {
+    blocking(move || worktrees::status(&repo(&repo_path)?, &path)).await
+}
+
+#[tauri::command]
+pub async fn publish_agent_worktree(
+    repo_path: String,
+    path: String,
+    title: String,
+    body: String,
+) -> GitResult<String> {
+    blocking(move || worktrees::publish(&repo(&repo_path)?, &path, &title, &body)).await
+}
+
+#[tauri::command]
+pub async fn merge_agent_worktree(
+    repo_path: String,
+    path: String,
+    message: String,
+) -> GitResult<()> {
+    blocking(move || worktrees::merge(&repo(&repo_path)?, &path, &message)).await
+}
+
+#[tauri::command]
+pub async fn remove_agent_worktree(
+    repo_path: String,
+    path: String,
+    delete_branch: bool,
+) -> GitResult<()> {
+    blocking(move || worktrees::remove(&repo(&repo_path)?, &path, delete_branch)).await
+}
+
+#[tauri::command]
+pub async fn list_slash_commands(
+    repo_path: String,
+) -> GitResult<Vec<agents::definitions::SlashCommand>> {
+    blocking(move || agents::definitions::list_commands(&repo(&repo_path)?)).await
 }
 
 #[tauri::command]

@@ -3,6 +3,7 @@ import { Files, Search } from "lucide-react";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { useEditorStore } from "@/stores/editor-store";
+import { ConflictsSection } from "./ConflictsSection";
 import { FileTree } from "./FileTree";
 import { SearchPanel } from "./SearchPanel";
 
@@ -55,6 +56,7 @@ export function EditorSidebar({ repoPath }: { repoPath: string }) {
         <SearchPanel repoPath={repoPath} />
       ) : (
         <>
+          <ConflictsSection repoPath={repoPath} />
           <div className="px-2 pb-1.5">
             <input
               value={filter}

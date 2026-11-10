@@ -2,19 +2,23 @@ export type TreeRow = { path: string; name: string; depth: number; dir: boolean;
 
 type Node = { dirs: Map<string, Node>; files: string[] };
 
-/** Builds the folder tree once per file list. */
-export function buildTree(paths: readonly string[]): Node {
+/** Builds the folder tree once per file list; `dirs` adds folders git doesn't list (empty ones). */
+export function buildTree(paths: readonly string[], dirs: readonly string[] = []): Node {
   const root: Node = { dirs: new Map(), files: [] };
-  for (const path of paths) {
-    const parts = path.split("/");
+  const folder = (parts: string[]) => {
     let node = root;
-    for (const part of parts.slice(0, -1)) {
+    for (const part of parts) {
       let next = node.dirs.get(part);
       if (!next) node.dirs.set(part, (next = { dirs: new Map(), files: [] }));
       node = next;
     }
-    node.files.push(parts[parts.length - 1]);
+    return node;
+  };
+  for (const path of paths) {
+    const parts = path.split("/");
+    folder(parts.slice(0, -1)).files.push(parts[parts.length - 1]);
   }
+  for (const dir of dirs) folder(dir.split("/"));
   return root;
 }
 

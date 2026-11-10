@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { AgentScope, AgentKind, AgentRunEvent, AgentStep, AgentTask, AgentUsage, RunSettings } from "@/types/git";
+import type { AgentScope, AgentKind, AgentRunEvent, AgentStep, AgentTask, AgentUsage, RunSettings, Worktree } from "@/types/git";
 
 export type RunStatus = "running" | "done" | "failed" | "cancelled";
 
@@ -17,6 +17,8 @@ export type AgentRun = {
   sessionId: string | null;
   /** Runs of one conversation share a thread: the first run's id, or `session:<id>` for a Claude Code session. */
   thread: string;
+  /** The isolated worktree the conversation works in, if it was started in one. */
+  worktree?: Worktree;
   /** Latest known context fill and cost of this run. */
   usage?: Partial<AgentUsage>;
 };
@@ -88,7 +90,7 @@ export const useAgentsStore = create<AgentsState>()(
       selection: { type: "new" },
       preferredAgent: "claude",
       assistantThread: null,
-      runSettings: { mode: "plan", model: null, effort: null },
+      runSettings: { mode: "plan", model: null, effort: null, isolated: false },
       setRunSettings: (settings) => set(({ runSettings }) => ({ runSettings: { ...runSettings, ...settings } })),
       setAssistantThread: (thread) => set({ assistantThread: thread }),
       addRun: (run) =>

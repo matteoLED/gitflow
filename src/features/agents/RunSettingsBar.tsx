@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Brain, ChevronDown, Cpu, Lock, ShieldAlert, ShieldCheck, Sparkles } from "lucide-react";
+import { Brain, ChevronDown, Cpu, GitBranchPlus, Lock, ShieldAlert, ShieldCheck, Sparkles } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import {
   DropdownMenu,
@@ -60,7 +60,8 @@ function Menu({ trigger, title, children }: { trigger: ReactNode; title: string;
 }
 
 /** Mode, model and effort for the next message, like Claude Code's own picker. */
-export function RunSettingsBar({ agent }: { agent: AgentKind }) {
+/** `canIsolate`: the composer starts a new conversation, which may run in its own worktree. */
+export function RunSettingsBar({ agent, canIsolate = false }: { agent: AgentKind; canIsolate?: boolean }) {
   const t = useT();
   const { runSettings, setRunSettings } = useAgentsStore(
     useShallow((s) => ({ runSettings: s.runSettings, setRunSettings: s.setRunSettings })),
@@ -130,6 +131,18 @@ export function RunSettingsBar({ agent }: { agent: AgentKind }) {
           </DropdownMenuItem>
         ))}
       </Menu>
+      {canIsolate && (
+        <button
+          type="button"
+          aria-pressed={!!runSettings.isolated}
+          title={t("run.isolatedHint")}
+          onClick={() => setRunSettings({ isolated: !runSettings.isolated })}
+          className="flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-[12px] text-muted-foreground hover:bg-white/[0.06] hover:text-foreground aria-pressed:text-primary"
+        >
+          <GitBranchPlus aria-hidden className="size-3.5" />
+          {t("run.isolated")}
+        </button>
+      )}
     </div>
   );
 }

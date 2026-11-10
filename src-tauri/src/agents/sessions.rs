@@ -1,9 +1,10 @@
-//! Claude Code sessions saved for a repository under `~/.claude/projects/<encoded path>/*.jsonl`.
+//! Claude Code sessions saved for a repository under `~/.claude/projects/<encoded path>/*.jsonl`, and Codex
+//! sessions under `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` whose working directory is the repository.
 //! Read-only: the files are only ever opened for reading.
 
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
@@ -11,7 +12,7 @@ use std::time::SystemTime;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::steps::{AgentStep, StepKind, from_claude};
+use super::steps::{AgentStep, StepKind, from_claude, from_codex_rollout};
 use crate::git::errors::{GitError, GitResult};
 
 const MAX_SESSIONS: usize = 60;
@@ -27,6 +28,8 @@ pub struct SessionSummary {
     pub prompts: u32,
     pub tool_calls: u32,
     pub git_branch: Option<String>,
+    /// "claude" or "codex": which CLI resumes it.
+    pub agent: &'static str,
 }
 
 /// Claude Code names a project folder after its path, every non-alphanumeric character becoming `-`.
@@ -46,13 +49,19 @@ fn projects_dir(repo: &Path) -> Option<PathBuf> {
     Some(projects_root()?.join(encode(repo)))
 }
 
-pub(super) fn session_file(repo: &Path, id: &str) -> GitResult<PathBuf> {
+fn check_id(id: &str) -> GitResult<()> {
     let valid = !id.is_empty()
         && id.len() <= 64
         && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
-    if !valid {
-        return Err(GitError::invalid("Invalid session id."));
+    if valid {
+        Ok(())
+    } else {
+        Err(GitError::invalid("Invalid session id."))
     }
+}
+
+pub(super) fn session_file(repo: &Path, id: &str) -> GitResult<PathBuf> {
+    check_id(id)?;
     let dir = projects_dir(repo).ok_or_else(|| GitError::invalid("HOME is not set."))?;
     Ok(dir.join(format!("{id}.jsonl")))
 }
@@ -105,6 +114,7 @@ impl Summary {
             prompts: 0,
             tool_calls: 0,
             git_branch: None,
+            agent: "claude",
         };
         Summary {
             data,
@@ -174,36 +184,136 @@ fn timelines() -> &'static Cache<(u64, Vec<AgentStep>)> {
     CACHE.get_or_init(Default::default)
 }
 
+/// Claude Code's sessions only, latest first (the agents sidebar lists them under its name).
 pub fn list_sessions(repo: &Path) -> GitResult<Vec<SessionSummary>> {
-    list_sessions_page(repo, 0, MAX_SESSIONS)
+    let mut files = claude_files(repo);
+    files.sort_by_key(|f| std::cmp::Reverse(f.0));
+    Ok(files
+        .into_iter()
+        .take(MAX_SESSIONS)
+        .map(|(_, path)| session_summary(path))
+        .collect())
 }
 
-/// One page of the repository's sessions, latest first: only that page's files are read, so scrolling far
-/// back stays cheap. Fewer than `limit` means there are no more.
+/// One page of the repository's sessions, Claude Code's and Codex's, latest first: only that page's files are
+/// read, so scrolling far back stays cheap. Fewer than `limit` means there are no more.
 pub fn list_sessions_page(
     repo: &Path,
     offset: usize,
     limit: usize,
 ) -> GitResult<Vec<SessionSummary>> {
-    let Some(dir) = projects_dir(repo) else {
-        return Ok(Vec::new());
-    };
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return Ok(Vec::new());
-    };
-    let mut files: Vec<(SystemTime, PathBuf)> = entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
-        .filter_map(|p| Some((fs::metadata(&p).ok()?.modified().ok()?, p)))
+    let mut files: Vec<(SystemTime, PathBuf, bool)> = claude_files(repo)
+        .into_iter()
+        .map(|(t, p)| (t, p, false))
+        .chain(codex_files(repo).into_iter().map(|(t, p)| (t, p, true)))
         .collect();
     files.sort_by_key(|f| std::cmp::Reverse(f.0));
     Ok(files
         .into_iter()
         .skip(offset)
         .take(limit.min(200))
-        .map(|(_, path)| session_summary(path))
+        .map(|(_, path, codex)| {
+            if codex {
+                codex_summary(&path)
+            } else {
+                session_summary(path)
+            }
+        })
         .collect())
+}
+
+fn with_mtime(paths: impl Iterator<Item = PathBuf>) -> Vec<(SystemTime, PathBuf)> {
+    paths
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .filter_map(|p| Some((fs::metadata(&p).ok()?.modified().ok()?, p)))
+        .collect()
+}
+
+fn claude_files(repo: &Path) -> Vec<(SystemTime, PathBuf)> {
+    let Some(entries) = projects_dir(repo).and_then(|d| fs::read_dir(d).ok()) else {
+        return Vec::new();
+    };
+    with_mtime(entries.filter_map(Result::ok).map(|e| e.path()))
+}
+
+fn codex_root() -> Option<PathBuf> {
+    Some(Path::new(&std::env::var_os("HOME")?).join(".codex/sessions"))
+}
+
+/// Every Codex session file, any project: three levels of date folders.
+fn codex_all() -> Vec<PathBuf> {
+    let mut dirs = codex_root().into_iter().collect::<Vec<_>>();
+    for _ in 0..3 {
+        dirs = dirs
+            .iter()
+            .filter_map(|d| fs::read_dir(d).ok())
+            .flat_map(|e| e.filter_map(Result::ok).map(|e| e.path()))
+            .filter(|p| p.is_dir())
+            .collect();
+    }
+    dirs.iter()
+        .filter_map(|d| fs::read_dir(d).ok())
+        .flat_map(|e| e.filter_map(Result::ok).map(|e| e.path()))
+        .collect()
+}
+
+/// The session's first line says where it ran (and whether it's a sub-agent's): read once per file.
+fn codex_meta(path: &Path) -> Option<(String, String)> {
+    static CACHE: OnceLock<Cache<Option<(String, String)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    cache
+        .entry(path.to_path_buf())
+        .or_insert_with(|| {
+            let mut line = String::new();
+            BufReader::new(File::open(path).ok()?)
+                .read_line(&mut line)
+                .ok()?;
+            let meta: Value = serde_json::from_str(&line).ok()?;
+            let payload = meta.get("payload")?;
+            let sub_agent = payload.get("thread_source").and_then(Value::as_str)
+                == Some("subagent")
+                || payload.pointer("/source/subagent").is_some();
+            let id = payload.get("id")?.as_str()?.to_string();
+            let cwd = payload.get("cwd")?.as_str()?.to_string();
+            (!sub_agent).then_some((id, cwd))
+        })
+        .clone()
+}
+
+fn codex_files(repo: &Path) -> Vec<(SystemTime, PathBuf)> {
+    with_mtime(
+        codex_all()
+            .into_iter()
+            .filter(|p| codex_meta(p).is_some_and(|(_, cwd)| Path::new(&cwd) == repo)),
+    )
+}
+
+fn codex_summary(path: &Path) -> SessionSummary {
+    let (id, _) = codex_meta(path).unwrap_or_default();
+    let mut summary = Summary::new(id);
+    summary.data.agent = "codex";
+    let (events, _) = read_from(path, 0);
+    for event in &events {
+        if let Some(ts) = event.get("timestamp").and_then(Value::as_str) {
+            summary
+                .data
+                .started_at
+                .get_or_insert_with(|| ts.to_string());
+            summary.data.updated_at = Some(ts.to_string());
+        }
+        for step in from_codex_rollout(event) {
+            match step.kind {
+                StepKind::Prompt => {
+                    summary.data.prompts += 1;
+                    summary.first_prompt.get_or_insert(step.title);
+                }
+                StepKind::Tool => summary.data.tool_calls += 1,
+                _ => {}
+            }
+        }
+    }
+    summary.view()
 }
 
 fn session_summary(path: PathBuf) -> SessionSummary {
@@ -228,7 +338,7 @@ fn session_summary(path: PathBuf) -> SessionSummary {
 pub fn session_steps(repo: &Path, id: &str) -> GitResult<Vec<AgentStep>> {
     let path = session_file(repo, id)?;
     if !path.is_file() {
-        return Err(GitError::invalid("This session no longer exists."));
+        return codex_steps(repo, id);
     }
     let mut cache = timelines().lock().unwrap_or_else(|e| e.into_inner());
     let (offset, steps) = cache.entry(path.clone()).or_insert_with(|| (0, Vec::new()));
@@ -250,6 +360,21 @@ pub fn session_steps(repo: &Path, id: &str) -> GitResult<Vec<AgentStep>> {
         steps.drain(..steps.len() - MAX_STEPS); // keep the most recent part of very long sessions
     }
     Ok(steps.clone())
+}
+
+/// A Codex session of this repository, by id.
+fn codex_steps(repo: &Path, id: &str) -> GitResult<Vec<AgentStep>> {
+    check_id(id)?;
+    let path = codex_all()
+        .into_iter()
+        .find(|p| codex_meta(p).is_some_and(|(i, cwd)| i == id && Path::new(&cwd) == repo))
+        .ok_or_else(|| GitError::invalid("This session no longer exists."))?;
+    let (events, _) = read_from(&path, 0);
+    let mut steps: Vec<AgentStep> = events.iter().flat_map(from_codex_rollout).collect();
+    if steps.len() > MAX_STEPS {
+        steps.drain(..steps.len() - MAX_STEPS);
+    }
+    Ok(steps)
 }
 
 #[cfg(test)]

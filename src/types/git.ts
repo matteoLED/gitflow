@@ -73,7 +73,16 @@ export type WorkingSide = "staged" | "unstaged" | "untracked";
 export type FileDiff = { patch: string; binary: boolean };
 
 export type GitErrorKind =
-  "gitNotFound" | "notARepository" | "invalidInput" | "commandFailed" | "timeout" | "outputTooLarge" | "io" | "changedOnDisk";
+  | "gitNotFound"
+  | "notARepository"
+  | "invalidInput"
+  | "commandFailed"
+  | "timeout"
+  | "outputTooLarge"
+  | "io"
+  | "changedOnDisk"
+  | "dirtyWorkingTree"
+  | "alreadyPushed";
 
 export type GitErrorPayload = { kind: GitErrorKind; message: string; detail: string | null };
 
@@ -251,7 +260,16 @@ export type LinearIssueDetail = LinearIssue & {
 
 export type AgentKind = "claude" | "codex";
 export type AgentMode = "plan" | "auto" | "accept-edits" | "bypass";
-export type RunSettings = { mode: AgentMode; model: string | null; effort: string | null; images?: string[] };
+export type RunSettings = {
+  mode: AgentMode;
+  model: string | null;
+  effort: string | null;
+  images?: string[];
+  /** Start new conversations in their own worktree (the composer's toggle). */
+  isolated?: boolean;
+  /** The agent worktree a run works in (set per run, not a preference). */
+  worktree?: string | null;
+};
 export type AgentInfo = { kind: AgentKind; installed: boolean; version: string | null };
 
 export type AgentTask =
@@ -289,6 +307,8 @@ export type AgentSession = {
   prompts: number;
   toolCalls: number;
   gitBranch: string | null;
+  /** Which CLI resumes it. */
+  agent: "claude" | "codex";
 };
 
 type GhActor = { login: string; name?: string };
@@ -429,3 +449,71 @@ export type LineChange = { kind: "added" | "modified" | "deleted"; start: number
 
 export type SearchMatch = { path: string; line: number; column: number; text: string };
 export type SearchResults = { matches: SearchMatch[]; truncated: boolean };
+/** How a project search matches; the replace uses the same semantics. */
+export type MatchOptions = { regex: boolean; caseSensitive: boolean; wholeWord: boolean };
+export type ReplaceRequest = MatchOptions & {
+  query: string;
+  replacement: string;
+  /** Files to change; every matching file when null. */
+  paths: string[] | null;
+  /** Only this 1-based line of the single file in `paths`. */
+  line: number | null;
+  /** Files with unsaved editor changes: left untouched. */
+  skip: string[];
+};
+export type ReplaceOutcome = { files: number; replacements: number };
+
+/** A merge, rebase, cherry-pick or revert stopped midway (on conflicts, usually). */
+export type Operation = {
+  kind: "merge" | "rebase" | "cherry-pick" | "revert";
+  /** Rebase progress: commit n of m. */
+  step: [number, number] | null;
+  branch: string | null;
+  /** What each conflict side is: in a rebase, "ours" is the base being rebased onto. */
+  ours: string;
+  theirs: string;
+};
+
+/** How a cherry-pick, revert or rebase ended: "stopped" leaves it to the operation bar (conflicts). */
+export type RewriteOutcome = "done" | "stopped";
+export type RebaseAction = "pick" | "reword" | "squash" | "fixup" | "drop";
+export type RebaseCommit = { hash: string; subject: string; message: string; author: string; authoredAt: string };
+/** One line of the interactive rebase, oldest first; `message` is for reword only. */
+export type RebaseStep = { hash: string; action: RebaseAction; message: string | null };
+
+/** An agent's own checkout of the repository, on its own branch. */
+export type Worktree = { path: string; branch: string };
+export type WorktreeStatus = { changed: number; ahead: number };
+
+/** A Claude Code custom command or skill, typed after `/` in a message. */
+export type SlashCommand = {
+  name: string;
+  description: string;
+  argumentHint: string;
+  skill: boolean;
+  scope: "project" | "user";
+};
+
+/** Lines last changed by one commit (`git blame`); an all-zero sha means not committed yet. */
+export type BlameHunk = {
+  startLine: number;
+  lines: number;
+  sha: string;
+  author: string;
+  /** Unix seconds. */
+  authorTime: number;
+  summary: string;
+};
+
+/** A commit touching a file, with the file's path in that commit (renames are followed). */
+export type FileCommit = {
+  hash: string;
+  author: string;
+  authorEmail: string;
+  authoredAt: string;
+  subject: string;
+  path: string;
+  previousPath: string | null;
+};
+
+export type CommitPullRequest = { number: number; title: string; url: string };

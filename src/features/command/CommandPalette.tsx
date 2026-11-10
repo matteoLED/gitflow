@@ -1,5 +1,17 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Bot, FolderGit2, Inbox, Plus, RefreshCw, Settings, SquareTerminal } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Bot,
+  FolderGit2,
+  Inbox,
+  Download,
+  Keyboard,
+  Plus,
+  RefreshCw,
+  Settings,
+  SquareTerminal,
+} from "lucide-react";
 import {
   CommandDialog,
   CommandEmpty,
@@ -21,6 +33,7 @@ import { useT } from "@/i18n";
 import { gitBackend } from "@/lib/tauri-git";
 import { useAgentsStore } from "@/stores/agents-store";
 import { useLinearStore } from "@/stores/linear-store";
+import { checkForUpdate } from "@/features/updates/updater";
 import { useUiStore } from "@/stores/ui-store";
 import { useWorkStore } from "@/stores/work-store";
 import { useWorkspaceStore, type View } from "@/stores/workspace-store";
@@ -118,6 +131,15 @@ function Commands({ repo, close }: { repo: RepositoryInfo; close: () => void }) 
             <SquareTerminal />
             {t("terminal.toggle")}
             <CommandShortcut>⌃`</CommandShortcut>
+          </CommandItem>
+          <CommandItem onSelect={run(() => useUiStore.getState().setShortcutsOpen(true))}>
+            <Keyboard />
+            {t("shortcuts.title")}
+            <CommandShortcut>⌘/</CommandShortcut>
+          </CommandItem>
+          <CommandItem onSelect={run(() => void checkForUpdate(true))}>
+            <Download />
+            {t("update.check")}
           </CommandItem>
           <CommandItem onSelect={run(() => useUiStore.getState().setSettingsOpen(true))}>
             <Settings />

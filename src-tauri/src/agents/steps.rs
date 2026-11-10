@@ -300,6 +300,97 @@ pub fn from_codex(event: &Value) -> Vec<AgentStep> {
     found.into_iter().collect()
 }
 
+/// Text Codex adds to a user turn on its own (instructions, environment): not something the user typed.
+fn is_codex_preamble(text: &str) -> bool {
+    let text = text.trim_start();
+    [
+        "<environment_context>",
+        "<user_instructions>",
+        "<permissions",
+        "<turn_aborted>",
+        "# AGENTS.md",
+    ]
+    .iter()
+    .any(|p| text.starts_with(p))
+}
+
+fn codex_text(content: &Value) -> String {
+    content
+        .as_array()
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|p| str_at(p, "text"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+/// One line of a Codex session file (`~/.codex/sessions/…/rollout-*.jsonl`).
+pub fn from_codex_rollout(event: &Value) -> Vec<AgentStep> {
+    if str_at(event, "type") != Some("response_item") {
+        return Vec::new();
+    }
+    let item = event.get("payload").unwrap_or(&Value::Null);
+    let found = match (
+        str_at(item, "type").unwrap_or_default(),
+        str_at(item, "role"),
+    ) {
+        ("message", Some("user")) => {
+            let text = codex_text(&item["content"]);
+            (!text.trim().is_empty() && !is_codex_preamble(&text))
+                .then(|| step(StepKind::Prompt, first_line(&text, 200), Some(text)))
+        }
+        ("message", Some("assistant")) => {
+            let text = codex_text(&item["content"]);
+            (!text.trim().is_empty())
+                .then(|| step(StepKind::Message, first_line(&text, 200), Some(text)))
+        }
+        ("reasoning", _) => {
+            let text = codex_text(&item["summary"]);
+            (!text.trim().is_empty())
+                .then(|| step(StepKind::Thinking, first_line(&text, 200), Some(text)))
+        }
+        ("function_call", _) => {
+            let args: Value = str_at(item, "arguments")
+                .and_then(|a| serde_json::from_str(a).ok())
+                .unwrap_or(Value::Null);
+            let name = str_at(item, "name").unwrap_or("tool");
+            let title = match str_at(&args, "cmd") {
+                Some(cmd) => format!("Shell · {}", first_line(cmd, 160)),
+                None => name.to_string(),
+            };
+            Some(step(
+                StepKind::Tool,
+                title,
+                serde_json::to_string_pretty(&args).ok(),
+            ))
+        }
+        ("custom_tool_call", _) => Some(step(
+            StepKind::Tool,
+            str_at(item, "name").unwrap_or("tool").to_string(),
+            str_at(item, "input").map(str::to_string),
+        )),
+        ("function_call_output" | "custom_tool_call_output", _) => {
+            let output = str_at(item, "output").unwrap_or_default().to_string();
+            Some(step(
+                StepKind::ToolResult,
+                first_line(&output, 160),
+                Some(output),
+            ))
+        }
+        _ => None,
+    };
+    found
+        .map(|mut s| {
+            s.at = str_at(event, "timestamp").map(str::to_string);
+            s
+        })
+        .into_iter()
+        .collect()
+}
+
 /// How full the conversation is and what it cost so far; any field may be unknown.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -414,5 +505,28 @@ mod tests {
     #[test]
     fn clipping_respects_utf8_boundaries() {
         assert_eq!(clip("ééé", 3), "é…");
+    }
+
+    #[test]
+    fn codex_session_lines_skip_the_preamble_and_name_shell_calls() {
+        let line = |v: serde_json::Value| from_codex_rollout(&v);
+        let preamble = line(
+            serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "<environment_context>cwd</environment_context>"}]}}),
+        );
+        let prompt = line(
+            serde_json::json!({"type": "response_item", "timestamp": "t", "payload": {"type": "message",
+            "role": "user", "content": [{"type": "input_text", "text": "Fix the build"}]}}),
+        );
+        let shell = line(
+            serde_json::json!({"type": "response_item", "payload": {"type": "function_call",
+            "name": "exec_command", "arguments": "{\"cmd\":\"cargo test\"}"}}),
+        );
+        assert!(preamble.is_empty());
+        assert_eq!(
+            (prompt[0].kind, prompt[0].title.as_str()),
+            (StepKind::Prompt, "Fix the build")
+        );
+        assert_eq!(shell[0].title, "Shell · cargo test");
     }
 }

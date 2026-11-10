@@ -21,6 +21,7 @@ import { lintGutter } from "@codemirror/lint";
 import { jumpToDefinition, LSPPlugin } from "@codemirror/lsp-client";
 import type { LineChange } from "@/types/git";
 import { createSearchPanel } from "./SearchBar";
+import { conflictMarkers } from "./conflicts-cm";
 
 /**
  * Holds the code colors: the user's syntax theme, the one the diffs use (see syntax-theme.ts). New tabs start
@@ -195,6 +196,7 @@ export function editorExtensions(onSave: () => void, onAsk: () => void, readOnly
     lspSlot.of([]),
     clickToDefinition,
     lintGutter(),
+    conflictMarkers,
     EditorState.readOnly.of(readOnly),
     keymap.of([
       { key: "Mod-s", preventDefault: true, run: () => (onSave(), true) },

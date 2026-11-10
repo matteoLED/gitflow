@@ -9,7 +9,7 @@ import { FileIcon } from "@/components/file-icon";
 import { PanelMessage } from "@/components/layout/panel";
 import { useT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
-import { invalidateRepo } from "@/lib/git-queries";
+import { invalidateRepo, repoKey } from "@/lib/git-queries";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
 import { editorOf, useEditorStore } from "@/stores/editor-store";
@@ -29,8 +29,12 @@ import {
 } from "./codemirror";
 import { loadEditorSyntaxTheme } from "./syntax-theme";
 import { fileUri, lspClient, lspLanguageOf, registerDisplay } from "./lsp";
-import { AskAgent, selectionOf, type Selection } from "./AskAgent";
+import { selectionOf } from "./AskAgent";
 import { QuickOpen } from "./QuickOpen";
+import { BlameToggle, FileHistoryButton, useBlameLayer } from "./Blame";
+import { blameSlot } from "./blame-cm";
+import { parseConflicts } from "./conflicts";
+import type { WorkingTreeEntry } from "@/types/git";
 
 /**
  * One open file. Its EditorState (text, undo history, selection, folds) lives here while another tab is in
@@ -57,8 +61,20 @@ export function useRepoFiles(repoPath: string) {
 
 const isDirty = (state: EditorState, saved: Text) => state.doc.length !== saved.length || !state.doc.eq(saved);
 
+/** Per repository, the files with unsaved edits: project replace and tree operations leave them alone. */
+const unsaved = new Map<string, ReadonlySet<string>>();
+export const unsavedPaths = (repo: string): ReadonlySet<string> => unsaved.get(repo) ?? new Set();
+
 /** Above the code, as in Zed: where the file sits, and the search and AI chat toggles. */
-function EditorToolbar({ path, view }: { path: string; view: React.RefObject<EditorView | null> }) {
+function EditorToolbar({
+  repoPath,
+  path,
+  view,
+}: {
+  repoPath: string;
+  path: string;
+  view: React.RefObject<EditorView | null>;
+}) {
   const t = useT();
   const assistantOpen = useUiStore((s) => s.assistantOpen);
   const parts = path.split("/");
@@ -73,6 +89,8 @@ function EditorToolbar({ path, view }: { path: string; view: React.RefObject<Edi
         ))}
         <span className="text-foreground">{parts[parts.length - 1]}</span>
       </span>
+      <BlameToggle />
+      <FileHistoryButton repoPath={repoPath} path={path} />
       <button
         type="button"
         aria-label={t("editor.find")}
@@ -106,6 +124,7 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const shownRef = useRef<string | null>(null);
+  const { apply: applyBlame, card: blameCard } = useBlameLayer(repoPath, active, viewRef, shownRef);
   // Edits survive leaving the page (buffers outlive it): their dots come back with it.
   const [dirty, setDirty] = useState<ReadonlySet<string>>(
     () =>
@@ -119,17 +138,20 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
   const [notice, setNotice] = useState<{ kind: Notice; message?: string } | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
   const [selected, setSelected] = useState(false);
-  const [asking, setAsking] = useState<Selection | null>(null);
   const reveal = useEditorStore((s) => s.reveal);
-  // ⌘L: hand the selection (or the current line) to an agent, with where it comes from.
+  // ⌘L: the selection (or the current line) goes to the chat, as a card in its composer.
   const askRef = useRef(() => {});
   useEffect(() => {
     askRef.current = () => {
       const view = viewRef.current;
       const path = shownRef.current;
-      if (view && path) setAsking(selectionOf(view, path));
+      if (view && path) useUiStore.getState().askAbout(selectionOf(view, path));
     };
   });
+
+  useEffect(() => {
+    unsaved.set(repoPath, dirty);
+  }, [dirty, repoPath]);
 
   const markDirty = useCallback((path: string, value: boolean) => {
     setDirty((d) => {
@@ -143,6 +165,7 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
 
   const refreshGutter = useCallback(
     (path: string) => {
+      applyBlame();
       gitBackend
         .lineChanges(repoPath, path)
         .then((changes) => {
@@ -150,7 +173,7 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
         })
         .catch(() => undefined); // the gutter is a hint: no marks is a fine fallback
     },
-    [repoPath],
+    [applyBlame, repoPath],
   );
 
   // Read by CodeMirror's ⌘S binding and the "Overwrite" action, which outlive any one render.
@@ -167,7 +190,20 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
         patchBuffer(keyOf(repoPath, path), { mtime, saved: doc });
         markDirty(path, isDirty(view.state, doc));
         refreshGutter(path);
-        void invalidateRepo(client, repoPath, ["working-tree", "working-diff"]);
+        void invalidateRepo(client, repoPath, ["working-tree", "working-diff", "blame"]);
+        // A conflicted file saved without markers left: offer to mark it resolved (never done behind the user's back).
+        const tree = client.getQueryData<WorkingTreeEntry[]>([...repoKey(repoPath), "working-tree"]);
+        const conflicted = tree?.some((entry) => entry.path === path && entry.conflicted);
+        if (conflicted && parseConflicts(doc.toString()).length === 0)
+          notify({
+            tone: "success",
+            title: t("conflicts.fileClean", { name: path.split("/").pop() ?? path }),
+            action: {
+              label: t("conflicts.markResolved"),
+              run: () =>
+                void gitBackend.stageFiles(repoPath, [path]).finally(() => void invalidateRepo(client, repoPath)),
+            },
+          });
       } catch (error) {
         const e = toGitError(error);
         notify({
@@ -197,6 +233,7 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
             () => askRef.current(),
             readOnly,
           ),
+          blameSlot.of([]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               const buffer = buffers.get(keyOf(repoPath, path));
@@ -461,7 +498,7 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
           })}
         </div>
       )}
-      {active && <EditorToolbar path={active} view={viewRef} />}
+      {active && <EditorToolbar repoPath={repoPath} path={active} view={viewRef} />}
       <div className="relative min-h-0 flex-1">
         <div ref={hostRef} className={cn("absolute inset-0", (!active || notice) && "invisible")} />
         {!active && <PanelMessage icon={<Code2 />} title={t("editor.empty")} hint={t("editor.emptyHint")} />}
@@ -480,12 +517,12 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
         )}
       </div>
       {active && !notice && (
-        <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-white/[0.06] px-3 text-[11.5px] text-muted-foreground">
+        <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-white/[0.06] px-3 text-[11.5px] whitespace-nowrap text-muted-foreground">
           <span className="min-w-0 truncate">{active}</span>
           <button
             type="button"
             onClick={() => askRef.current()}
-            className="ml-auto flex items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-white/[0.06] hover:text-foreground"
+            className="ml-auto flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-white/[0.06] hover:text-foreground"
           >
             <Sparkles aria-hidden className="size-3" />
             {selected ? t("editor.askSelection") : t("editor.askAgent")}
@@ -495,8 +532,8 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
           <span>{languageName(active) ?? t("editor.plainText")}</span>
         </footer>
       )}
+      {blameCard}
       <QuickOpen repoPath={repoPath} open={quickOpen} onOpenChange={setQuickOpen} />
-      <AskAgent repoPath={repoPath} selection={asking} onClose={() => setAsking(null)} />
     </section>
   );
 }

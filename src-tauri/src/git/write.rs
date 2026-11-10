@@ -12,6 +12,7 @@ const NETWORK: RunOptions = RunOptions {
     timeout: NETWORK_TIMEOUT,
     stdin: None,
     ok_codes: &[],
+    env: &[],
 };
 
 pub fn stage(repo: &Path, paths: &[String]) -> GitResult<()> {
