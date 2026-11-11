@@ -29,11 +29,13 @@ export function BranchStatus({ repoPath }: { repoPath: string }) {
   const push = useGitAction(repoPath, {
     run: () => gitBackend.push(repoPath),
     success: t("sync.pushed"),
+    pending: t("sync.pushing"),
     failure: t("sync.pushFailed"),
   });
   const pull = useGitAction(repoPath, {
     run: () => gitBackend.pull(repoPath),
     success: t("sync.pulled"),
+    pending: t("sync.pulling"),
     failure: t("sync.pullFailed"),
   });
   if (!refs) return null;

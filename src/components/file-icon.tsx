@@ -3,17 +3,17 @@ import { cn } from "@/lib/utils";
 
 type GetIcon = (name: string) => { svg: string };
 
-/* The icon set weighs ~1.4 MB of SVG: it loads after first paint instead of blocking startup. */
+/* The icon set weighs ~1.4 MB of SVG: it loads when the first file icon shows, never at startup. */
 let getIcon: GetIcon | null = null;
+let loading: Promise<void> | null = null;
 const listeners = new Set<() => void>();
-const loading = import("material-file-icons").then((module) => {
-  getIcon = module.getIcon;
-  listeners.forEach((notify) => notify());
-});
-void loading;
 
 const subscribe = (notify: () => void) => {
   listeners.add(notify);
+  loading ??= import("material-file-icons").then((module) => {
+    getIcon = module.getIcon;
+    listeners.forEach((listener) => listener());
+  });
   return () => listeners.delete(notify);
 };
 const snapshot = () => getIcon;

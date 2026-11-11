@@ -5,31 +5,109 @@ import { getT, useT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 
-/* Error and empty states, after the Mntal design system: calm, centred, one clear next step. */
+/* Error and empty states, Linear-like: a small monochrome glyph, one line of title, one of hint, one next step. */
+
+/** A button spec, or any node for actions that need more (a pending spinner, a menu). */
+export type EmptyActionSpec = {
+  label: string;
+  onClick: () => void;
+  icon?: ReactNode;
+  /** Shown as a key hint after the label, e.g. "⌘P". */
+  shortcut?: string;
+  disabled?: boolean;
+};
+export type EmptyAction = EmptyActionSpec | ReactNode;
 
 type EmptyStateProps = {
   title: string;
-  description?: ReactNode;
+  hint?: ReactNode;
   icon?: ReactNode;
-  action?: ReactNode;
+  /** A small line-art drawn in place of the icon tile, for the states worth a moment (inbox zero). */
+  art?: ReactNode;
+  action?: EmptyAction;
+  secondary?: EmptyAction;
+  /** Extra content under the hint (last commit, shortcuts…). */
+  children?: ReactNode;
   size?: "sm" | "md" | "lg";
   className?: string;
 };
 
 const SIZES = {
-  sm: { box: "py-8", icon: "[&_svg]:size-6", title: "text-[13px]", text: "text-[12px]" },
-  md: { box: "py-12", icon: "[&_svg]:size-8", title: "text-[15px]", text: "text-[13px]" },
-  lg: { box: "py-16", icon: "[&_svg]:size-10", title: "text-[18px]", text: "text-[14px]" },
+  sm: { box: "py-6", tile: "[&_svg]:size-[18px]", title: "text-[13px]", text: "text-[12px]" },
+  md: { box: "py-10", tile: "[&_svg]:size-[22px]", title: "text-[13.5px]", text: "text-[12.5px]" },
+  lg: { box: "py-14", tile: "[&_svg]:size-[26px]", title: "text-[15px]", text: "text-[13px]" },
 };
 
-export function EmptyState({ title, description, icon, action, size = "md", className }: EmptyStateProps) {
+function isSpec(a: EmptyAction): a is EmptyActionSpec {
+  return typeof a === "object" && a !== null && "label" in a && "onClick" in a;
+}
+
+function ActionButton({ action, primary }: { action: EmptyAction; primary: boolean }) {
+  if (!isSpec(action)) return action;
+  return (
+    <Button
+      size="sm"
+      variant={primary ? "default" : "ghost"}
+      onClick={action.onClick}
+      disabled={action.disabled}
+      className={cn("h-7 gap-1.5 text-[12.5px]", !primary && "text-muted-foreground")}
+    >
+      {action.icon}
+      {action.label}
+      {action.shortcut && (
+        <kbd
+          className={cn("font-sans text-[11px]", primary ? "text-primary-foreground/70" : "text-muted-foreground/70")}
+        >
+          {action.shortcut}
+        </kbd>
+      )}
+    </Button>
+  );
+}
+
+export function EmptyState({
+  title,
+  hint,
+  icon,
+  art,
+  action,
+  secondary,
+  children,
+  size = "md",
+  className,
+}: EmptyStateProps) {
   const s = SIZES[size];
   return (
-    <div className={cn("flex h-full flex-col items-center justify-center px-6 text-center", s.box, className)}>
-      {icon && <div className={cn("mb-4 text-muted-foreground", s.icon)}>{icon}</div>}
+    <div
+      // Announced when a list empties under a filter; not when it hosts a form.
+      role={children ? undefined : "status"}
+      className={cn("flex h-full flex-col items-center justify-center px-6 text-center", s.box, className)}
+    >
+      {art && (
+        <div aria-hidden className="mb-4">
+          {art}
+        </div>
+      )}
+      {icon && !art && (
+        <div
+          aria-hidden
+          className={cn(
+            "mb-3 flex items-center justify-center text-muted-foreground",
+            s.tile,
+          )}
+        >
+          {icon}
+        </div>
+      )}
       <p className={cn("font-medium text-foreground", s.title)}>{title}</p>
-      {description && <div className={cn("mt-1 max-w-sm text-muted-foreground", s.text)}>{description}</div>}
-      {action && <div className="mt-4">{action}</div>}
+      {hint && <div className={cn("mt-1 max-w-sm text-balance text-muted-foreground", s.text)}>{hint}</div>}
+      {children}
+      {(action || secondary) && (
+        <div className="mt-4 flex items-center gap-2">
+          {action && <ActionButton action={action} primary />}
+          {secondary && <ActionButton action={secondary} primary={false} />}
+        </div>
+      )}
     </div>
   );
 }
@@ -43,7 +121,7 @@ export function DataUnavailable({ title, error, onRetry }: { title: string; erro
       size="sm"
       icon={<TriangleAlert className="text-removed-foreground" />}
       title={title}
-      description={
+      hint={
         <>
           <p>{message}</p>
           {detail && (

@@ -9,7 +9,9 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { PanelHeader, PanelLoading } from "@/components/layout/panel";
+import { PanelHeader } from "@/components/layout/panel";
+import { RowSkeleton, SkeletonList, skeletonWidth } from "@/components/skeletons";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useMoveIssue } from "./use-move-issue";
 import { DataUnavailable, EmptyState } from "@/components/states";
@@ -23,11 +25,13 @@ import { CreateIssueButton } from "./CreateIssue";
 import { ProjectIcon } from "./ProjectIcon";
 import { LinearIcon } from "./LinearIcon";
 import { PriorityIcon, ProgressRing, StateDot } from "./LinearList";
+import { LINEAR_KEY_INPUT } from "./ConnectLinear";
 import {
   useActiveAccount,
   useActiveCycles,
   useAllWorkspaces,
   useBoardIssues,
+  useLinearAccounts,
   useOpenProject,
   useTeamStates,
   type WorkspaceIssue,
@@ -141,10 +145,46 @@ function Column({
   );
 }
 
+/** Board columns of cards, or the list's 40px rows, to the layout the issues will land in. */
+function IssuesSkeleton({ layout }: { layout: "board" | "list" }) {
+  if (layout === "list")
+    return (
+      <SkeletonList
+        rows={12}
+        className="min-h-0 flex-1"
+        row={(i) => <RowSkeleton i={i} height={40} lines={1} className="gap-3 border-b border-white/[0.04] px-5" />}
+      />
+    );
+  return (
+    <SkeletonList
+      rows={3}
+      className="flex min-h-0 flex-1 gap-3 p-3 [&>div]:shrink-0"
+      row={(col) => (
+        <div className="flex w-[320px] flex-col rounded-xl bg-white/[0.012]">
+          <div className="flex h-11 items-center gap-2 px-3.5">
+            <Skeleton className="size-3.5 rounded-full" />
+            <Skeleton className="h-2.5 w-20" />
+          </div>
+          <div className="space-y-1.5 px-1.5">
+            {Array.from({ length: 4 - col }, (_, i) => (
+              <div key={i} className="h-[92px] space-y-2.5 rounded-lg border border-white/[0.06] bg-white/[0.035] p-3">
+                <Skeleton className="h-2 w-12 bg-white/[0.05]" />
+                <Skeleton className="h-2.5" style={{ width: skeletonWidth(col * 4 + i) }} />
+                <Skeleton className="h-2 w-16 bg-white/[0.04]" />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    />
+  );
+}
+
 /** Linear's board: the user's issues (or a project's) in every workflow column, across one or all workspaces. */
 export function LinearBoard() {
   const t = useT();
   const all = useAllWorkspaces();
+  const accounts = useLinearAccounts();
   const account = useActiveAccount();
   const open = useOpenProject();
   const cycleView = useLinearStore((s) => s.page === "cycle");
@@ -196,15 +236,33 @@ export function LinearBoard() {
       <CreateIssueButton variant="header" />
     </PanelHeader>
   );
-  if (!account) return <EmptyState icon={<LinearIcon />} title={t("linear.pick")} description={t("linear.pickHint")} />;
+  if (accounts.data?.length === 0)
+    return (
+      <EmptyState
+        icon={<LinearIcon />}
+        title={t("linear.notConnected")}
+        hint={t("linear.notConnectedHint")}
+        action={{
+          label: t("linear.connect"),
+          onClick: () => document.getElementById(LINEAR_KEY_INPUT)?.focus(),
+        }}
+      />
+    );
+  const loading = (
+    <section aria-label={t("linear.myIssues")} className="flex h-full flex-col">
+      <PanelHeader />
+      <IssuesSkeleton layout={layout} />
+    </section>
+  );
+  if (!account) return loading;
   if (issues.error && !issues.data)
     return <DataUnavailable title={t("linear.loadError")} error={issues.error} onRetry={issues.refetch} />;
-  if (!issues.data) return <PanelLoading title={t("linear.loading")} variant="grid-wave" />;
+  if (!issues.data) return loading;
   if (cycleView && cycles?.length === 0)
     return (
       <section aria-label={t("linear.currentCycle")} className="flex h-full flex-col">
         {header}
-        <EmptyState icon={<CircleDashed />} title={t("linear.noCycle")} description={t("linear.noCycleHint")} />
+        <EmptyState icon={<CircleDashed />} title={t("linear.noCycle")} hint={t("linear.noCycleHint")} />
       </section>
     );
   const columns = boardColumns(

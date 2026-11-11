@@ -1,11 +1,13 @@
 import { useShallow } from "zustand/react/shallow";
 import { useHistorySearchStore } from "@/features/history/history-search-store";
-import { DataUnavailable } from "@/components/states";
+import { DataUnavailable, EmptyState } from "@/components/states";
+import { RowSkeleton, SkeletonList } from "@/components/skeletons";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { FolderOpen, GitCommitHorizontal, GitPullRequest, List, ListTree, SearchX, Triangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { FilterInput, PanelHeader, PanelLoading, PanelMessage, PanelToolbar } from "@/components/layout/panel";
+import { FilterInput, PanelHeader, PanelToolbar } from "@/components/layout/panel";
 import { FileIcon } from "@/components/file-icon";
 import { AuthorAvatar } from "@/components/author-avatar";
 import { MiddleTruncate } from "@/components/middle-truncate";
@@ -21,6 +23,7 @@ import { isGenerated } from "@/features/diff/generated";
 import type { ChangedFile, CommitSummary } from "@/types/git";
 import { buildFileRows, type FileListRow } from "./file-tree";
 import { changeMark, FILE_STATUS } from "./file-status";
+import { CommitHoverCard, PullRequestHoverCard } from "@/features/refs/RefPreview";
 import { useT, type MessageKey } from "@/i18n";
 
 type FileRow = Extract<FileListRow, { kind: "row" }>;
@@ -99,16 +102,28 @@ function CommitHeader({ repoPath, commit }: { repoPath: string; commit: CommitSu
         >
           <span className="truncate">{title}</span>
           {pr && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] font-normal text-foreground/85">
-              <GitPullRequest aria-hidden className="size-3" />#{pr}
-            </span>
+            <PullRequestHoverCard repoPath={repoPath} number={Number(pr)}>
+              <span
+                tabIndex={0}
+                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] font-normal text-foreground/85 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <GitPullRequest aria-hidden className="size-3" />#{pr}
+              </span>
+            </PullRequestHoverCard>
           )}
         </h2>
         <p className="flex gap-1.5 truncate text-[12px] text-foreground/90">
           <span title={commit.authorEmail}>{commit.author}</span>
           {coAuthors > 0 && <span title={commit.coAuthors.join(", ")}>+{coAuthors}</span>}
           <span>{formatCommitDate(commit.authoredAt, undefined, t.locale)}</span>
-          <span className="font-mono text-muted-foreground select-text">{commit.hash.slice(0, 7)}</span>
+          <CommitHoverCard repoPath={repoPath} commit={commit}>
+            <span
+              tabIndex={0}
+              className="rounded-sm font-mono text-muted-foreground outline-none select-text focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {commit.hash.slice(0, 7)}
+            </span>
+          </CommitHoverCard>
           {commit.parents.length > 1 && <span>{t("files.merge")}</span>}
         </p>
       </div>
@@ -117,7 +132,7 @@ function CommitHeader({ repoPath, commit }: { repoPath: string; commit: CommitSu
 }
 
 /** Header of a pull request's whole diff: who opened it, and that every commit is included. */
-function PullRequestHeader({ pr }: { pr: ActivePullRequest }) {
+function PullRequestHeader({ repoPath, pr }: { repoPath: string; pr: ActivePullRequest }) {
   const t = useT();
   return (
     <div data-tauri-drag-region className="flex min-w-0 items-center gap-2.5">
@@ -129,9 +144,14 @@ function PullRequestHeader({ pr }: { pr: ActivePullRequest }) {
       <div data-tauri-drag-region className="min-w-0">
         <h2 className="flex min-w-0 items-center gap-1.5 text-[14px] font-semibold text-white/95" title={pr.title}>
           <span className="truncate">{pr.title}</span>
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] font-normal text-foreground/85">
-            <GitPullRequest aria-hidden className="size-3" />#{pr.number}
-          </span>
+          <PullRequestHoverCard repoPath={repoPath} number={pr.number}>
+            <span
+              tabIndex={0}
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] font-normal text-foreground/85 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <GitPullRequest aria-hidden className="size-3" />#{pr.number}
+            </span>
+          </PullRequestHoverCard>
         </h2>
         <p className="flex gap-1.5 truncate text-[12px] text-foreground/90">
           <span>{pr.author}</span>
@@ -236,9 +256,11 @@ function FileList({ files }: { files: ChangedFile[] }) {
         <ModeButton mode="tree" label="files.tree" icon={<ListTree />} />
       </PanelToolbar>
       {navRows.length === 0 ? (
-        <PanelMessage
+        <EmptyState
+          size="sm"
           icon={files.length ? <SearchX /> : <FolderOpen />}
           title={files.length ? t("files.noMatch") : t("files.none")}
+          action={query ? { label: t("common.clearFilter"), onClick: () => setQuery("") } : undefined}
         />
       ) : (
         <ul
@@ -276,13 +298,29 @@ function FileList({ files }: { files: ChangedFile[] }) {
   );
 }
 
+/** The filter bar, then file rows (h-7: icon and name). */
+function FileListSkeleton() {
+  return (
+    <>
+      <PanelToolbar className="mt-1">
+        <Skeleton className="h-7 flex-1 rounded-md bg-white/[0.035]" />
+      </PanelToolbar>
+      <SkeletonList
+        rows={12}
+        className="mt-4 px-2"
+        row={(i) => <RowSkeleton i={i} height={28} lines={1} trail={false} className="pl-2.5" />}
+      />
+    </>
+  );
+}
+
 function CommitFiles({ repoPath, hash, base }: { repoPath: string; hash: string; base: string | null }) {
   const t = useT();
   const files = useCommitFiles(repoPath, hash, base);
   if (files.isError) {
     return <DataUnavailable title={t("files.listError")} error={files.error} onRetry={() => void files.refetch()} />;
   }
-  if (!files.data) return <PanelLoading title={t("files.loading")} variant="grid-columns" />;
+  if (!files.data) return <FileListSkeleton />;
   return <FileList files={files.data} />;
 }
 
@@ -310,7 +348,7 @@ export function ChangedFilesPanel({ repoPath }: { repoPath: string }) {
     <section aria-label={t("files.panel")} className="flex h-full flex-col bg-panel">
       <PanelHeader>
         {base && pullRequest ? (
-          <PullRequestHeader pr={pullRequest} />
+          <PullRequestHeader repoPath={repoPath} pr={pullRequest} />
         ) : (
           commit && <CommitHeader repoPath={repoPath} commit={commit} />
         )}
@@ -318,7 +356,12 @@ export function ChangedFilesPanel({ repoPath }: { repoPath: string }) {
       {hash ? (
         <CommitFiles key={`${hash}:${base}`} repoPath={repoPath} hash={hash} base={base} />
       ) : (
-        <PanelMessage icon={<GitCommitHorizontal />} title={t("files.noCommit")} hint={t("files.noCommitHint")} />
+        <EmptyState
+          size="sm"
+          icon={<GitCommitHorizontal />}
+          title={t("files.noCommit")}
+          hint={t("files.noCommitHint")}
+        />
       )}
     </section>
   );

@@ -6,7 +6,7 @@ import { EditorView } from "@codemirror/view";
 import { openSearchPanel } from "@codemirror/search";
 import { Code2, FileWarning, Search, Sparkles, X } from "lucide-react";
 import { FileIcon } from "@/components/file-icon";
-import { PanelMessage } from "@/components/layout/panel";
+import { EmptyState } from "@/components/states";
 import { useT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { invalidateRepo, repoKey } from "@/lib/git-queries";
@@ -501,9 +501,21 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
       {active && <EditorToolbar repoPath={repoPath} path={active} view={viewRef} />}
       <div className="relative min-h-0 flex-1">
         <div ref={hostRef} className={cn("absolute inset-0", (!active || notice) && "invisible")} />
-        {!active && <PanelMessage icon={<Code2 />} title={t("editor.empty")} hint={t("editor.emptyHint")} />}
+        {!active && (
+          <EmptyState
+            icon={<Code2 />}
+            title={t("editor.empty")}
+            hint={t("editor.emptyHint")}
+            action={{ label: t("editor.quickOpen"), shortcut: "⌘P", onClick: () => setQuickOpen(true) }}
+            secondary={{
+              label: t("editor.searchProject"),
+              shortcut: "⇧⌘F",
+              onClick: () => useEditorStore.getState().setSidebar("search"),
+            }}
+          />
+        )}
         {active && notice && (
-          <PanelMessage
+          <EmptyState
             icon={<FileWarning />}
             title={t(
               notice.kind === "binary"

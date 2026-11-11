@@ -1,12 +1,14 @@
 //! Line authorship (`git blame --porcelain`) and a file's history (`git log --follow`), for the editor.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, GitError, GitResult};
-use super::runner::{gh, git};
+use super::runner::{gh, git, git_text};
 use super::validate;
 
 /// Consecutive lines last changed by one commit. Uncommitted lines have an all-zero `sha`.
@@ -47,10 +49,48 @@ const MAX_HISTORY: &str = "--max-count=300";
 /// RS before each record, NUL between fields; with `-z` the name-status tokens follow the subject.
 const HISTORY_FORMAT: &str = "--format=%x1e%H%x00%an%x00%ae%x00%aI%x00%s";
 
+/// What a working-tree blame depends on: the history up to HEAD and the file's content.
+type BlameKey = (PathBuf, String, String, SystemTime, u64);
+
+/// The watcher re-asks for the open file's blame on every change anywhere in the tree, and blaming a
+/// long file takes hundreds of milliseconds: it is reused while HEAD and the file stay the same.
+fn blame_cache() -> &'static Mutex<HashMap<BlameKey, Vec<BlameHunk>>> {
+    static CACHE: OnceLock<Mutex<HashMap<BlameKey, Vec<BlameHunk>>>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn blame_key(repo: &Path, path: &str) -> Option<BlameKey> {
+    let meta = std::fs::metadata(repo.join(path)).ok()?;
+    let head = git_text(repo, &["rev-parse", "--verify", "--quiet", "HEAD"]).ok()?;
+    let head = head.trim().to_string();
+    Some((
+        repo.to_path_buf(),
+        path.to_string(),
+        head,
+        meta.modified().ok()?,
+        meta.len(),
+    ))
+}
+
 pub fn blame_file(repo: &Path, path: &str) -> GitResult<Vec<BlameHunk>> {
     let path = validate::relative_path(path)?;
+    let key = blame_key(repo, path);
+    let cache = blame_cache();
+    if let Some(hit) = key
+        .as_ref()
+        .and_then(|k| cache.lock().ok()?.get(k).cloned())
+    {
+        return Ok(hit);
+    }
     let out = git(repo, &["blame", "--porcelain", "--", path])?;
-    Ok(parse_blame(&String::from_utf8_lossy(&out)))
+    let hunks = parse_blame(&String::from_utf8_lossy(&out));
+    if let (Some(key), Ok(mut cache)) = (key, cache.lock()) {
+        if cache.len() >= 32 {
+            cache.clear(); // ponytail: wholesale eviction, an LRU if switching between many files matters
+        }
+        cache.insert(key, hunks.clone());
+    }
+    Ok(hunks)
 }
 
 pub fn file_history(repo: &Path, path: &str) -> GitResult<Vec<FileCommit>> {
@@ -247,6 +287,18 @@ mod tests {
         let subjects: Vec<&str> = history.iter().map(|c| c.subject.as_str()).collect();
         assert_eq!(subjects, vec!["three", "two", "one"]);
         assert_eq!(history[2].path, "x.txt");
+    }
+
+    #[test]
+    fn a_cached_blame_is_redone_after_a_commit() {
+        let repo = TestRepo::new();
+        repo.write("a.txt", "a\n");
+        repo.commit_all("one");
+        repo.write("a.txt", "a\nb\n");
+        blame_file(repo.path(), "a.txt").unwrap(); // cached with "b" uncommitted
+        repo.commit_all("two");
+        let hunks = blame_file(repo.path(), "a.txt").unwrap();
+        assert_eq!(hunks.last().unwrap().summary, "two");
     }
 
     #[test]

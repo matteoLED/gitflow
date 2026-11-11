@@ -22,8 +22,9 @@ export function useRepoWatcher(repoPath: string) {
       .then(({ listen }) =>
         listen<RepoChanged>("repo-changed", ({ payload }) => {
           if (payload.repoPath !== repoPath) return;
-          const kinds = ["working-tree", "working-diff", "operation", "blame"];
-          if (payload.git) kinds.push("refs", "commits", "file-history");
+          const kinds = ["working-tree", "working-diff", "blame"];
+          // A merge/rebase in progress lives in .git: a file edit can't start or end one.
+          if (payload.git) kinds.push("operation", "refs", "commits", "file-history");
           void invalidateRepo(client, repoPath, kinds);
         }),
       )

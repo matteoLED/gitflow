@@ -1,5 +1,5 @@
 import { useShallow } from "zustand/react/shallow";
-import { DataUnavailable } from "@/components/states";
+import { DataUnavailable, EmptyState } from "@/components/states";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -19,7 +19,8 @@ import { buildGraph, type GraphRow } from "./graph";
 import { stackOf } from "@/features/github/stacks";
 import { useOpenPullRequest } from "@/features/github/PullRequestList";
 import { useViewSettings } from "@/stores/view-settings-store";
-import { PanelHeader, PanelLoading, PanelMessage, PanelToolbar } from "@/components/layout/panel";
+import { PanelHeader, PanelToolbar } from "@/components/layout/panel";
+import { CommitListSkeleton } from "@/components/skeletons";
 import { useCommits, usePullRequests, useRefs } from "@/lib/git-queries";
 import { formatCommitDate } from "@/lib/format-date";
 import { nextListIndex } from "@/lib/list-navigation";
@@ -36,6 +37,7 @@ import { gitBackend } from "@/lib/tauri-git";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { CommitRef, CommitSummary, HistorySearch } from "@/types/git";
 import { useT } from "@/i18n";
+import { CommitHoverCard, PullRequestHoverCard } from "@/features/refs/RefPreview";
 
 const REF_ICONS = { head: Crosshair, branch: GitBranch, remote: Cloud, tag: Tag } as const;
 const ROW_HEIGHT = 46;
@@ -126,9 +128,10 @@ type CommitRowProps = {
   actions: CommitActions;
   /** Search terms to highlight (none for regular expressions). */
   terms: HistorySearch;
+  repoPath: string;
 };
 
-function CommitRow({ commit, selected, top, onSelect, graph, graphWidth, actions, terms }: CommitRowProps) {
+function CommitRow({ commit, selected, top, onSelect, graph, graphWidth, actions, terms, repoPath }: CommitRowProps) {
   const t = useT();
   const badges = badgesOf(commit.refs);
   const { title, pr } = splitSubject(commit.subject);
@@ -140,7 +143,6 @@ function CommitRow({ commit, selected, top, onSelect, graph, graphWidth, actions
         role="option"
         aria-selected={selected}
         onClick={onSelect}
-        title={`${commit.subject}\n${commit.hash.slice(0, 10)} · ${commit.author}`}
         style={{ transform: `translateY(${top}px)`, height: ROW_HEIGHT, paddingLeft: graphWidth }}
         className={cn(
           "absolute inset-x-0 flex cursor-default flex-col justify-center gap-0.5 overflow-hidden rounded-lg pr-3 hover:bg-white/[0.07]",
@@ -155,9 +157,11 @@ function CommitRow({ commit, selected, top, onSelect, graph, graphWidth, actions
             className="absolute top-[11px] left-[7px] size-2 rounded-full border-2 border-primary bg-panel"
           />
         )}
-        <span className="truncate text-[12.5px] font-medium text-foreground">
-          <Highlight text={title} term={terms.message} />
-        </span>
+        <CommitHoverCard repoPath={repoPath} commit={commit} side="right">
+          <span className="self-start truncate text-[12.5px] font-medium text-foreground max-w-full">
+            <Highlight text={title} term={terms.message} />
+          </span>
+        </CommitHoverCard>
         <span className="flex min-w-0 items-center gap-2 text-[11.5px] text-muted-foreground">
           {/* Badges clip at this box's edge instead of squeezing, so the date always stays readable. */}
           <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
@@ -165,9 +169,11 @@ function CommitRow({ commit, selected, top, onSelect, graph, graphWidth, actions
               <Highlight text={commit.author} term={terms.author} />
             </span>
             {pr && (
-              <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] text-foreground/85">
-                <GitPullRequest aria-hidden className="size-3" />#{pr}
-              </span>
+              <PullRequestHoverCard repoPath={repoPath} number={Number(pr)}>
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] text-foreground/85">
+                  <GitPullRequest aria-hidden className="size-3" />#{pr}
+                </span>
+              </PullRequestHoverCard>
             )}
             {badges.slice(0, MAX_BADGES).map((badge) => (
               <RefBadge key={`${badge.kind}:${badge.name}`} badge={badge} />
@@ -339,6 +345,8 @@ export function CommitList({ repoPath }: { repoPath: string }) {
   );
   const search = useHistorySearchStore((s) => s.search);
   const searching = !isEmptySearch(search);
+  const setQuery = useHistorySearchStore((s) => s.setQuery);
+  const setView = useWorkspaceStore((s) => s.setView);
   const terms = search.regex ? {} : search;
   const history = useCommits(repoPath, historyRev, search);
   const commits = useMemo(() => history.data?.pages.flat() ?? [], [history.data]);
@@ -413,12 +421,22 @@ export function CommitList({ repoPath }: { repoPath: string }) {
       {history.isError ? (
         <DataUnavailable title={t("history.loadError")} error={history.error} onRetry={() => void history.refetch()} />
       ) : history.isPending ? (
-        <PanelLoading title={t("history.loading")} variant="grid-wave" />
+        <CommitListSkeleton />
       ) : commits.length === 0 ? (
         searching ? (
-          <PanelMessage icon={<SearchX />} title={t("history.noMatch")} hint={t("history.noMatchHint")} />
+          <EmptyState
+            icon={<SearchX />}
+            title={t("history.noMatch")}
+            hint={t("history.noMatchHint")}
+            action={{ label: t("history.clearSearch"), onClick: () => setQuery("", true) }}
+          />
         ) : (
-          <PanelMessage icon={<GitCommitHorizontal />} title={t("history.empty")} hint={t("history.emptyHint")} />
+          <EmptyState
+            icon={<GitCommitHorizontal />}
+            title={t("history.empty")}
+            hint={t("history.emptyHint")}
+            action={{ label: t("history.openChanges"), onClick: () => setView("changes") }}
+          />
         )
       ) : (
         <div
@@ -444,6 +462,7 @@ export function CommitList({ repoPath }: { repoPath: string }) {
                   graphWidth={graphWidth}
                   actions={actions}
                   terms={terms}
+                  repoPath={repoPath}
                 />
               );
             })}

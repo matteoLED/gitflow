@@ -214,6 +214,7 @@ function useFollowUrl(tab: BrowserTab | null) {
   useEffect(() => {
     if (!id) return;
     const timer = setInterval(() => {
+      if (document.hidden) return; // nobody reads the address of a hidden window
       void gitBackend.browserUrl(id).then((url) => {
         const current = useBrowserStore.getState().tabs.find((x) => x.id === id)?.url;
         if (url && url !== current && /^https?:/.test(url)) useBrowserStore.getState().apply({ type: "url", id, url });

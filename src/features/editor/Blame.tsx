@@ -10,6 +10,7 @@ import { gitBackend } from "@/lib/tauri-git";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { BlameHunk, FileCommit } from "@/types/git";
 import { DiffBody } from "@/features/diff/DiffCard";
+import { PullRequestHoverCard } from "@/features/refs/RefPreview";
 import { blameExtension, blameSlot, type BlameLabels } from "./blame-cm";
 import { inlineBlame, isUncommitted, useBlameStore } from "./blame-model";
 
@@ -42,15 +43,16 @@ function PullRequestLink({ repoPath, sha }: { repoPath: string; sha: string }) {
   const pr = useCommitPullRequest(repoPath, sha).data;
   if (!pr) return null;
   return (
-    <button
-      type="button"
-      onClick={() => void gitBackend.openGithubUrl(pr.url)}
-      title={pr.url}
-      className="flex min-w-0 items-center gap-1.5 text-left text-primary hover:underline"
-    >
-      <GitPullRequest aria-hidden className="size-3 shrink-0" />
-      <span className="truncate">{t("blame.pullRequest", { number: pr.number, title: pr.title })}</span>
-    </button>
+    <PullRequestHoverCard repoPath={repoPath} number={pr.number} side="right">
+      <button
+        type="button"
+        onClick={() => void gitBackend.openGithubUrl(pr.url)}
+        className="flex min-w-0 items-center gap-1.5 text-left text-primary hover:underline"
+      >
+        <GitPullRequest aria-hidden className="size-3 shrink-0" />
+        <span className="truncate">{t("blame.pullRequest", { number: pr.number, title: pr.title })}</span>
+      </button>
+    </PullRequestHoverCard>
   );
 }
 

@@ -1,5 +1,5 @@
 //! Watches the open repository (FSEvents on macOS) so the UI refreshes on change instead of polling
-//! `git status`. Bursts are coalesced into one `repo-changed` event per kind every 250 ms.
+//! `git status`. Bursts are coalesced into one `repo-changed` event once it settles (a long burst: once a second).
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::{RecvTimeoutError, channel};
@@ -13,7 +13,10 @@ use tauri::{AppHandle, Emitter};
 
 use crate::git::errors::{ErrorKind, GitError, GitResult};
 
-const DEBOUNCE: Duration = Duration::from_millis(250);
+/// A burst ends after this much quiet...
+const DEBOUNCE: Duration = Duration::from_millis(150);
+/// ...or is flushed after this long anyway, so a checkout or an install doesn't refresh the UI 4x a second.
+const MAX_DELAY: Duration = Duration::from_secs(1);
 /// Build output and dependencies change constantly and never matter to Git's view of the tree.
 const IGNORED: [&str; 9] = [
     "node_modules",
@@ -90,7 +93,9 @@ pub fn watch(app: AppHandle, repo: &Path) -> GitResult<()> {
     *current = Some((root.clone(), watcher));
 
     thread::spawn(move || {
-        let (mut worktree, mut git, mut since) = (false, false, None::<Instant>);
+        let (mut worktree, mut git) = (false, false);
+        // First and latest relevant change of the pending burst.
+        let mut burst = None::<(Instant, Instant)>;
         loop {
             match rx.recv_timeout(DEBOUNCE) {
                 Ok(Ok(event)) => {
@@ -100,21 +105,25 @@ pub fn watch(app: AppHandle, repo: &Path) -> GitResult<()> {
                             Some(Change::Git) => git = true,
                             None => continue,
                         }
-                        since.get_or_insert_with(Instant::now);
+                        let now = Instant::now();
+                        burst = Some((burst.map_or(now, |(first, _)| first), now));
                     }
                 }
                 Ok(Err(_)) => {}
                 Err(RecvTimeoutError::Disconnected) => break, // watcher replaced or dropped
                 Err(RecvTimeoutError::Timeout) => {}
             }
-            if since.is_some_and(|t| t.elapsed() >= DEBOUNCE) {
+            let settled = burst.is_some_and(|(first, last)| {
+                last.elapsed() >= DEBOUNCE || first.elapsed() >= MAX_DELAY
+            });
+            if settled {
                 let payload = RepoChanged {
                     repo_path: root.to_string_lossy().into_owned(),
                     worktree,
                     git,
                 };
                 let _ = app.emit("repo-changed", payload);
-                (worktree, git, since) = (false, false, None);
+                (worktree, git, burst) = (false, false, None);
             }
         }
     });

@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useShallow } from "zustand/react/shallow";
 import {
   FileText,
   GitCommitHorizontal,
@@ -45,21 +46,29 @@ type Chip = { kind: "preview" | "pr" | "commit" | "issue" | "file"; icon: ReactN
 
 /** What the user is looking at right now, as chips for them and as plain facts for the agent. */
 function useContextChips(repoPath: string): Chip[] {
-  const { view, pullRequest, selectedCommitHash, compareBase } = useWorkspaceStore();
-  const { runs, selected } = usePreviewStore();
+  const { view, pullRequest, selectedCommitHash, compareBase } = useWorkspaceStore(
+    useShallow((s) => ({
+      view: s.view,
+      pullRequest: s.pullRequest,
+      selectedCommitHash: s.selectedCommitHash,
+      compareBase: s.compareBase,
+    })),
+  );
+  const selected = usePreviewStore((s) => s.selected);
   const targets = usePreviewTargets(repoPath).data ?? [];
   const chips: Chip[] = [];
   const issue = useOpenIssue().data;
   const file = useEditorStore((s) => editorOf(s, repoPath).active);
   // Same default as the preview panel: the first app when none was picked yet.
   const target = targets.find((x) => x.id === selected) ?? targets[0];
-  const run = runOf(runs, target?.id ?? null);
+  // The URL only: preview logs streaming into the store don't re-render the panel.
+  const url = usePreviewStore((s) => runOf(s.runs, target?.id ?? null).url);
   if (view === "preview" && target) {
     chips.push({
       kind: "preview",
       icon: <Globe className="size-3" />,
       label: target.name,
-      detail: `The user is previewing the app ${target.name} (${target.framework}, folder ${target.dir})${run.url ? ` running at ${run.url}` : ""}.`,
+      detail: `The user is previewing the app ${target.name} (${target.framework}, folder ${target.dir})${url ? ` running at ${url}` : ""}.`,
     });
   }
   if (view === "editor" && file) {
@@ -189,14 +198,16 @@ export function conversationsOf(runs: readonly AgentRun[], repoPath: string): Co
 }
 
 const PAGE = 30;
+const NO_RUNS: AgentRun[] = [];
 type Entry = Conversation & { session: boolean };
 
 /** Previous conversations, to pick one back up: the app's own, then older Claude Code sessions as you scroll. */
 function HistoryMenu({ repoPath, current }: { repoPath: string; current: string | null }) {
   const t = useT();
-  const runs = useAgentsStore((s) => s.runs);
-  const setAssistantThread = useAgentsStore((s) => s.setAssistantThread);
   const [open, setOpen] = useState(false);
+  // Read only while the menu is open: a run streaming its steps doesn't re-render the closed menu.
+  const runs = useAgentsStore((s) => (open ? s.runs : NO_RUNS));
+  const setAssistantThread = useAgentsStore((s) => s.setAssistantThread);
   const [query, setQuery] = useState("");
   const sessions = useInfiniteQuery({
     queryKey: ["agent-sessions-page", repoPath],
@@ -378,7 +389,18 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
   const [width, setWidth] = useState(storedWidth);
   const t = useT();
   const setOpen = useUiStore((s) => s.setAssistantOpen);
-  const { runs, assistantThread, setAssistantThread, preferredAgent, select } = useAgentsStore();
+  const { assistantThread, setAssistantThread, preferredAgent, select } = useAgentsStore(
+    useShallow((s) => ({
+      assistantThread: s.assistantThread,
+      setAssistantThread: s.setAssistantThread,
+      preferredAgent: s.preferredAgent,
+      select: s.select,
+    })),
+  );
+  // Only the runs of the conversation shown: other conversations streaming don't re-render the panel.
+  const thread = useAgentsStore(
+    useShallow((s) => (s.assistantThread ? threadRuns(s.runs, s.assistantThread) : NO_RUNS)),
+  );
   const installed = useInstalledAgents().data;
   const past = assistantThread?.startsWith("session:") ? assistantThread.slice(8) : null;
   const pastCodex = !!past?.startsWith("codex:");
@@ -390,7 +412,6 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
   const repo = useWorkspaceStore((s) => s.repo);
   const view = useWorkspaceStore((s) => s.view);
   const [sending, setSending] = useState(false);
-  const thread = assistantThread ? threadRuns(runs, assistantThread) : [];
   const live = thread.find((r) => r.status === "running");
   const resume = [...thread].reverse().find((r) => r.sessionId)?.sessionId ?? pastSession ?? null;
   // A Claude Code session picked from the history: its past turns, then what was said here since.

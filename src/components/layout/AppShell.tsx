@@ -1,13 +1,11 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { lazy, Suspense, useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { OperationBar } from "@/features/conflicts/OperationBar";
 import { ShortcutsDialog } from "@/features/shortcuts/ShortcutsDialog";
-import { StashDialog } from "@/features/stash/StashDialog";
 import { useUndoShortcut } from "@/features/undo/use-undo";
 import { CommandPalette } from "@/features/command/CommandPalette";
 import { WorkList } from "@/features/work/WorkList";
-import { WorkPage } from "@/features/work/WorkPage";
 import { Group, Panel, useDefaultLayout } from "react-resizable-panels";
 import { GitPullRequest, PanelLeftOpen } from "lucide-react";
 import { useLayoutStore } from "@/stores/layout-store";
@@ -26,14 +24,14 @@ import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { CommitList } from "@/features/history/CommitList";
 import { ChangedFilesPanel } from "@/features/changed-files/ChangedFilesPanel";
-import { DiffPanel } from "@/features/diff/DiffPanel";
 import { ChangesPanel } from "@/features/working-tree/ChangesPanel";
-import { WorkingDiffPanel } from "@/features/working-tree/WorkingDiffPanel";
 import { WelcomeScreen } from "@/features/repositories/WelcomeScreen";
 import { PanelLoading } from "@/components/layout/panel";
 import { Columns } from "@/components/layout/Columns";
 import { TerminalDock } from "@/features/terminal/TerminalDock";
+import { StatusBar } from "@/components/layout/StatusBar";
 import { useUiStore } from "@/stores/ui-store";
+import { useStashStore } from "@/features/stash/stash-store";
 import { useRepoWatcher } from "@/features/repositories/use-repo-watcher";
 import { watchForUpdates } from "@/features/updates/updater";
 import { useDesktopNotifications } from "@/features/notifications/use-desktop-notifications";
@@ -52,6 +50,13 @@ const EditorSidebar = lazy(() => import("@/features/editor/EditorSidebar").then(
 const CodeGraphList = lazy(() => import("@/features/code-graph/CodeGraph").then((m) => ({ default: m.CodeGraphList })));
 const BrowserPanel = lazy(() => import("@/features/browser/Browser").then((m) => ({ default: m.BrowserPanel })));
 const BrowserTabs = lazy(() => import("@/features/browser/Browser").then((m) => ({ default: m.BrowserTabs })));
+// Diffs pull the diff model, line comments and their Markdown: loaded with the first view that shows one.
+const DiffPanel = lazy(() => import("@/features/diff/DiffPanel").then((m) => ({ default: m.DiffPanel })));
+const WorkingDiffPanel = lazy(() =>
+  import("@/features/working-tree/WorkingDiffPanel").then((m) => ({ default: m.WorkingDiffPanel })),
+);
+const WorkPage = lazy(() => import("@/features/work/WorkPage").then((m) => ({ default: m.WorkPage })));
+const StashDialog = lazy(() => import("@/features/stash/StashDialog").then((m) => ({ default: m.StashDialog })));
 const PreviewPanel = lazy(() => import("@/features/preview/PreviewPanel").then((m) => ({ default: m.PreviewPanel })));
 import { useWorkspaceStore, type View } from "@/stores/workspace-store";
 import type { RepositoryInfo } from "@/types/git";
@@ -164,7 +169,9 @@ function HistoryLayout({ repo }: { repo: RepositoryInfo }) {
         </Panel>
         <ResizeHandle />
         <Panel id="diff" defaultSize="50" minSize={320}>
-          <DiffPanel repoPath={repo.path} />
+          <Suspense fallback={<PanelLoading title="" />}>
+            <DiffPanel repoPath={repo.path} />
+          </Suspense>
         </Panel>
       </Columns>
     </Frame>
@@ -180,7 +187,9 @@ function ChangesLayout({ repo }: { repo: RepositoryInfo }) {
         </Panel>
         <ResizeHandle />
         <Panel id="working-diff" defaultSize="66" minSize={320}>
-          <WorkingDiffPanel repoPath={repo.path} />
+          <Suspense fallback={<PanelLoading title="" />}>
+            <WorkingDiffPanel repoPath={repo.path} />
+          </Suspense>
         </Panel>
       </Columns>
     </Frame>
@@ -193,7 +202,7 @@ function PageList({ repo, view }: { repo: RepositoryInfo; view: View }) {
   if (view === "github")
     return (
       <ListPanel title={t("view.github")} filterLabel={t("github.filter")}>
-        {(query) => <PullRequestList repoPath={repo.path} query={query} />}
+        {(query, clear) => <PullRequestList repoPath={repo.path} query={query} onClearQuery={clear} />}
       </ListPanel>
     );
   if (view === "ci")
@@ -309,7 +318,7 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
             pullRequest ? (
               <PullRequestPage key={pullRequest.number} repoPath={repo.path} pr={pullRequest} />
             ) : (
-              <EmptyState icon={<GitPullRequest />} title={t("pr.pick")} description={t("pr.pickHint")} />
+              <EmptyState icon={<GitPullRequest />} title={t("pr.pick")} hint={t("pr.pickHint")} />
             )
           ) : view === "ci" ? (
             <CiPage repoPath={repo.path} />
@@ -336,6 +345,19 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
     <ChangesLayout key={repo.path} repo={repo} />
   ) : (
     <HistoryLayout key={repo.path} repo={repo} />
+  );
+}
+
+/** The stash dialog loads the first time it opens, then stays mounted so it can animate out. */
+function LazyStashDialog({ repoPath }: { repoPath: string }) {
+  const open = useStashStore((s) => s.open);
+  const [opened, setOpened] = useState(open);
+  if (open && !opened) setOpened(true);
+  if (!opened) return null;
+  return (
+    <Suspense fallback={null}>
+      <StashDialog repoPath={repoPath} />
+    </Suspense>
   );
 }
 
@@ -392,9 +414,10 @@ function Workspace({ repo, view }: { repo: RepositoryInfo; view: View }) {
         )}
       </div>
       <TerminalDock key={repo.path} repoPath={repo.path} />
+      <StatusBar repoPath={repo.path} />
       <CommandPalette repo={repo} />
       <ShortcutsDialog />
-      <StashDialog repoPath={repo.path} />
+      <LazyStashDialog repoPath={repo.path} />
     </div>
   );
 }

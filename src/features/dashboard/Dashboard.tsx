@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, FolderGit2, Layers, MonitorSmartphone, PlayCircle, Sparkles } from "lucide-react";
 import { GithubIcon } from "@/components/github-icon";
@@ -6,7 +7,7 @@ import { PanelHeader } from "@/components/layout/panel";
 import { BrailleLoader } from "@/components/braille-loader";
 import { useT } from "@/i18n";
 import { formatAge } from "@/lib/format-date";
-import { usePullRequests, useRefs, useWorkingTree, useGitIdentity } from "@/lib/git-queries";
+import { usePullRequests, useRefs, useWorkflowRuns, useWorkingTree, useGitIdentity } from "@/lib/git-queries";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
 import { useAgentsStore } from "@/stores/agents-store";
@@ -206,7 +207,12 @@ function RepoCard({ repo }: { repo: RepositoryInfo }) {
 function AgentsCard({ repo }: { repo: RepositoryInfo }) {
   const t = useT();
   const select = useAgentsStore((s) => s.select);
-  const live = useAgentsStore((s) => s.runs).filter((r) => r.status === "running");
+  // Id → title of the running runs: their streaming steps don't re-render the card.
+  const live = Object.entries(
+    useAgentsStore(
+      useShallow((s) => Object.fromEntries(s.runs.filter((r) => r.status === "running").map((r) => [r.id, r.title]))),
+    ),
+  ).map(([id, title]) => ({ id, title }));
   const sessions = useQuery({
     queryKey: ["agent-sessions", repo.path],
     queryFn: () => gitBackend.listAgentSessions(repo.path),
@@ -247,11 +253,7 @@ function AgentsCard({ repo }: { repo: RepositoryInfo }) {
 function ChecksCard({ repo }: { repo: RepositoryInfo }) {
   const t = useT();
   const select = useAgentsStore((s) => s.select);
-  const runs = useQuery({
-    queryKey: ["workflow-runs", repo.path],
-    queryFn: () => gitBackend.listWorkflowRuns(repo.path),
-    refetchInterval: (q) => (q.state.data?.some((r) => r.status !== "completed") ? 10_000 : 60_000),
-  });
+  const runs = useWorkflowRuns(repo.path);
   return (
     <Card icon={<PlayCircle />} title={t("agents.actions")} view="agents">
       {runs.isError ? (

@@ -2,8 +2,8 @@ import { useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { Archive, GitBranchPlus } from "lucide-react";
-import { DataUnavailable } from "@/components/states";
-import { PanelLoading, PanelMessage } from "@/components/layout/panel";
+import { DataUnavailable, EmptyState } from "@/components/states";
+import { DiffSkeleton, RowSkeleton, SkeletonList } from "@/components/skeletons";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -65,9 +65,9 @@ function StashBody({ repoPath }: { repoPath: string }) {
               onRetry={() => void stashes.refetch()}
             />
           ) : !stashes.data ? (
-            <PanelLoading title={t("common.loading")} />
+            <SkeletonList rows={6} row={(i) => <RowSkeleton i={i} height={48} lead={null} trail={false} />} />
           ) : list.length === 0 ? (
-            <PanelMessage icon={<Archive />} title={t("stash.empty")} hint={t("stash.emptyHint")} />
+            <EmptyState size="sm" icon={<Archive />} title={t("stash.empty")} hint={t("stash.emptyHint")} />
           ) : (
             list.map((stash) => <StashRow key={stash.hash} stash={stash} selected={stash.hash === selected?.hash} />)
           )}
@@ -264,7 +264,7 @@ function StashFiles({ repoPath, hash }: { repoPath: string; hash: string }) {
     return (
       <DataUnavailable title={t("diff.loadFilesError")} error={files.error} onRetry={() => void files.refetch()} />
     );
-  if (!files.data) return <PanelLoading title={t("common.loading")} />;
+  if (!files.data) return <DiffSkeleton />;
   return files.data.map((file) => <StashFileDiff key={file.path} repoPath={repoPath} hash={hash} file={file} />);
 }
 

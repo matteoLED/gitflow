@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+import babel from "@rolldown/plugin-babel";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
@@ -12,6 +13,8 @@ export default defineConfig({
     // Before react(): turns `src/routes/*.tsx` into the route tree (`src/routeTree.gen.ts`), one chunk per page.
     tanstackRouter({ target: "react", autoCodeSplitting: true, routeFileIgnorePattern: "\\.test\\.tsx?$" }),
     react(),
+    // The React Compiler memoizes components and hooks at build time (its lint rules already guard the code).
+    babel({ presets: [reactCompilerPreset()] }),
     tailwindcss(),
   ],
   resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },

@@ -46,16 +46,19 @@ export function SyncBar({ repoPath, refs }: { repoPath: string; refs: RefsSnapsh
   const fetch = useGitAction(repoPath, {
     run: () => gitBackend.fetch(repoPath),
     success: t("sync.fetched"),
+    pending: t("sync.fetching"),
     failure: t("sync.fetchFailed"),
   });
   const pull = useGitAction(repoPath, {
     run: () => gitBackend.pull(repoPath),
     success: t("sync.pulled"),
+    pending: t("sync.pulling"),
     failure: t("sync.pullFailed"),
   });
   const push = useGitAction(repoPath, {
     run: () => gitBackend.push(repoPath),
     success: t("sync.pushed"),
+    pending: t("sync.pushing"),
     failure: t("sync.pushFailed"),
   });
   const pushHint = current?.upstream ? t("sync.pushTo", { upstream: current.upstream }) : t("sync.publish");

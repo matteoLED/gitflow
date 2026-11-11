@@ -8,7 +8,7 @@ use regex::{NoExpand, Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 use super::errors::{ErrorKind, GitError, GitResult};
-use super::runner::{RunOptions, git, git_with};
+use super::runner::{RunOptions, both, git, git_with};
 use super::validate;
 
 /// Larger files open read-only-ish: the editor shows a notice instead of loading megabytes of text.
@@ -26,23 +26,26 @@ pub fn list_files(repo: &Path) -> GitResult<Vec<String>> {
             .map(|s| String::from_utf8_lossy(s).into_owned())
             .collect()
     };
-    let deleted: std::collections::HashSet<String> =
-        split(git(repo, &["ls-files", "--deleted", "-z"])?)
-            .into_iter()
-            .collect();
-    let mut files: Vec<String> = split(git(
-        repo,
-        &[
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-        ],
-    )?)
-    .into_iter()
-    .filter(|f| !deleted.contains(f))
-    .collect();
+    let (deleted, all) = both(
+        || git(repo, &["ls-files", "--deleted", "-z"]),
+        || {
+            git(
+                repo,
+                &[
+                    "ls-files",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                ],
+            )
+        },
+    );
+    let deleted: std::collections::HashSet<String> = split(deleted?).into_iter().collect();
+    let mut files: Vec<String> = split(all?)
+        .into_iter()
+        .filter(|f| !deleted.contains(f))
+        .collect();
     files.sort_unstable();
     files.dedup();
     Ok(files)
@@ -213,7 +216,19 @@ fn parse_hunks(diff: &str) -> Vec<LineChange> {
 pub fn line_changes(repo: &Path, path: &str) -> GitResult<Vec<LineChange>> {
     let full = resolve(repo, path)?;
     let rel = validate::relative_path(path)?;
-    let tracked = git(repo, &["ls-files", "--error-unmatch", "--", rel]).is_ok();
+    let diff_args = [
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "-U0",
+        "HEAD",
+        "--",
+        rel,
+    ];
+    let (tracked, diff) = both(
+        || git(repo, &["ls-files", "--error-unmatch", "--", rel]).is_ok(),
+        || git(repo, &diff_args),
+    );
     if !tracked {
         let lines = fs::read_to_string(&full)
             .map(|s| s.lines().count() as u32)
@@ -229,18 +244,7 @@ pub fn line_changes(repo: &Path, path: &str) -> GitResult<Vec<LineChange>> {
         });
     }
     // No HEAD yet (fresh repository): nothing to compare with.
-    let Ok(diff) = git(
-        repo,
-        &[
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "-U0",
-            "HEAD",
-            "--",
-            rel,
-        ],
-    ) else {
+    let Ok(diff) = diff else {
         return Ok(vec![]);
     };
     Ok(parse_hunks(&String::from_utf8_lossy(&diff)))

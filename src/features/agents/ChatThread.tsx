@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { shallow } from "zustand/shallow";
 import { useComposerMenu } from "./ComposerMenu";
 import {
   ArrowUp,
@@ -23,6 +24,7 @@ import { countByCategory, toChat, type ChatItem, type ToolCall, type ToolCategor
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useT } from "@/i18n";
+import { useKnownRefs } from "@/features/refs/use-known-refs";
 import { cn } from "@/lib/utils";
 import type { AgentStep } from "@/types/git";
 
@@ -55,100 +57,112 @@ function Detail({ text }: { text: string }) {
   );
 }
 
-function CallRow({ call }: { call: ToolCall }) {
-  const [open, setOpen] = useState(false);
-  const Icon = call.failed ? CircleX : TOOL_ICONS[call.category];
-  return (
-    <li className="[content-visibility:auto]">
-      <button
-        type="button"
-        disabled={!call.detail}
-        onClick={() => setOpen((o) => !o)}
-        className="group/call flex w-full items-center gap-2 rounded-md px-2 py-[3px] text-left text-[12.5px] outline-none hover:enabled:bg-white/[0.04] focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <Icon
-          aria-hidden
-          className={cn("size-3.5 shrink-0", call.failed ? "text-removed-foreground" : CATEGORY_TONE[call.category])}
-        />
-        <span className="w-12 shrink-0 text-muted-foreground">{call.tool}</span>
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate font-mono text-[12px] text-foreground/85",
-            call.failed && "text-removed-foreground/90",
-          )}
+// Memoized like every transcript entry below: a streamed step re-renders only what it changed, not the whole
+// conversation (toChat rebuilds the call objects, hence the field-by-field comparison).
+const CallRow = memo(
+  function CallRow({ call }: { call: ToolCall }) {
+    const [open, setOpen] = useState(false);
+    const Icon = call.failed ? CircleX : TOOL_ICONS[call.category];
+    return (
+      <li className="[content-visibility:auto]">
+        <button
+          type="button"
+          disabled={!call.detail}
+          onClick={() => setOpen((o) => !o)}
+          className="group/call flex w-full items-center gap-2 rounded-md px-2 py-[3px] text-left text-[12.5px] outline-none hover:enabled:bg-white/[0.04] focus-visible:ring-2 focus-visible:ring-ring"
         >
-          {call.target || "…"}
-        </span>
-        {call.repeat > 1 && (
-          <span className="shrink-0 rounded bg-white/[0.06] px-1.5 text-[11px] text-muted-foreground">
-            ×{call.repeat}
-          </span>
-        )}
-        {call.detail && (
-          <ChevronRight
+          <Icon
             aria-hidden
-            className={cn(
-              "size-3.5 shrink-0 text-muted-foreground opacity-0 transition group-hover/call:opacity-100",
-              open && "rotate-90 opacity-100",
-            )}
+            className={cn("size-3.5 shrink-0", call.failed ? "text-removed-foreground" : CATEGORY_TONE[call.category])}
           />
-        )}
-      </button>
-      {open && call.detail && <Detail text={call.detail} />}
-    </li>
-  );
-}
-
-/** A run of tool calls as one line ("4 commands · 3 files read · 1 error"), unfolded on demand. */
-function ToolGroup({ calls, live }: { calls: ToolCall[]; live: boolean }) {
-  const t = useT();
-  const counts = countByCategory(calls);
-  const [open, setOpen] = useState<boolean | null>(null);
-  // Short groups and the one being written stay open; long finished ones fold.
-  const expanded = open ?? (live || calls.length <= 3);
-  const parts = (["read", "search", "command", "edit", "web", "other"] as const)
-    .filter((c) => counts[c] > 0)
-    .map((c) => ({ c, label: t.plural(`agents.cat.${c}`, counts[c]) }));
-  return (
-    <div className="my-1.5 rounded-lg border border-white/[0.06] bg-card">
-      <button
-        type="button"
-        onClick={() => setOpen(!expanded)}
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <ChevronRight aria-hidden className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-90")} />
-        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5">
-          {parts.map(({ c, label }) => {
-            const Icon = TOOL_ICONS[c];
-            return (
-              <span key={c} className="flex items-center gap-1">
-                <Icon aria-hidden className={cn("size-3.5", CATEGORY_TONE[c])} />
-                {label}
-              </span>
-            );
-          })}
-          {counts.failed > 0 && (
-            <span className="flex items-center gap-1 text-removed-foreground">
-              <CircleX aria-hidden className="size-3.5" />
-              {t.plural("agents.cat.failed", counts.failed)}
+          <span className="w-12 shrink-0 text-muted-foreground">{call.tool}</span>
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate font-mono text-[12px] text-foreground/85",
+              call.failed && "text-removed-foreground/90",
+            )}
+          >
+            {call.target || "…"}
+          </span>
+          {call.repeat > 1 && (
+            <span className="shrink-0 rounded bg-white/[0.06] px-1.5 text-[11px] text-muted-foreground">
+              ×{call.repeat}
             </span>
           )}
-        </span>
-        {live && <BrailleLoader className="text-primary" />}
-      </button>
-      {expanded && (
-        <ul className="px-1 pb-1.5">
-          {calls.map((call) => (
-            <CallRow key={call.key} call={call} />
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
+          {call.detail && (
+            <ChevronRight
+              aria-hidden
+              className={cn(
+                "size-3.5 shrink-0 text-muted-foreground opacity-0 transition group-hover/call:opacity-100",
+                open && "rotate-90 opacity-100",
+              )}
+            />
+          )}
+        </button>
+        {open && call.detail && <Detail text={call.detail} />}
+      </li>
+    );
+  },
+  (a, b) => shallow(a.call, b.call),
+);
+
+/** A run of tool calls as one line ("4 commands · 3 files read · 1 error"), unfolded on demand. */
+const sameCalls = (a: ToolCall[], b: ToolCall[]) => a.length === b.length && a.every((c, i) => shallow(c, b[i]));
+const sameItem = (a: ChatItem, b: ChatItem) =>
+  a.type === "tools" && b.type === "tools" ? a.key === b.key && sameCalls(a.calls, b.calls) : shallow(a, b);
+
+const ToolGroup = memo(
+  function ToolGroup({ calls, live }: { calls: ToolCall[]; live: boolean }) {
+    const t = useT();
+    const counts = countByCategory(calls);
+    const [open, setOpen] = useState<boolean | null>(null);
+    // Short groups and the one being written stay open; long finished ones fold.
+    const expanded = open ?? (live || calls.length <= 3);
+    const parts = (["read", "search", "command", "edit", "web", "other"] as const)
+      .filter((c) => counts[c] > 0)
+      .map((c) => ({ c, label: t.plural(`agents.cat.${c}`, counts[c]) }));
+    return (
+      <div className="my-1.5 rounded-lg border border-white/[0.06] bg-card">
+        <button
+          type="button"
+          onClick={() => setOpen(!expanded)}
+          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <ChevronRight aria-hidden className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-90")} />
+          <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5">
+            {parts.map(({ c, label }) => {
+              const Icon = TOOL_ICONS[c];
+              return (
+                <span key={c} className="flex items-center gap-1">
+                  <Icon aria-hidden className={cn("size-3.5", CATEGORY_TONE[c])} />
+                  {label}
+                </span>
+              );
+            })}
+            {counts.failed > 0 && (
+              <span className="flex items-center gap-1 text-removed-foreground">
+                <CircleX aria-hidden className="size-3.5" />
+                {t.plural("agents.cat.failed", counts.failed)}
+              </span>
+            )}
+          </span>
+          {live && <BrailleLoader className="text-primary" />}
+        </button>
+        {expanded && (
+          <ul className="px-1 pb-1.5">
+            {calls.map((call) => (
+              <CallRow key={call.key} call={call} />
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  },
+  (a, b) => a.live === b.live && sameCalls(a.calls, b.calls),
+);
 
 /** The user's request: long ones (with the app's instructions) are clamped. */
-function Prompt({ text }: { text: string }) {
+const Prompt = memo(function Prompt({ text }: { text: string }) {
   const t = useT();
   const { text: withoutImages, images } = splitImages(text);
   const typed = typedText(withoutImages);
@@ -169,9 +183,9 @@ function Prompt({ text }: { text: string }) {
       )}
     </div>
   );
-}
+});
 
-function Thinking({ step }: { step: AgentStep }) {
+const Thinking = memo(function Thinking({ step }: { step: AgentStep }) {
   const [open, setOpen] = useState(false);
   return (
     <div>
@@ -187,49 +201,65 @@ function Thinking({ step }: { step: AgentStep }) {
       {open && step.detail && <Detail text={step.detail} />}
     </div>
   );
+});
+
+/** An agent's reply: the repository's PRs, issues and commits it names preview on hover. */
+const AgentMessage = memo(function AgentMessage({ text }: { text: string }) {
+  const repoPath = useWorkspaceStore((s) => s.repo?.path ?? null);
+  return repoPath ? <LinkedMessage text={text} repoPath={repoPath} /> : <Markdown text={text} />;
+});
+
+function LinkedMessage({ text, repoPath }: { text: string; repoPath: string }) {
+  const { known } = useKnownRefs(repoPath);
+  return <Markdown text={text} refs={{ repoPath, known }} />;
 }
 
-function Entry({ item, live }: { item: ChatItem; live: boolean }) {
-  switch (item.type) {
-    case "prompt":
-      return <Prompt text={item.text} />;
-    case "message":
-      return (
-        <div className="px-2 py-1.5 text-[14px]">
-          <Suspense fallback={<p className="whitespace-pre-wrap">{item.text}</p>}>
-            <Markdown text={item.text} />
-          </Suspense>
-        </div>
-      );
-    case "thinking":
-      return <Thinking step={item.step} />;
-    case "tools":
-      return <ToolGroup calls={item.calls} live={live} />;
-    case "result":
-      return (
-        <p
-          className={cn(
-            "mx-2 mt-1 mb-4 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11.5px]",
-            item.failed ? "border-removed/40 text-removed-foreground" : "border-white/[0.08] text-muted-foreground",
-          )}
-        >
-          {item.failed ? (
-            <CircleX aria-hidden className="size-3" />
-          ) : (
-            <CircleCheck aria-hidden className="size-3 text-added-foreground" />
-          )}
-          {item.text}
-        </p>
-      );
-    case "error":
-      return (
-        <p className="mx-2 my-1.5 flex items-start gap-2 rounded-lg border border-removed/30 bg-removed/10 px-2.5 py-1.5 text-[12.5px] text-removed-foreground">
-          <CircleX aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-          <span className="min-w-0 flex-1 whitespace-pre-wrap select-text">{item.step.detail ?? item.step.title}</span>
-        </p>
-      );
-  }
-}
+const Entry = memo(
+  function Entry({ item, live }: { item: ChatItem; live: boolean }) {
+    switch (item.type) {
+      case "prompt":
+        return <Prompt text={item.text} />;
+      case "message":
+        return (
+          <div className="px-2 py-1.5 text-[14px]">
+            <Suspense fallback={<p className="whitespace-pre-wrap">{item.text}</p>}>
+              <AgentMessage text={item.text} />
+            </Suspense>
+          </div>
+        );
+      case "thinking":
+        return <Thinking step={item.step} />;
+      case "tools":
+        return <ToolGroup calls={item.calls} live={live} />;
+      case "result":
+        return (
+          <p
+            className={cn(
+              "mx-2 mt-1 mb-4 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11.5px]",
+              item.failed ? "border-removed/40 text-removed-foreground" : "border-white/[0.08] text-muted-foreground",
+            )}
+          >
+            {item.failed ? (
+              <CircleX aria-hidden className="size-3" />
+            ) : (
+              <CircleCheck aria-hidden className="size-3 text-added-foreground" />
+            )}
+            {item.text}
+          </p>
+        );
+      case "error":
+        return (
+          <p className="mx-2 my-1.5 flex items-start gap-2 rounded-lg border border-removed/30 bg-removed/10 px-2.5 py-1.5 text-[12.5px] text-removed-foreground">
+            <CircleX aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 whitespace-pre-wrap select-text">
+              {item.step.detail ?? item.step.title}
+            </span>
+          </p>
+        );
+    }
+  },
+  (a, b) => a.live === b.live && sameItem(a.item, b.item),
+);
 
 /** What the user typed, without the context and instructions the app added around it. */
 export const CONTEXT_SEPARATOR = "\n\n---\n";
@@ -285,7 +315,7 @@ export function ChatThread({
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const root = useWorkspaceStore((s) => s.repo?.path ?? null);
-  const items = toChat(steps, root);
+  const items = useMemo(() => toChat(steps, root), [steps, root]);
   const [mode, setMode] = useState<"chat" | "graph">("chat");
   const attachments = useAttachments();
 

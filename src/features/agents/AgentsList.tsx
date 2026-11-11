@@ -1,12 +1,15 @@
 import { useShallow } from "zustand/react/shallow";
 import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BarChart3, ChevronRight, Columns2, Plus, TriangleAlert } from "lucide-react";
+import { BarChart3, ChevronRight, Columns2, Plus, Sparkles, TriangleAlert } from "lucide-react";
+import { EmptyState } from "@/components/states";
+import { RowSkeleton, SkeletonList } from "@/components/skeletons";
 import { ClaudeIcon } from "./agent-icons";
 import { AgentDefinitionsSection } from "./AgentDefinitions";
 import { useT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { formatAge } from "@/lib/format-date";
+import { useWorkflowRuns } from "@/lib/git-queries";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -64,6 +67,15 @@ function Empty({ children }: { children: ReactNode }) {
   return <li className="px-2.5 py-1.5 text-[12px] text-muted-foreground">{children}</li>;
 }
 
+/** Item rows while a list loads: 48px, an icon and two lines, as `Item`. */
+function ItemsSkeleton() {
+  return (
+    <li>
+      <SkeletonList rows={4} row={(i) => <RowSkeleton i={i} height={48} />} />
+    </li>
+  );
+}
+
 const matches = (query: string, ...texts: (string | null)[]) =>
   !query || texts.some((text) => text?.toLowerCase().includes(query.toLowerCase()));
 
@@ -73,9 +85,24 @@ function AppRuns({ repoPath, query }: { repoPath: string; query: string }) {
   const runs = useAgentsStore((s) => s.runs).filter(
     (r) => r.repoPath === repoPath && r.thread === r.id && matches(query, r.title),
   );
+  const select = useAgentsStore((s) => s.select);
   return (
     <Section title={t("agents.runs")} count={runs.length}>
-      {runs.length === 0 && <Empty>{t("agents.noRuns")}</Empty>}
+      {runs.length === 0 &&
+        (query ? (
+          <Empty>{t("agents.noRuns")}</Empty>
+        ) : (
+          <li>
+            <EmptyState
+              size="sm"
+              className="h-auto py-4"
+              icon={<Sparkles />}
+              title={t("agents.noRuns")}
+              hint={t("agents.noRunsHint")}
+              action={{ label: t("agents.startTask"), onClick: () => select({ type: "new" }) }}
+            />
+          </li>
+        ))}
       {runs.map((run) => (
         <Item
           key={run.id}
@@ -104,6 +131,7 @@ function ClaudeSessions({ repoPath, query }: { repoPath: string; query: string }
   const visible = (sessions.data ?? []).filter((s) => !fromApp.includes(s.id) && matches(query, s.title, s.gitBranch));
   return (
     <Section title={t("agents.sessions")} count={sessions.data ? visible.length : undefined}>
+      {sessions.isPending && <ItemsSkeleton />}
       {sessions.isError && <Empty>{toGitError(sessions.error).message}</Empty>}
       {sessions.data && visible.length === 0 && <Empty>{t("agents.noSessions")}</Empty>}
       {visible.map((s) => (
@@ -124,15 +152,11 @@ function ClaudeSessions({ repoPath, query }: { repoPath: string; query: string }
 
 function WorkflowRuns({ repoPath, query }: { repoPath: string; query: string }) {
   const t = useT();
-  const runs = useQuery({
-    queryKey: ["workflow-runs", repoPath],
-    queryFn: () => gitBackend.listWorkflowRuns(repoPath),
-    // Poll while something is still running.
-    refetchInterval: (q) => (q.state.data?.some((r) => r.status !== "completed") ? 10_000 : 60_000),
-  });
+  const runs = useWorkflowRuns(repoPath);
   const visible = (runs.data ?? []).filter((r) => matches(query, r.displayTitle, r.workflowName, r.headBranch));
   return (
     <Section title={t("agents.actions")} count={runs.data ? visible.length : undefined}>
+      {runs.isPending && <ItemsSkeleton />}
       {runs.isError && (
         <Empty>
           <TriangleAlert aria-hidden className="mr-1 inline size-3" />

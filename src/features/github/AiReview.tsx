@@ -7,7 +7,7 @@ import { BrailleLoader } from "@/components/braille-loader";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
-import { Markdown } from "@/features/agents/Markdown";
+import { LazyMarkdown as Markdown } from "@/features/agents/LazyMarkdown";
 import { pickAgent } from "@/features/agents/AgentButton";
 import { startAgentRun, useInstalledAgents } from "@/features/agents/use-agents";
 import { parseUnifiedDiff } from "@/features/diff/parse-unified-diff";

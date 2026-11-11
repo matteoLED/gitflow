@@ -226,18 +226,18 @@ pub fn list_sessions_page(
         .chain(codex_files(repo).into_iter().map(|(t, p)| (t, p, true)))
         .collect();
     files.sort_by_key(|f| std::cmp::Reverse(f.0));
-    Ok(files
+    let page: Vec<_> = files
         .into_iter()
         .skip(offset)
         .take(limit.min(200))
-        .map(|(_, path, codex)| {
-            if codex {
-                codex_summary(&path)
-            } else {
-                session_summary(path)
-            }
-        })
-        .collect())
+        .collect();
+    Ok(par_map(&page, |(_, path, codex)| {
+        if *codex {
+            codex_summary(path)
+        } else {
+            session_summary(path.clone())
+        }
+    }))
 }
 
 fn with_mtime(paths: impl Iterator<Item = PathBuf>) -> Vec<(SystemTime, PathBuf)> {
@@ -339,21 +339,12 @@ fn codex_files(repo: &Path) -> Vec<(SystemTime, PathBuf)> {
 
 fn codex_summary(path: &Path) -> SessionSummary {
     let (id, _) = codex_meta(path).unwrap_or_default();
-    let mut cache = summaries().lock().unwrap_or_else(|e| e.into_inner());
     let fresh = || {
         let mut summary = Summary::new(id.clone());
         summary.data.agent = "codex";
         summary
     };
-    let summary = cache.entry(path.to_path_buf()).or_insert_with(fresh);
-    // Only what was appended since the last read: rollouts reach tens of megabytes.
-    let (events, offset) = read_from(path, summary.offset);
-    if offset < summary.offset {
-        *summary = fresh();
-    }
-    events.iter().for_each(|e| summary.feed_codex(e));
-    summary.offset = offset;
-    summary.view()
+    update_summary(path, fresh, Summary::feed_codex)
 }
 
 fn session_summary(path: PathBuf) -> SessionSummary {
@@ -361,17 +352,50 @@ fn session_summary(path: PathBuf) -> SessionSummary {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut cache = summaries().lock().unwrap_or_else(|e| e.into_inner());
-    let summary = cache
-        .entry(path.clone())
-        .or_insert_with(|| Summary::new(id));
-    let (events, offset) = read_from(&path, summary.offset);
+    update_summary(&path, || Summary::new(id.clone()), Summary::feed)
+}
+
+/// Feeds a session's summary with what was appended since the last read. The cache lock isn't held while
+/// parsing, so several sessions are read at once (two reads of the same file just do the work twice).
+fn update_summary(
+    path: &Path,
+    fresh: impl Fn() -> Summary,
+    feed: fn(&mut Summary, &Value),
+) -> SessionSummary {
+    let cached = summaries()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(path);
+    let mut summary = cached.unwrap_or_else(&fresh);
+    // Only what was appended since the last read: transcripts reach tens of megabytes.
+    let (events, offset) = read_from(path, summary.offset);
     if offset < summary.offset {
-        *summary = Summary::new(summary.data.id.clone()); // file was rewritten
+        summary = fresh(); // file was rewritten
     }
-    events.iter().for_each(|e| summary.feed(e));
+    events.iter().for_each(|e| feed(&mut summary, e));
     summary.offset = offset;
-    summary.view()
+    let view = summary.view();
+    summaries()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(path.to_path_buf(), summary);
+    view
+}
+
+/// Maps on every core, keeping the order: a first listing can parse hundreds of megabytes of transcripts.
+pub(super) fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let workers = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let size = items.len().div_ceil(workers).max(1);
+    std::thread::scope(|scope| {
+        let parts: Vec<_> = items
+            .chunks(size)
+            .map(|chunk| scope.spawn(|| chunk.iter().map(&f).collect::<Vec<_>>()))
+            .collect();
+        parts
+            .into_iter()
+            .flat_map(|p| p.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
+    })
 }
 
 /// The session as a timeline, without sub-agent chatter; capped for very long sessions.

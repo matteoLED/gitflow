@@ -23,7 +23,8 @@ export function ListPanel({
   filterLabel?: string;
   /** Folds the column away to give the page its room. */
   onCollapse?: () => void;
-  children: (query: string) => ReactNode;
+  /** Gets the filter query, and a way to clear it (an empty state's "Clear filter"). */
+  children: (query: string, clearQuery: () => void) => ReactNode;
 }) {
   const t = useT();
   const [query, setQuery] = useState("");
@@ -48,7 +49,7 @@ export function ListPanel({
       {filterLabel && (
         <FilterInput label={filterLabel} value={query} onValueChange={setQuery} className="mx-2 mt-2 mb-1" />
       )}
-      <div className="flex min-h-0 flex-1 flex-col">{children(query)}</div>
+      <div className="flex min-h-0 flex-1 flex-col">{children(query, () => setQuery(""))}</div>
     </section>
   );
 }

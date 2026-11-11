@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, ExternalLink, MousePointer2, RefreshCw } from "lucide-react";
+import { Activity, ChevronRight, ExternalLink, MousePointer2, RefreshCw } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { PanelLoading } from "@/components/layout/panel";
 import { DataUnavailable, EmptyState } from "@/components/states";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { formatAge } from "@/lib/format-date";
+import { useWorkflowRuns } from "@/lib/git-queries";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
 import { useNoticesStore } from "@/stores/notices-store";
@@ -200,18 +201,14 @@ function latestPerWorkflow(runs: WorkflowRun[], branch: string): WorkflowRun[] {
 /** CI tab of a pull request: its workflows on the left, the chosen run's jobs, steps and logs on the right. */
 export function PullRequestCi({ repoPath, pr }: { repoPath: string; pr: PullRequestDetails }) {
   const t = useT();
-  const runs = useQuery({
-    queryKey: ["workflow-runs", repoPath],
-    queryFn: () => gitBackend.listWorkflowRuns(repoPath),
-    refetchInterval: (q) => (q.state.data?.some((r) => r.status !== "completed") ? 10_000 : 60_000),
-  });
+  const runs = useWorkflowRuns(repoPath);
   const list = latestPerWorkflow(runs.data ?? [], pr.headRefName);
   const [picked, setPicked] = useState<number | null>(null);
   const selected = list.find((r) => r.databaseId === picked) ?? list.find((r) => r.conclusion === "failure") ?? list[0];
   if (runs.isError)
     return <DataUnavailable title={t("agents.actionsError")} error={runs.error} onRetry={() => void runs.refetch()} />;
   if (!runs.data) return <PanelLoading title={t("common.loading")} variant="grid-syncing" />;
-  if (list.length === 0) return <EmptyState title={t("ci.none")} description={t("ci.noneHint")} />;
+  if (list.length === 0) return <EmptyState icon={<Activity />} title={t("ci.none")} hint={t("ci.noneHint")} />;
   return (
     <div className="flex min-h-0 flex-1">
       <ul className="w-72 shrink-0 space-y-px overflow-y-auto border-r border-white/[0.06] p-2">

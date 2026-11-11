@@ -30,7 +30,7 @@ import { useGitAction } from "@/features/operations/use-git-action";
 import { useOpenPullRequest } from "@/features/github/PullRequestList";
 import { StateDot } from "@/features/linear/LinearList";
 import { useWorkspaceIssues } from "@/features/linear/linear-queries";
-import { STATUS } from "@/features/work/WorkPage";
+import { STATUS } from "@/features/work/work-status";
 import { useWorkItems } from "@/features/work/use-work-items";
 import { useT } from "@/i18n";
 import { useHistorySearchStore } from "@/features/history/history-search-store";
@@ -75,18 +75,23 @@ function Commands({ repo, close }: { repo: RepositoryInfo; close: () => void }) 
   const runs = useAgentsStore((s) => s.runs).filter((r) => r.repoPath === repo.path && r.thread === r.id);
   const { open: openPr } = useOpenPullRequest(repo.path);
   const undo = useUndo(repo.path);
-  const action = (run: () => Promise<unknown>, success: string, failure: string) => ({ run, success, failure });
+  const action = (run: () => Promise<unknown>, success: string, failure: string, pending: string) => ({
+    run,
+    success,
+    failure,
+    pending,
+  });
   const fetch = useGitAction(
     repo.path,
-    action(() => gitBackend.fetch(repo.path), t("sync.fetched"), t("sync.fetchFailed")),
+    action(() => gitBackend.fetch(repo.path), t("sync.fetched"), t("sync.fetchFailed"), t("sync.fetching")),
   );
   const pull = useGitAction(
     repo.path,
-    action(() => gitBackend.pull(repo.path), t("sync.pulled"), t("sync.pullFailed")),
+    action(() => gitBackend.pull(repo.path), t("sync.pulled"), t("sync.pullFailed"), t("sync.pulling")),
   );
   const push = useGitAction(
     repo.path,
-    action(() => gitBackend.push(repo.path), t("sync.pushed"), t("sync.pushFailed")),
+    action(() => gitBackend.push(repo.path), t("sync.pushed"), t("sync.pushFailed"), t("sync.pushing")),
   );
   // Every command closes the palette first, then acts.
   const run = (fn: () => void) => () => {

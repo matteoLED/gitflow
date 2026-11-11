@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Box, Check, ChevronDown, CircleDashed, CircleUser, Layers, Plus } from "lucide-react";
-import { PanelLoading } from "@/components/layout/panel";
+import { RowSkeleton, SkeletonList } from "@/components/skeletons";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -228,7 +228,14 @@ export function LinearList({ query }: { query: string }) {
       </div>
     );
   }
-  if (!account) return <PanelLoading title={t("common.loading")} variant="grid-orbit" />;
+  if (!account)
+    return (
+      <SkeletonList
+        rows={5}
+        className="px-2 pt-2"
+        row={(i) => <RowSkeleton i={i + 2} height={28} lines={1} trail={false} />}
+      />
+    );
   const open = mine?.filter((i) => i.state.type !== "completed" && i.state.type !== "canceled").length;
   const needle = query.toLowerCase();
   const active = projects.filter(

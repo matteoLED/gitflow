@@ -1,15 +1,17 @@
 import { useShallow } from "zustand/react/shallow";
-import { DataUnavailable } from "@/components/states";
+import { DataUnavailable, EmptyState } from "@/components/states";
+import { RowSkeleton, SkeletonList } from "@/components/skeletons";
 import { useMemo, useState } from "react";
-import { CircleCheck, Minus, Plus, Sparkles, Split } from "lucide-react";
+import { ArrowDown, CircleCheck, GitBranch, Minus, Plus, Sparkles, Split } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { pickAgent } from "@/features/agents/AgentButton";
 import { startAgentRun, useInstalledAgents } from "@/features/agents/use-agents";
 import { finalAnswer, useAgentsStore } from "@/stores/agents-store";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { PanelHeader, PanelLoading } from "@/components/layout/panel";
-import { useWorkingTree } from "@/lib/git-queries";
+import { PanelHeader } from "@/components/layout/panel";
+import { useCommits, useRefs, useWorkingTree } from "@/lib/git-queries";
+import { formatAge } from "@/lib/format-date";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspace-store";
@@ -266,6 +268,52 @@ function CommitForm({ repoPath, stagedCount, changed }: { repoPath: string; stag
   );
 }
 
+/** Clean working tree: says so, recalls the last commit, and offers what usually comes next. */
+function CleanTree({ repoPath }: { repoPath: string }) {
+  const t = useT();
+  const last = useCommits(repoPath, null).data?.pages[0]?.[0];
+  const refs = useRefs(repoPath).data;
+  const upstream = refs?.branches.find((b) => b.name === refs.head.branch)?.upstream;
+  const setView = useWorkspaceStore((s) => s.setView);
+  const pull = useGitAction(repoPath, {
+    run: () => gitBackend.pull(repoPath),
+    success: t("sync.pulled"),
+    failure: t("sync.pullFailed"),
+  });
+  return (
+    <EmptyState
+      size="sm"
+      className="h-auto"
+      icon={<CircleCheck className="text-added-foreground" />}
+      title={t("changes.clean")}
+      hint={t("changes.cleanHint")}
+      action={
+        upstream
+          ? {
+              label: t("sync.pull"),
+              icon: pull.isPending ? <BrailleLoader /> : <ArrowDown aria-hidden />,
+              onClick: () => pull.mutate(),
+              disabled: pull.isPending,
+            }
+          : undefined
+      }
+      secondary={{
+        label: t("changes.switchBranch"),
+        icon: <GitBranch aria-hidden />,
+        onClick: () => setView("work"),
+      }}
+    >
+      {last && (
+        <p className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
+          <span className="shrink-0">{t("changes.lastCommit")}</span>
+          <span className="min-w-0 truncate text-foreground/85">{last.subject}</span>
+          <span className="shrink-0 tabular-nums">· {formatAge(last.authoredAt, undefined, t.locale)}</span>
+        </p>
+      )}
+    </EmptyState>
+  );
+}
+
 export function ChangesPanel({ repoPath }: { repoPath: string }) {
   const t = useT();
   const tree = useWorkingTree(repoPath);
@@ -301,15 +349,14 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
       {tree.isError ? (
         <DataUnavailable title={t("changes.readError")} error={tree.error} onRetry={() => void tree.refetch()} />
       ) : !tree.data ? (
-        <PanelLoading title={t("changes.reading")} variant="grid-searching" />
+        <SkeletonList
+          rows={8}
+          className="mt-3 min-h-0 flex-1 px-2"
+          row={(i) => <RowSkeleton i={i} height={28} lines={1} trail={false} className="pl-2" />}
+        />
       ) : (
         <div className="mt-3 min-h-0 flex-1 overflow-y-auto px-2">
-          {empty && (
-            <p className="mx-1 mb-2 flex items-center gap-2 rounded-md px-2 py-2 text-[12.5px] text-muted-foreground">
-              <CircleCheck aria-hidden className="size-3.5 text-added-foreground" />
-              {t("changes.clean")} · {t("changes.cleanHint")}
-            </p>
-          )}
+          {empty && <CleanTree repoPath={repoPath} />}
           {groups.conflicted.length > 0 && (
             <p
               role="alert"

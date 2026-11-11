@@ -2,7 +2,7 @@ import { useThemeKind } from "@/features/settings/use-apply-appearance";
 import { useShallow } from "zustand/react/shallow";
 import { Fragment, useEffect, useMemo, useState, type ReactNode, type Ref } from "react";
 import { ArrowDownToLine, ArrowUpToLine, ChevronDown, ChevronsUpDown } from "lucide-react";
-import { BrailleLoader } from "@/components/braille-loader";
+import { DiffSkeleton } from "@/components/skeletons";
 import { FileIcon } from "@/components/file-icon";
 import { MiddleTruncate } from "@/components/middle-truncate";
 import { useViewSettings } from "@/stores/view-settings-store";
@@ -353,12 +353,7 @@ export function DiffBody({ path, diff, error, loading, expandAll = false, image,
   const lines = useMemo(() => parseUnifiedDiff(diff?.patch ?? "").flatMap((h) => h.lines), [diff?.patch]);
   if (error) return <Note>{t("diff.loadError", { message: toGitError(error).message })}</Note>;
   if (loading || !diff) {
-    return (
-      <Note>
-        <BrailleLoader className="mr-1.5 text-primary" label={t("diff.loadingDiff")} />
-        {t("diff.loadingDiff")}
-      </Note>
-    );
+    return <DiffSkeleton lines={6} />;
   }
   if (diff.binary && image && isImage(path)) return <ImageDiff path={path} status={image.status} source={image} />;
   if (diff.binary) return <Note>{t("diff.binary")}</Note>;

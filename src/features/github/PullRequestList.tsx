@@ -1,4 +1,4 @@
-import { DataUnavailable } from "@/components/states";
+import { DataUnavailable, EmptyState } from "@/components/states";
 import { useState } from "react";
 import {
   Check,
@@ -9,12 +9,14 @@ import {
   GitPullRequestClosed,
   GitPullRequestDraft,
   Plus,
+  SearchX,
   Waypoints,
   X,
 } from "lucide-react";
 import { AuthorAvatar } from "@/components/author-avatar";
 import { BrailleLoader } from "@/components/braille-loader";
-import { PanelLoading, PanelMessage } from "@/components/layout/panel";
+import { RowSkeleton, SkeletonList } from "@/components/skeletons";
+import { Skeleton } from "@/components/ui/skeleton";
 import { usePullRequests } from "@/lib/git-queries";
 import { gitBackend } from "@/lib/tauri-git";
 import { toGitError } from "@/lib/errors";
@@ -24,6 +26,7 @@ import { useNoticesStore } from "@/stores/notices-store";
 import { useWorkspaceStore, type View } from "@/stores/workspace-store";
 import type { PullRequest } from "@/types/git";
 import { buildStacks } from "./stacks";
+import { PullRequestHoverCard } from "@/features/refs/RefPreview";
 import { useT, type MessageKey } from "@/i18n";
 
 type GroupId = "ready" | "open" | "draft" | "merged";
@@ -143,28 +146,30 @@ function PullRequestRow({ repoPath, repoName, pr, nested = false }: RowProps) {
           "relative pl-5 before:absolute before:top-0 before:left-[15px] before:h-1/2 before:w-2.5 before:rounded-bl-md before:border-b before:border-l before:border-white/15 after:absolute after:top-1/2 after:bottom-0 after:left-[15px] after:border-l after:border-white/15 last:after:hidden",
       )}
     >
-      <button
-        type="button"
-        aria-current={selected ? "true" : undefined}
-        onClick={open}
-        className={cn(
-          "grid w-full grid-cols-[14px_1fr_auto] items-center gap-x-2 rounded-md px-2 py-1.5 text-left outline-none transition-colors hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-ring",
-          selected && "bg-white/[0.08]",
-        )}
-      >
-        {loading ? <BrailleLoader className="text-primary" /> : <StateIcon pr={pr} />}
-        <span className="truncate text-[12.5px] text-foreground">{pr.title}</span>
-        <span className="flex items-center gap-1.5">
-          <ReviewBadge pr={pr} />
-          <AuthorAvatar name={pr.author.login} src={avatarOf(pr.author.login)} className="size-4" />
-          <span className="min-w-7 text-right text-[11.5px] whitespace-nowrap text-muted-foreground">
-            {formatAge(pr.updatedAt, undefined, t.locale)}
+      <PullRequestHoverCard repoPath={repoPath} number={pr.number} side="right">
+        <button
+          type="button"
+          aria-current={selected ? "true" : undefined}
+          onClick={open}
+          className={cn(
+            "grid w-full grid-cols-[14px_1fr_auto] items-center gap-x-2 rounded-md px-2 py-1.5 text-left outline-none transition-colors hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-ring",
+            selected && "bg-white/[0.08]",
+          )}
+        >
+          {loading ? <BrailleLoader className="text-primary" /> : <StateIcon pr={pr} />}
+          <span className="truncate text-[12.5px] text-foreground">{pr.title}</span>
+          <span className="flex items-center gap-1.5">
+            <ReviewBadge pr={pr} />
+            <AuthorAvatar name={pr.author.login} src={avatarOf(pr.author.login)} className="size-4" />
+            <span className="min-w-7 text-right text-[11.5px] whitespace-nowrap text-muted-foreground">
+              {formatAge(pr.updatedAt, undefined, t.locale)}
+            </span>
           </span>
-        </span>
-        <span className="col-start-2 truncate text-[11.5px] text-muted-foreground">
-          {repoName}#{pr.number}
-        </span>
-      </button>
+          <span className="col-start-2 truncate text-[11.5px] text-muted-foreground">
+            {repoName}#{pr.number}
+          </span>
+        </button>
+      </PullRequestHoverCard>
     </li>
   );
 }
@@ -281,16 +286,47 @@ function StackGroup({ repoPath, repoName, stack }: { repoPath: string; repoName:
 }
 
 /** Pull requests of the repository's GitHub remote, grouped by status, via the user's `gh` login. */
-export function PullRequestList({ repoPath, query }: { repoPath: string; query: string }) {
+export function PullRequestListSkeleton() {
+  return (
+    <div className="mt-4 px-2">
+      <div className="mt-1 flex h-7 items-center px-2">
+        <Skeleton className="h-2 w-14 bg-white/[0.04]" />
+      </div>
+      <SkeletonList rows={9} row={(i) => <RowSkeleton i={i} height={48} />} />
+    </div>
+  );
+}
+
+type ListProps = { repoPath: string; query: string; onClearQuery?: () => void };
+
+export function PullRequestList({ repoPath, query, onClearQuery }: ListProps) {
   const t = useT();
   const prs = usePullRequests(repoPath);
   const repoName = useWorkspaceStore((s) => s.repo?.name ?? "");
+  const setView = useWorkspaceStore((s) => s.setView);
   if (prs.isError) {
     return <DataUnavailable title={t("github.loadError")} error={prs.error} onRetry={() => void prs.refetch()} />;
   }
-  if (!prs.data) return <PanelLoading title={t("github.loading")} variant="grid-importing" />;
+  if (!prs.data) return <PullRequestListSkeleton />;
   const visible = query ? prs.data.filter((pr) => matches(pr, query)) : prs.data;
-  if (visible.length === 0) return <PanelMessage title={query ? t("github.noMatch") : t("github.none")} />;
+  if (visible.length === 0)
+    return query ? (
+      <EmptyState
+        size="sm"
+        icon={<SearchX />}
+        title={t("github.noMatch")}
+        hint={t("github.noMatchHint", { query })}
+        action={onClearQuery && { label: t("common.clearFilter"), onClick: onClearQuery }}
+      />
+    ) : (
+      <EmptyState
+        size="sm"
+        icon={<GitPullRequest />}
+        title={t("github.none")}
+        hint={t("github.noneHint")}
+        action={{ label: t("github.noneAction"), onClick: () => setView("changes") }}
+      />
+    );
   // Stacks of open PRs and of merged ones; a stack lives in its bottom PR's group, where that PR would sit.
   const stacks = query ? [] : [...buildStacks(visible, "OPEN"), ...buildStacks(visible, "MERGED")];
   const stackOfPr = new Map(stacks.flatMap((stack) => stack.map((pr) => [pr.number, stack] as const)));

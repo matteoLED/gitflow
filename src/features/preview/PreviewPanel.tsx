@@ -245,11 +245,13 @@ function AddressBar({ base, live }: { base: string | null; live: boolean }) {
   const [draft, setDraft] = useState<string | null>(null); // non-null while the user types
   useEffect(() => {
     if (!live) return;
-    const poll = () =>
+    const poll = () => {
+      if (document.hidden) return; // nobody reads the address of a hidden window
       void gitBackend
         .previewViewUrl()
         .then(setPage)
         .catch(() => undefined);
+    };
     poll();
     const timer = setInterval(poll, 800);
     return () => clearInterval(timer);
@@ -316,7 +318,7 @@ export function PreviewPanel({ repoPath }: { repoPath: string }) {
     useShallow((s) => ({ assistantOpen: s.assistantOpen, setAssistantOpen: s.setAssistantOpen })),
   );
 
-  if (!target) return <EmptyState icon={<Globe />} title={t("preview.noApps")} description={t("preview.noAppsHint")} />;
+  if (!target) return <EmptyState icon={<Globe />} title={t("preview.noApps")} hint={t("preview.noAppsHint")} />;
   const failed = run.status === "failed" || run.status === "stopped";
 
   const panel = (
@@ -399,15 +401,13 @@ export function PreviewPanel({ repoPath }: { repoPath: string }) {
             <EmptyState
               icon={<BrailleLoader variant="grid-pulse" dotSize={3} dotGap={2} className="text-primary" />}
               title={t("preview.starting", { name: target.name })}
-              description={<code className="font-mono text-[12px]">{target.command}</code>}
+              hint={<code className="font-mono text-[12px]">{target.command}</code>}
             />
           ) : (
             <EmptyState
               icon={target.kind === "web" ? <Monitor /> : <Smartphone />}
               title={failed ? t("preview.exited") : t("preview.ready", { name: target.name })}
-              description={
-                failed ? t("preview.exitedHint") : <code className="font-mono text-[12px]">{target.command}</code>
-              }
+              hint={failed ? t("preview.exitedHint") : <code className="font-mono text-[12px]">{target.command}</code>}
               action={
                 <Button onClick={() => void startPreview(repoPath, target)} className="gap-1.5">
                   <Play aria-hidden className="size-4" />

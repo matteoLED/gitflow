@@ -1,45 +1,24 @@
 import { useState } from "react";
-import {
-  ArrowDown,
-  ArrowUp,
-  ChevronDown,
-  Cloud,
-  CircleAlert,
-  CircleCheck,
-  Clock,
-  GitBranch,
-  GitMerge,
-  GitPullRequest,
-  GitPullRequestDraft,
-  type LucideIcon,
-} from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, Cloud, GitBranch } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
-import { PanelHeader, PanelLoading } from "@/components/layout/panel";
+import { PanelHeader } from "@/components/layout/panel";
 import { DataUnavailable, EmptyState } from "@/components/states";
 import { useOpenPullRequest } from "@/features/github/PullRequestList";
 import { useCheckout } from "@/features/branches/use-checkout";
-import { useT, type MessageKey } from "@/i18n";
+import { useT } from "@/i18n";
 import { formatAge } from "@/lib/format-date";
 import { cn } from "@/lib/utils";
 import { useLinearStore } from "@/stores/linear-store";
 import { useWorkStore } from "@/stores/work-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { WORK_STATUSES, type CiState, type WorkItem, type WorkStatus } from "./work-items";
+import { STATUS } from "./work-status";
 import { filterWork, useWorkItems } from "./use-work-items";
 import { WorkDetail } from "./WorkDetail";
 import { DeleteBranchesButton } from "./DeleteBranches";
 import { cleanable, deletable } from "./use-delete-branches";
-import { InboxPage } from "./InboxPage";
-
-export const STATUS: Record<WorkStatus, { icon: LucideIcon; label: MessageKey; className: string }> = {
-  changes: { icon: CircleAlert, label: "work.status.changes", className: "text-removed-foreground" },
-  review: { icon: GitPullRequest, label: "work.status.review", className: "text-primary" },
-  approved: { icon: CircleCheck, label: "work.status.approved", className: "text-added-foreground" },
-  draft: { icon: GitPullRequestDraft, label: "work.status.draft", className: "text-muted-foreground" },
-  progress: { icon: GitBranch, label: "work.status.progress", className: "text-renamed" },
-  stale: { icon: Clock, label: "work.status.stale", className: "text-muted-foreground" },
-  merged: { icon: GitMerge, label: "work.status.merged", className: "text-merged" },
-};
+import { InboxPage, WorkRowsSkeleton } from "./InboxPage";
+import { IssueHoverCard, PullRequestHoverCard } from "@/features/refs/RefPreview";
 
 const CI_DOT: Record<CiState, string> = {
   success: "bg-added-foreground",
@@ -79,9 +58,13 @@ function WorkRow({ item, repoPath }: { item: WorkItem; repoPath: string }) {
         ) : (
           <Icon aria-label={t(STATUS[item.status].label)} className={cn("size-4", className)} />
         )}
-        <span className="truncate font-mono text-[11.5px] text-muted-foreground">{item.issueId ?? ""}</span>
+        <IssueHoverCard id={item.issueId} issue={item.issue}>
+          <span className="truncate font-mono text-[11.5px] text-muted-foreground">{item.issueId ?? ""}</span>
+        </IssueHoverCard>
         <span className="flex min-w-0 items-baseline gap-2">
-          <span className="truncate">{item.title}</span>
+          <PullRequestHoverCard repoPath={repoPath} number={item.pr?.number}>
+            <span className="truncate">{item.title}</span>
+          </PullRequestHoverCard>
           {!item.local && item.remote && !item.pr && (
             <Cloud
               aria-label={t("branches.onGithub")}
@@ -200,6 +183,7 @@ function Section({ status, items, repoPath }: { status: WorkStatus; items: WorkI
 export function WorkPage({ repoPath }: { repoPath: string }) {
   const t = useT();
   const filter = useWorkStore((s) => s.filter);
+  const setFilter = useWorkStore((s) => s.setFilter);
   const selected = useWorkStore((s) => s.selected);
   const work = useWorkItems(repoPath);
   const item = selected ? work.data?.find((i) => i.branch === selected) : undefined;
@@ -222,13 +206,24 @@ export function WorkPage({ repoPath }: { repoPath: string }) {
   );
   if (work.error)
     return <DataUnavailable title={t("work.loadError")} error={work.error} onRetry={() => void work.refetch()} />;
-  if (!work.data) return <PanelLoading title={t("common.loading")} variant="grid-wave" />;
+  if (!work.data)
+    return (
+      <section aria-label={t("view.work")} className="flex h-full flex-col">
+        {header}
+        <WorkRowsSkeleton height={44} lines={1} />
+      </section>
+    );
   const items = filterWork(work.data, filter);
   return (
     <section aria-label={t("view.work")} className="flex h-full flex-col">
       {header}
       {items.length === 0 ? (
-        <EmptyState icon={<GitBranch />} title={t("work.empty")} description={t("work.emptyHint")} />
+        <EmptyState
+          icon={<GitBranch />}
+          title={t("work.empty")}
+          hint={t("work.emptyHint")}
+          action={filter !== "all" ? { label: t("work.showAll"), onClick: () => setFilter("all") } : undefined}
+        />
       ) : (
         <ul className="min-h-0 flex-1 overflow-y-auto">
           {WORK_STATUSES.map((status) => {

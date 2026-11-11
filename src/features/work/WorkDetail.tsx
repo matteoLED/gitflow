@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowLeft, ArrowUp, GitCommitHorizontal, History, Upload } from "lucide-react";
 import { AuthorAvatar } from "@/components/author-avatar";
@@ -6,7 +6,6 @@ import { BrailleLoader } from "@/components/braille-loader";
 import { PanelLoading } from "@/components/layout/panel";
 import { Button } from "@/components/ui/button";
 import { useCheckout } from "@/features/branches/use-checkout";
-import { PullRequestPage } from "@/features/github/PullRequestPage";
 import { StateDot } from "@/features/linear/LinearList";
 import { useGitAction } from "@/features/operations/use-git-action";
 import { CreatePullRequestButton } from "@/features/working-tree/CreatePullRequest";
@@ -19,9 +18,12 @@ import { useLinearStore } from "@/stores/linear-store";
 import { useWorkStore } from "@/stores/work-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { WorkItem } from "./work-items";
-import { STATUS } from "./WorkPage";
+import { STATUS } from "./work-status";
+import { CommitHoverCard } from "@/features/refs/RefPreview";
 import { DeleteBranchesButton } from "./DeleteBranches";
 import { deletable } from "./use-delete-branches";
+
+const PullRequestPage = lazy(() => import("@/features/github/PullRequestPage"));
 
 /** "Work / MNT-936 · branch": the way back to the list, above any detail. */
 function Breadcrumb({ item }: { item: WorkItem }) {
@@ -66,6 +68,7 @@ function BranchDetail({ repoPath, item }: { repoPath: string; item: WorkItem }) 
   const push = useGitAction(repoPath, {
     run: () => gitBackend.push(repoPath),
     success: t("sync.pushed"),
+    pending: t("sync.pushing"),
     failure: t("sync.pushFailed"),
   });
   // The default branch, to list this branch's own commits (`origin/main..branch`).
@@ -209,7 +212,14 @@ function BranchDetail({ repoPath, item }: { repoPath: string; item: WorkItem }) 
                   <GitCommitHorizontal aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1 truncate">{c.subject}</span>
                   <AuthorAvatar name={c.author} className="size-4 text-[8px]" />
-                  <span className="font-mono text-[11.5px] text-muted-foreground">{c.hash.slice(0, 7)}</span>
+                  <CommitHoverCard repoPath={repoPath} commit={c} side="left">
+                    <span
+                      tabIndex={0}
+                      className="rounded-sm font-mono text-[11.5px] text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {c.hash.slice(0, 7)}
+                    </span>
+                  </CommitHoverCard>
                   <span className="w-16 text-right text-[12px] text-muted-foreground">
                     {formatAge(c.authoredAt, undefined, t.locale)}
                   </span>
@@ -243,7 +253,9 @@ export function WorkDetail({ repoPath, item }: { repoPath: string; item: WorkIte
       <Breadcrumb item={item} />
       {showsPr && pullRequest ? (
         <div className="min-h-0 flex-1">
-          <PullRequestPage key={pullRequest.number} repoPath={repoPath} pr={pullRequest} />
+          <Suspense fallback={<PanelLoading title="" variant="grid-wave" />}>
+            <PullRequestPage key={pullRequest.number} repoPath={repoPath} pr={pullRequest} />
+          </Suspense>
         </div>
       ) : item.pr ? (
         <PanelLoading title="" variant="grid-wave" />

@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Activity, ChevronLeft, CircleCheck, CircleMinus, CircleX } from "lucide-react";
 import { PanelHeader, PanelLoading } from "@/components/layout/panel";
 import { DataUnavailable, EmptyState } from "@/components/states";
 import { useT } from "@/i18n";
 import { formatAge } from "@/lib/format-date";
+import { useWorkflowRuns } from "@/lib/git-queries";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
 import { useCiStore } from "@/stores/ci-store";
@@ -13,19 +13,13 @@ import { StatusIcon, ghStatus } from "@/features/agents/status";
 import { RunDetail } from "@/features/github/PullRequestCi";
 import { byDay, byWorkflow, durationOf, formatDuration, summarize, type Day } from "./ci-stats";
 
+const ACTIONS_QUICKSTART = "https://docs.github.com/actions/writing-workflows/quickstart";
+
 /**
  * Outcome colors, validated with the dataviz checker on the dark surface: blue/orange stay apart under
  * every color-vision deficiency (red/green doesn't); gray is the neutral "cancelled / skipped".
  */
 const OUTCOME = { success: "#3e8fd9", failure: "#e0703c", other: "#6b6d75" } as const;
-
-export function useWorkflowRuns(repoPath: string) {
-  return useQuery({
-    queryKey: ["workflow-runs", repoPath],
-    queryFn: () => gitBackend.listWorkflowRuns(repoPath),
-    refetchInterval: (q) => (q.state.data?.some((r) => r.status !== "completed") ? 10_000 : 60_000),
-  });
-}
 
 function Kpi({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: string }) {
   return (
@@ -239,7 +233,14 @@ export function CiPage({ repoPath }: { repoPath: string }) {
   if (!runs.data) return <PanelLoading title={t("common.loading")} variant="grid-syncing" />;
   const shown = workflow ? runs.data.filter((r) => r.workflowName === workflow) : runs.data;
   if (runs.data.length === 0)
-    return <EmptyState icon={<Activity />} title={t("ci.noRuns")} description={t("ci.noRunsHint")} />;
+    return (
+      <EmptyState
+        icon={<Activity />}
+        title={t("ci.noRuns")}
+        hint={t("ci.noRunsHint")}
+        action={{ label: t("ci.setUp"), onClick: () => void gitBackend.openGithubUrl(ACTIONS_QUICKSTART) }}
+      />
+    );
   const weekAgo = now - 7 * 86_400_000;
   const week = summarize(shown.filter((r) => Date.parse(r.createdAt) >= weekAgo));
   const failingNow = byWorkflow(runs.data).filter((w) => w.last.conclusion === "failure");

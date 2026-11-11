@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, KeyRound } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
+import { EmptyState } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n";
@@ -10,6 +11,8 @@ import { gitBackend } from "@/lib/tauri-git";
 import { useLinearStore } from "@/stores/linear-store";
 
 const KEYS_PAGE = "https://linear.app/settings/account/security";
+/** The API key field, focused by the board's "Connect" when no organization is connected yet. */
+export const LINEAR_KEY_INPUT = "linear-api-key";
 
 /** Adds a Linear organization with a personal API key; the key goes straight to the Keychain. */
 export function ConnectLinear({ compact = false }: { compact?: boolean }) {
@@ -24,22 +27,16 @@ export function ConnectLinear({ compact = false }: { compact?: boolean }) {
       void client.invalidateQueries({ queryKey: ["linear"] });
     },
   });
-  return (
+  const form = (
     <form
       onSubmit={(e) => {
         e.preventDefault();
         add.mutate();
       }}
-      className={compact ? "space-y-2" : "mx-auto max-w-sm space-y-3 px-4 py-10 text-center"}
+      className={compact ? "space-y-2" : "mt-4 w-full max-w-xs space-y-3"}
     >
-      {!compact && (
-        <>
-          <KeyRound aria-hidden className="mx-auto size-6 text-primary" />
-          <p className="text-[14px] font-medium">{t("linear.connectTitle")}</p>
-          <p className="text-[12.5px] text-muted-foreground">{t("linear.connectHint")}</p>
-        </>
-      )}
       <Input
+        id={compact ? undefined : LINEAR_KEY_INPUT}
         type="password"
         value={key}
         onChange={(e) => setKey(e.target.value)}
@@ -66,5 +63,17 @@ export function ConnectLinear({ compact = false }: { compact?: boolean }) {
         </Button>
       </div>
     </form>
+  );
+  if (compact) return form;
+  return (
+    <EmptyState
+      size="sm"
+      className="h-auto"
+      icon={<KeyRound />}
+      title={t("linear.connectTitle")}
+      hint={t("linear.connectHint")}
+    >
+      {form}
+    </EmptyState>
   );
 }

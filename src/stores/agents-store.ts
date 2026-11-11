@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist, type PersistStorage } from "zustand/middleware";
 import type {
   AgentScope,
   AgentKind,
@@ -103,6 +103,37 @@ export function finalAnswer(run: AgentRun): string | null {
   return answer?.detail ?? null;
 }
 
+/**
+ * Steps stream in several times a second and the saved copy holds every step of 30 runs: it is serialized and
+ * written at most once a second, and right away when the window goes away.
+ * ponytail: a quit within that second can lose the last steps; persist per run if that ever matters.
+ */
+function throttledStorage<S>(delay: number): PersistStorage<S> | undefined {
+  const json = createJSONStorage<S>(() => localStorage);
+  if (!json) return undefined;
+  let pending: { name: string; value: Parameters<typeof json.setItem>[1] } | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const flush = () => {
+    clearTimeout(timer);
+    timer = undefined;
+    if (pending) void json.setItem(pending.name, pending.value);
+    pending = null;
+  };
+  globalThis.addEventListener?.("pagehide", flush);
+  globalThis.addEventListener?.("beforeunload", flush);
+  return {
+    getItem: json.getItem,
+    setItem: (name, value) => {
+      pending = { name, value };
+      timer ??= setTimeout(flush, delay);
+    },
+    removeItem: (name) => {
+      pending = null;
+      return json.removeItem(name);
+    },
+  };
+}
+
 /** Steps can arrive before `start_agent_run` returns: unknown ids get a placeholder that `addRun` completes. */
 export const useAgentsStore = create<AgentsState>()(
   persist(
@@ -151,6 +182,7 @@ export const useAgentsStore = create<AgentsState>()(
     }),
     {
       name: "gitflow.agents",
+      storage: throttledStorage(1000),
       // Finished runs survive a restart (capped); a run still going when the app quit can't resume.
       partialize: ({ runs, preferredAgent, runSettings, listTab }) => ({
         preferredAgent,

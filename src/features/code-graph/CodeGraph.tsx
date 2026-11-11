@@ -517,7 +517,7 @@ export function CodeGraphPage({ repoPath }: { repoPath: string }) {
       <EmptyState
         icon={<Network />}
         title={t("graph.notBuilt")}
-        description={status.data.cli ? t("graph.notBuiltHint") : t("graph.noCli")}
+        hint={status.data.cli ? t("graph.notBuiltHint") : t("graph.noCli")}
         action={
           status.data.cli && (
             <Button onClick={() => update.mutate()} disabled={update.isPending} className="gap-1.5">

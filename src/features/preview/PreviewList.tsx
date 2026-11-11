@@ -111,7 +111,7 @@ export function PreviewList({ repoPath }: { repoPath: string }) {
     );
   if (!targets.data) return <PanelLoading title={t("preview.detecting")} variant="grid-searching" />;
   if (targets.data.length === 0) {
-    return <EmptyState size="sm" icon={<Globe />} title={t("preview.noApps")} description={t("preview.noAppsHint")} />;
+    return <EmptyState size="sm" icon={<Globe />} title={t("preview.noApps")} hint={t("preview.noAppsHint")} />;
   }
   return (
     <nav aria-label={t("view.preview")} className="mt-3 min-h-0 flex-1 overflow-y-auto px-2 pb-2">

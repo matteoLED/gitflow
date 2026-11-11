@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { WorkItem } from "./work-items";
-import { STATUS } from "./WorkPage";
+import { STATUS } from "./work-status";
 import { remoteDeletable, useDeleteBranches } from "./use-delete-branches";
 
 /** Lists exactly which local branches go before anything is deleted. */

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Columns2, GitMerge, GitPullRequestArrow, MessageSquare, Trash2 } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { PanelHeader } from "@/components/layout/panel";
-import { DataUnavailable } from "@/components/states";
+import { DataUnavailable, EmptyState } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DiffBody, DiffCard } from "@/features/diff/DiffCard";
@@ -305,6 +305,7 @@ export function ParallelBoard({ repoPath }: { repoPath: string }) {
     repoPath,
   );
   const [selected, setSelected] = useState<string | null>(null);
+  const select = useAgentsStore((s) => s.select);
   const [comparing, setComparing] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
   const pick = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id].slice(-2)));
@@ -327,9 +328,16 @@ export function ParallelBoard({ repoPath }: { repoPath: string }) {
         </Button>
       </PanelHeader>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-4 pb-10">
-        <p className="mb-3 text-[12.5px] text-muted-foreground">
-          {rows.length === 0 ? t("board.empty") : t("board.hint")}
-        </p>
+        {rows.length === 0 ? (
+          <EmptyState
+            icon={<Columns2 />}
+            title={t("board.emptyTitle")}
+            hint={t("board.empty")}
+            action={{ label: t("agents.startTask"), onClick: () => select({ type: "new" }) }}
+          />
+        ) : (
+          <p className="mb-3 text-[12.5px] text-muted-foreground">{t("board.hint")}</p>
+        )}
         {rows.length > 0 && (
           <table className="w-full table-fixed">
             <thead>

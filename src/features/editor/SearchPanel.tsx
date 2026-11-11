@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { CaseSensitive, ChevronDown, ChevronRight, Regex, Replace, ReplaceAll, WholeWord } from "lucide-react";
@@ -80,7 +80,12 @@ export function SearchPanel({ repoPath }: { repoPath: string }) {
   const [opts, setOpts] = useState<MatchOptions>({ regex: false, caseSensitive: false, wholeWord: false });
   const [busy, setBusy] = useState(false);
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
-  const deferred = useDeferredValue(query.trim());
+  // Searched once typing pauses: each search is a `git grep` over the whole tree.
+  const [deferred, setDeferred] = useState("");
+  useEffect(() => {
+    const id = setTimeout(() => setDeferred(query.trim()), 200);
+    return () => clearTimeout(id);
+  }, [query]);
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => inputRef.current?.focus(), []);
   const search = useQuery({

@@ -8,7 +8,7 @@ use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
-use super::sessions::{projects_root, read_lines, session_file};
+use super::sessions::{par_map, projects_root, read_lines, session_file};
 use crate::git::errors::{GitError, GitResult};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
@@ -157,16 +157,24 @@ fn cache() -> &'static Mutex<HashMap<PathBuf, FileUsage>> {
 }
 
 /// The file's usage, parsing only what was appended since the last call.
+/// The cache lock isn't held while parsing, so transcripts are read in parallel.
 fn read(path: &Path) -> FileUsage {
-    let mut cache = cache().lock().unwrap_or_else(|e| e.into_inner());
-    let usage = cache.entry(path.to_path_buf()).or_default();
+    let cached = cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(path);
+    let mut usage = cached.unwrap_or_default();
     let (lines, next) = read_lines::<Line>(path, usage.offset);
     if next < usage.offset {
-        *usage = FileUsage::default(); // rewritten
+        usage = FileUsage::default(); // rewritten
     }
     usage.offset = next;
     lines.into_iter().for_each(|l| usage.feed(l));
-    usage.clone()
+    cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(path.to_path_buf(), usage.clone());
+    usage
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -272,7 +280,7 @@ pub fn usage_stats() -> GitResult<UsageStats> {
     let Some(root) = projects_root() else {
         return Ok(aggregate(&[]));
     };
-    let files: Vec<FileUsage> = fs::read_dir(&root)
+    let paths: Vec<PathBuf> = fs::read_dir(&root)
         .into_iter()
         .flatten()
         .filter_map(Result::ok)
@@ -281,9 +289,8 @@ pub fn usage_stats() -> GitResult<UsageStats> {
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
-        .map(|p| read(&p))
         .collect();
-    Ok(aggregate(&files))
+    Ok(aggregate(&par_map(&paths, |p| read(p))))
 }
 
 #[cfg(test)]

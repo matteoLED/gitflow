@@ -31,7 +31,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Markdown } from "@/features/agents/Markdown";
+import { LazyMarkdown as Markdown } from "@/features/agents/LazyMarkdown";
 import { startAgentWithNotice } from "@/features/agents/use-agents";
 import { AiLineDrafts } from "@/features/github/AiReview";
 import { openInEditor } from "@/stores/editor-store";

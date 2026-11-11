@@ -1,9 +1,9 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useGithubUser, usePullRequests, useRefs } from "@/lib/git-queries";
-import { gitBackend } from "@/lib/tauri-git";
+import { useShallow } from "zustand/react/shallow";
+import { useGithubUser, usePullRequests, useRefs, workflowRunsQuery } from "@/lib/git-queries";
 import { useWorkspaceIssues } from "@/features/linear/linear-queries";
-import { useAgentsStore } from "@/stores/agents-store";
+import { useAgentsStore, type AgentRun } from "@/stores/agents-store";
 import { useWorkStore, type WorkFilter } from "@/stores/work-store";
 import { inboxItems, unread } from "./inbox";
 import { workItems, type WorkItem } from "./work-items";
@@ -12,9 +12,9 @@ import { workItems, type WorkItem } from "./work-items";
 export function useWorkItems(repoPath: string) {
   const refs = useRefs(repoPath);
   const prs = usePullRequests(repoPath);
+  // The one poller of the workflow runs (see workflowRunsQuery): faster while something is running.
   const runs = useQuery({
-    queryKey: ["workflow-runs", repoPath],
-    queryFn: () => gitBackend.listWorkflowRuns(repoPath),
+    ...workflowRunsQuery(repoPath),
     refetchInterval: (q) => (q.state.data?.some((r) => r.status !== "completed") ? 10_000 : 60_000),
   });
   const issues = useWorkspaceIssues().data;
@@ -43,16 +43,28 @@ export function filterWork(items: WorkItem[], filter: WorkFilter): WorkItem[] {
   return items;
 }
 
+/**
+ * The latest run of each conversation of the repository, when it has finished: the only runs the inbox shows.
+ * Steps streaming into a running run leave this list (and every component reading the inbox) untouched.
+ */
+function finishedThreads(runs: AgentRun[], repoPath: string) {
+  const seen = new Set<string>();
+  return runs.filter((r) => {
+    if (r.repoPath !== repoPath || seen.has(r.thread)) return false;
+    seen.add(r.thread);
+    return r.status === "done" || r.status === "failed";
+  });
+}
+
 /** The inbox of the repository: what needs the user, minus what they marked done. */
 export function useInbox(repoPath: string) {
   const work = useWorkItems(repoPath).data;
   const me = useGithubUser(repoPath).data?.login ?? null;
   const issues = useWorkspaceIssues().data;
-  const runs = useAgentsStore((s) => s.runs);
+  const runs = useAgentsStore(useShallow((s) => finishedThreads(s.runs, repoPath)));
   const dismissed = useWorkStore((s) => s.dismissed);
   return useMemo(() => {
     if (!work) return undefined;
-    const mine = runs.filter((r) => r.repoPath === repoPath);
-    return unread(inboxItems({ work, me, issues: issues ?? [], runs: mine }), dismissed);
-  }, [work, me, issues, runs, repoPath, dismissed]);
+    return unread(inboxItems({ work, me, issues: issues ?? [], runs }), dismissed);
+  }, [work, me, issues, runs, dismissed]);
 }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { FileDiff as FileDiffIcon } from "lucide-react";
-import { PanelHeader, PanelMessage } from "@/components/layout/panel";
+import { PanelHeader } from "@/components/layout/panel";
+import { EmptyState } from "@/components/states";
 import { useWorkingDiff, useWorkingTree } from "@/lib/git-queries";
 import { useWorkspaceStore, type SelectedChange } from "@/stores/workspace-store";
 import { DiffBody, DiffCard } from "@/features/diff/DiffCard";
@@ -56,7 +57,7 @@ export function WorkingDiffPanel({ repoPath }: { repoPath: string }) {
       {change ? (
         <WorkingDiff key={`${change.side}:${change.path}`} repoPath={repoPath} change={change} />
       ) : (
-        <PanelMessage icon={<FileDiffIcon />} title={t("changes.noFile")} hint={t("changes.noFileHint")} />
+        <EmptyState icon={<FileDiffIcon />} title={t("changes.noFile")} hint={t("changes.noFileHint")} />
       )}
     </section>
   );

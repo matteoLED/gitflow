@@ -4,7 +4,7 @@ import { summarize } from "@/features/agents/usage-stats";
 import { useActiveAccount, useActiveCycles, useWorkspaceIssues } from "@/features/linear/linear-queries";
 import { useInbox, useWorkItems } from "@/features/work/use-work-items";
 import { useT } from "@/i18n";
-import { useGithubUser } from "@/lib/git-queries";
+import { useGithubUser, useWorkflowRuns } from "@/lib/git-queries";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
 import { useAgentsStore } from "@/stores/agents-store";
@@ -62,10 +62,7 @@ export function Kpis({ repo }: { repo: RepositoryInfo }) {
   const inbox = useInbox(repo.path);
   const work = useWorkItems(repo.path).data;
   const me = useGithubUser(repo.path).data?.login ?? null;
-  const runs = useQuery({
-    queryKey: ["workflow-runs", repo.path],
-    queryFn: () => gitBackend.listWorkflowRuns(repo.path),
-  }).data;
+  const runs = useWorkflowRuns(repo.path).data;
   const account = useActiveAccount();
   const cycle = useActiveCycles(account?.id).data?.[0];
   const issues = useWorkspaceIssues().data;
@@ -80,9 +77,7 @@ export function Kpis({ repo }: { repo: RepositoryInfo }) {
   const toReview = inbox?.filter((i) => i.reason === "review").length ?? 0;
   const failing = inbox?.filter((i) => i.reason === "ciFailed").length ?? 0;
   // ponytail: CI health over the 100 latest runs `gh` returns; enough for a week on most repositories.
-  const week = (runs ?? []).filter(
-    (r) => r.status === "completed" && now - new Date(r.createdAt).getTime() < WEEK,
-  );
+  const week = (runs ?? []).filter((r) => r.status === "completed" && now - new Date(r.createdAt).getTime() < WEEK);
   const passed = week.filter((r) => ["success", "skipped", "neutral"].includes(r.conclusion)).length;
   const rate = week.length ? Math.round((passed / week.length) * 100) : null;
   const ai = usage && summarize(usage, 7, null);

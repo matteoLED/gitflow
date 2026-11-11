@@ -4,7 +4,8 @@
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::thread::{self, JoinHandle};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use super::errors::{ErrorKind, GitError, GitResult};
@@ -54,6 +55,18 @@ pub fn git_with(repo: &Path, args: &[&str], opts: &RunOptions) -> GitResult<Vec<
     execute(cmd, args, opts).map_err(|err| match err.kind {
         ErrorKind::Timeout => mention_index_lock(repo, err),
         _ => err,
+    })
+}
+
+/// Runs two independent reads at once (each is mostly a wait on its own git process).
+pub fn both<A: Send, B: Send>(
+    a: impl FnOnce() -> A + Send,
+    b: impl FnOnce() -> B + Send,
+) -> (A, B) {
+    thread::scope(|scope| {
+        let b = scope.spawn(b);
+        let a = a();
+        (a, b.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
     })
 }
 
@@ -130,9 +143,8 @@ fn execute(cmd: Command, args: &[&str], opts: &RunOptions) -> GitResult<Vec<u8>>
     if let (Some(input), Some(mut pipe)) = (opts.stdin, child.stdin.take()) {
         pipe.write_all(input).map_err(io_error)?; // pipe drops here, closing git's stdin
     }
-    let status = wait(&mut child, opts.timeout, args)?;
-    let stdout = stdout.join().unwrap_or_default();
-    let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
+    let (status, stdout) = wait(&mut child, stdout, opts.timeout, args)?;
+    let stderr = String::from_utf8_lossy(&stderr.recv().unwrap_or_default()).into_owned();
     if stdout.len() as u64 > MAX_OUTPUT_BYTES {
         return Err(GitError::new(
             ErrorKind::OutputTooLarge,
@@ -183,7 +195,9 @@ fn spawn(mut cmd: Command, with_stdin: bool) -> GitResult<Child> {
     })
 }
 
-fn read_pipe<R: Read + Send + 'static>(pipe: Option<R>) -> JoinHandle<Vec<u8>> {
+/// The pipe's whole content, sent once it closes (normally when git exits).
+fn read_pipe<R: Read + Send + 'static>(pipe: Option<R>) -> Receiver<Vec<u8>> {
+    let (tx, rx) = sync_channel(1);
     thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(pipe) = pipe {
@@ -192,15 +206,26 @@ fn read_pipe<R: Read + Send + 'static>(pipe: Option<R>) -> JoinHandle<Vec<u8>> {
             let _ = limited.read_to_end(&mut buf);
             let _ = std::io::copy(&mut limited.into_inner(), &mut std::io::sink());
         }
-        buf
-    })
+        let _ = tx.send(buf);
+    });
+    rx
 }
 
-fn wait(child: &mut Child, timeout: Duration, args: &[&str]) -> GitResult<ExitStatus> {
+/// Waits for git to exit, with its stdout. Its stdout closing (git exiting) wakes the wait at once, so a
+/// quick command isn't rounded up to a polling tick; the poll remains for a pipe kept open by a child.
+fn wait(
+    child: &mut Child,
+    stdout: Receiver<Vec<u8>>,
+    timeout: Duration,
+    args: &[&str],
+) -> GitResult<(ExitStatus, Vec<u8>)> {
+    const FIRST_PAUSE: Duration = Duration::from_micros(250);
     let deadline = Instant::now() + timeout;
+    let (mut out, mut pause) = (None, FIRST_PAUSE);
     loop {
         if let Some(status) = child.try_wait().map_err(io_error)? {
-            return Ok(status);
+            let out = out.unwrap_or_else(|| stdout.recv().unwrap_or_default());
+            return Ok((status, out));
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -211,7 +236,16 @@ fn wait(child: &mut Child, timeout: Duration, args: &[&str]) -> GitResult<ExitSt
                 format!("`git {name}` took too long and was stopped."),
             ));
         }
-        thread::sleep(Duration::from_millis(10));
+        if out.is_some() {
+            thread::sleep(pause);
+        } else {
+            match stdout.recv_timeout(pause) {
+                Ok(bytes) => (out, pause) = (Some(bytes), FIRST_PAUSE),
+                Err(RecvTimeoutError::Disconnected) => out = Some(Vec::new()),
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+        }
+        pause = (pause * 2).min(Duration::from_millis(10));
     }
 }
 

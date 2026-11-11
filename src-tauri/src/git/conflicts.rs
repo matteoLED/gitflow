@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use super::errors::{GitError, GitResult};
+use super::errors::{ErrorKind, GitError, GitResult};
 use super::runner::{git, git_long, git_text};
 use super::validate;
 
@@ -34,8 +34,20 @@ pub struct Operation {
 
 /// A path inside `.git`, worktrees included.
 fn git_path(repo: &Path, name: &str) -> GitResult<PathBuf> {
-    let path = git_text(repo, &["rev-parse", "--git-path", name])?;
-    Ok(repo.join(path.trim()))
+    git_paths(repo, [name]).map(|[path]| path)
+}
+
+/// Several paths inside `.git` with a single git call: the operation check runs on every refresh.
+fn git_paths<const N: usize>(repo: &Path, names: [&str; N]) -> GitResult<[PathBuf; N]> {
+    let mut args = vec!["rev-parse"];
+    names
+        .iter()
+        .for_each(|name| args.extend(["--git-path", name]));
+    let text = git_text(repo, &args)?;
+    let paths: Vec<PathBuf> = text.lines().map(|l| repo.join(l.trim())).collect();
+    paths
+        .try_into()
+        .map_err(|_| GitError::new(ErrorKind::CommandFailed, "Unexpected answer from git."))
 }
 
 fn read_trimmed(path: &Path) -> Option<String> {
@@ -55,8 +67,25 @@ pub fn operation(repo: &Path) -> GitResult<Option<Operation>> {
         .unwrap_or_default()
         .trim()
         .to_string();
-    for dir in ["rebase-merge", "rebase-apply"] {
-        let dir = git_path(repo, dir)?;
+    let [
+        rebase_merge,
+        rebase_apply,
+        merge_head,
+        merge_msg,
+        cherry_pick_head,
+        revert_head,
+    ] = git_paths(
+        repo,
+        [
+            "rebase-merge",
+            "rebase-apply",
+            "MERGE_HEAD",
+            "MERGE_MSG",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+        ],
+    )?;
+    for dir in [rebase_merge, rebase_apply] {
         if !dir.is_dir() {
             continue;
         }
@@ -83,10 +112,8 @@ pub fn operation(repo: &Path) -> GitResult<Option<Operation>> {
             theirs,
         }));
     }
-    let head =
-        |name: &str| -> GitResult<Option<String>> { Ok(read_trimmed(&git_path(repo, name)?)) };
-    if let Some(oid) = head("MERGE_HEAD")? {
-        let merged = read_trimmed(&git_path(repo, "MERGE_MSG")?)
+    if let Some(oid) = read_trimmed(&merge_head) {
+        let merged = read_trimmed(&merge_msg)
             .and_then(|msg| {
                 msg.lines()
                     .next()
@@ -106,11 +133,11 @@ pub fn operation(repo: &Path) -> GitResult<Option<Operation>> {
             theirs: merged,
         }));
     }
-    for (name, kind) in [
-        ("CHERRY_PICK_HEAD", OperationKind::CherryPick),
-        ("REVERT_HEAD", OperationKind::Revert),
+    for (head, kind) in [
+        (cherry_pick_head, OperationKind::CherryPick),
+        (revert_head, OperationKind::Revert),
     ] {
-        if let Some(oid) = head(name)? {
+        if let Some(oid) = read_trimmed(&head) {
             return Ok(Some(Operation {
                 kind,
                 step: None,

@@ -4,8 +4,8 @@ import { useT } from "@/i18n";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
 
-/** githubstatus.com's incidents, checked every few minutes; nothing shows while GitHub is fine. */
-export function GithubIncident() {
+/** githubstatus.com's incidents, checked every few minutes; null while GitHub is fine. */
+export function useGithubIncident() {
   const t = useT();
   const status = useQuery({
     queryKey: ["github-status"],
@@ -16,12 +16,22 @@ export function GithubIncident() {
   }).data;
   if (!status || (status.incidents.length === 0 && status.degraded.length === 0)) return null;
   const incident = status.incidents[0];
-  const severe = status.incidents.some((i) => i.impact === "major" || i.impact === "critical");
-  const detail = incident?.name ?? t("githubStatus.degraded", { services: status.degraded.join(", ") });
+  return {
+    severe: status.incidents.some((i) => i.impact === "major" || i.impact === "critical"),
+    detail: incident?.name ?? t("githubStatus.degraded", { services: status.degraded.join(", ") }),
+    url: incident?.url ?? "https://www.githubstatus.com/",
+  };
+}
+
+export function GithubIncident() {
+  const t = useT();
+  const incident = useGithubIncident();
+  if (!incident) return null;
+  const { severe, detail } = incident;
   return (
     <button
       type="button"
-      onClick={() => void gitBackend.openGithubUrl(incident?.url ?? "https://www.githubstatus.com/")}
+      onClick={() => void gitBackend.openGithubUrl(incident.url)}
       title={detail}
       className="mx-2 mb-2 flex items-start gap-2.5 rounded-lg border border-white/[0.07] bg-card px-3 py-2.5 text-left outline-none hover:bg-white/[0.05] focus-visible:ring-2 focus-visible:ring-ring"
     >

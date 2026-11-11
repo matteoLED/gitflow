@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps } from "react";
 import { ListFilter, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -34,16 +34,6 @@ export function PanelLoading({ title, variant = "grid" }: { title: string; varia
       <p aria-hidden className="text-[12px]">
         {title}
       </p>
-    </div>
-  );
-}
-
-export function PanelMessage({ icon, title, hint }: { icon?: ReactNode; title: string; hint?: string }) {
-  return (
-    <div role="status" className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-      {icon && <div className="text-muted-foreground [&_svg]:size-5">{icon}</div>}
-      <p className="text-sm text-foreground">{title}</p>
-      {hint && <p className="max-w-56 text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }

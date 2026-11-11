@@ -1,10 +1,12 @@
 import { useShallow } from "zustand/react/shallow";
-import { DataUnavailable } from "@/components/states";
+import { DataUnavailable, EmptyState } from "@/components/states";
+import { DiffSkeleton } from "@/components/skeletons";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useCallback, useEffect, useState } from "react";
 import { FileDiff as FileDiffIcon, FileWarning, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PanelHeader, PanelLoading, PanelMessage } from "@/components/layout/panel";
+import { PanelHeader } from "@/components/layout/panel";
 import { useCommitDiff, useCommitFiles } from "@/lib/git-queries";
 import { useInView, useNearViewport } from "@/lib/use-in-view";
 import { revealInContainer } from "@/lib/reveal";
@@ -150,7 +152,7 @@ function CommitDiffs({ repoPath, hash, base }: { repoPath: string; hash: string;
     return (
       <DataUnavailable title={t("diff.loadFilesError")} error={files.error} onRetry={() => void files.refetch()} />
     );
-  if (!files.data) return <PanelLoading title={t("common.loading")} variant="grid-diagonal" />;
+  if (!files.data) return <DiffPanelSkeleton />;
   const visible = hideGenerated ? files.data.filter((f) => !isGenerated(f.path)) : files.data;
   const hiddenCount = files.data.length - visible.length;
   const paths = visible.map((f) => f.path);
@@ -170,7 +172,7 @@ function CommitDiffs({ repoPath, hash, base }: { repoPath: string; hash: string;
         />
       </PanelHeader>
       {visible.length === 0 ? (
-        <PanelMessage icon={<FileWarning />} title={t("diff.noChanges")} />
+        <EmptyState icon={<FileWarning />} title={t("diff.noChanges")} />
       ) : (
         <div
           data-scroll-container
@@ -199,6 +201,27 @@ function CommitDiffs({ repoPath, hash, base }: { repoPath: string; hash: string;
   );
 }
 
+/** An empty header, then two file cards: a 40px title bar over a few code lines. */
+function DiffPanelSkeleton() {
+  return (
+    <>
+      <PanelHeader />
+      <div className="min-h-0 flex-1 space-y-2.5 overflow-hidden px-2.5 pt-1">
+        {[9, 6].map((lines) => (
+          <div key={lines} className="overflow-hidden rounded-lg border border-white/8 bg-card">
+            <div className="flex h-10 items-center gap-2 border-b border-white/8 px-3">
+              <Skeleton className="size-3.5 rounded" />
+              <Skeleton className="h-2.5 w-40" />
+              <Skeleton className="ml-auto h-2 w-10 bg-white/[0.04]" />
+            </div>
+            <DiffSkeleton lines={lines} />
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 export function DiffPanel({ repoPath }: { repoPath: string }) {
   const t = useT();
   const { selectedCommitHash: hash, compareBase: base } = useWorkspaceStore(
@@ -209,7 +232,7 @@ export function DiffPanel({ repoPath }: { repoPath: string }) {
       {hash ? (
         <CommitDiffs key={`${hash}:${base}`} repoPath={repoPath} hash={hash} base={base} />
       ) : (
-        <PanelMessage icon={<FileDiffIcon />} title={t("diff.nothing")} hint={t("diff.nothingHint")} />
+        <EmptyState icon={<FileDiffIcon />} title={t("diff.nothing")} hint={t("diff.nothingHint")} />
       )}
     </section>
   );

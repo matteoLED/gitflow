@@ -1,11 +1,13 @@
 //! Read-only Git queries. Nothing here changes the repository.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use super::errors::{ErrorKind, GitError, GitResult};
 use super::model::*;
 use super::parser;
-use super::runner::{RunOptions, git, git_text, git_with};
+use super::runner::{RunOptions, both, git, git_text, git_with};
 use super::validate;
 
 pub const MAX_COMMITS_PER_PAGE: u32 = 500;
@@ -39,21 +41,24 @@ pub fn head(repo: &Path) -> GitResult<HeadInfo> {
 }
 
 pub fn list_refs(repo: &Path) -> GitResult<RefsSnapshot> {
-    let text = git_text(
-        repo,
-        &[
-            "for-each-ref",
-            parser::REF_FORMAT,
-            "refs/heads",
-            "refs/remotes",
-            "refs/tags",
-        ],
-    )?;
-    let mut snapshot = parser::parse_refs(&text);
+    let refs = || {
+        git_text(
+            repo,
+            &[
+                "for-each-ref",
+                parser::REF_FORMAT,
+                "refs/heads",
+                "refs/remotes",
+                "refs/tags",
+            ],
+        )
+    };
+    let stashes = || git_text(repo, &["stash", "list", "--format=%gd%x00%gs"]);
+    let (text, (head, stashes)) = both(refs, || both(|| head(repo), stashes));
+    let mut snapshot = parser::parse_refs(&text?);
     snapshot.tags.reverse(); // newest-looking names first (v2.0 before v1.0)
-    snapshot.head = head(repo)?;
-    snapshot.stashes =
-        parser::parse_stashes(&git_text(repo, &["stash", "list", "--format=%gd%x00%gs"])?);
+    snapshot.head = head?;
+    snapshot.stashes = parser::parse_stashes(&stashes?);
     Ok(snapshot)
 }
 
@@ -142,9 +147,6 @@ pub fn list_commits(
     filters: LogFilters,
 ) -> GitResult<Vec<CommitSummary>> {
     let rev = rev.map(validate::revision).transpose()?.unwrap_or("HEAD");
-    if rev == "HEAD" && head(repo)?.unborn {
-        return Ok(Vec::new());
-    }
     let skip = format!("--skip={skip}");
     let limit = format!("--max-count={}", limit.clamp(1, MAX_COMMITS_PER_PAGE));
     // Date order keeps children above their parents, which the commit graph relies on.
@@ -166,11 +168,36 @@ pub fn list_commits(
     args.extend(search.iter().map(String::as_str));
     args.extend(["--end-of-options", rev, "--"]);
     args.extend(path.as_deref());
-    Ok(parser::parse_log(&git(repo, &args)?))
+    match git(repo, &args) {
+        Ok(out) => Ok(parser::parse_log(&out)),
+        // Checked only on failure: an unborn HEAD (no commit yet) is an empty history, not an error.
+        Err(_) if rev == "HEAD" && head(repo)?.unborn => Ok(Vec::new()),
+        Err(err) => Err(err),
+    }
 }
 
 /// What a commit is compared against: its first parent, or the empty tree for a root commit.
+/// A commit's parent never changes, and every file clicked in a commit asks again: it is remembered.
 fn commit_base(repo: &Path, hash: &str) -> GitResult<String> {
+    type Bases = Mutex<HashMap<(PathBuf, String), String>>;
+    static CACHE: OnceLock<Bases> = OnceLock::new();
+    let key = (repo.to_path_buf(), hash.to_string());
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(base) = cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return Ok(base);
+    }
+    let base = resolve_commit_base(repo, hash)?;
+    // A short hash could become ambiguous later: only full ids are remembered.
+    if let (true, Ok(mut cache)) = (hash.len() >= 40, cache.lock()) {
+        if cache.len() >= 4096 {
+            cache.clear();
+        }
+        cache.insert(key, base.clone());
+    }
+    Ok(base)
+}
+
+fn resolve_commit_base(repo: &Path, hash: &str) -> GitResult<String> {
     let parent = format!("{hash}^1");
     if let Ok(out) = git_text(
         repo,
@@ -207,11 +234,12 @@ pub fn list_commit_files(
 ) -> GitResult<Vec<ChangedFile>> {
     let hash = validate::object_id(hash)?;
     let base = diff_base(repo, hash, base)?;
-    let mut files = parser::parse_name_status(&git(
-        repo,
-        &["diff", "-z", "-M", "--name-status", &base, hash],
-    )?);
-    let stats = parser::parse_numstat(&git(repo, &["diff", "-z", "-M", "--numstat", &base, hash])?);
+    let (names, stats) = both(
+        || git(repo, &["diff", "-z", "-M", "--name-status", &base, hash]),
+        || git(repo, &["diff", "-z", "-M", "--numstat", &base, hash]),
+    );
+    let mut files = parser::parse_name_status(&names?);
+    let stats = parser::parse_numstat(&stats?);
     for file in &mut files {
         match stats.get(&file.path) {
             Some(Some((add, del))) => (file.additions, file.deletions) = (Some(*add), Some(*del)),

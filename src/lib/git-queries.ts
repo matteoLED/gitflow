@@ -113,6 +113,17 @@ export function useWorkingDiff(repoPath: string, path: string, previousPath: str
 /** Commits, their files and diffs never change: refreshing them after a Git operation is wasted work. */
 const IMMUTABLE = new Set(["commit-files", "commit-diff", "github-web-url"]);
 
+/**
+ * GitHub Actions runs of a repository, shared by every view. Only the inbox (`useWorkItems`, mounted with the
+ * workspace) polls them: a timer per reader multiplied the `gh run list` calls (7 a minute on the dashboard).
+ */
+export const workflowRunsQuery = (repoPath: string) => ({
+  queryKey: ["workflow-runs", repoPath],
+  queryFn: () => gitBackend.listWorkflowRuns(repoPath),
+});
+
+export const useWorkflowRuns = (repoPath: string) => useQuery(workflowRunsQuery(repoPath));
+
 /** Marks a repository's changeable data stale (only the given kinds, when listed). */
 export function invalidateRepo(client: QueryClient, repoPath: string, kinds?: string[]) {
   return client.invalidateQueries({
@@ -154,15 +165,22 @@ export function useCommitPullRequest(repoPath: string, sha: string | null) {
   });
 }
 
+// Submodules and LFS setup only change through a Git action (update, track, checkout), whose invalidateRepo
+// refreshes them: no refetch on window focus (`git lfs track` walks the tree, ~100 ms on a big repository).
 export function useSubmodules(repoPath: string) {
   return useQuery({
     queryKey: [...repoKey(repoPath), "submodules"],
     queryFn: () => gitBackend.listSubmodules(repoPath),
+    staleTime: Infinity,
   });
 }
 
 export function useLfsStatus(repoPath: string) {
-  return useQuery({ queryKey: [...repoKey(repoPath), "lfs"], queryFn: () => gitBackend.lfsStatus(repoPath) });
+  return useQuery({
+    queryKey: [...repoKey(repoPath), "lfs"],
+    queryFn: () => gitBackend.lfsStatus(repoPath),
+    staleTime: Infinity,
+  });
 }
 
 /** Which working-tree paths Git LFS handles; nothing is asked when git-lfs isn't installed. */
