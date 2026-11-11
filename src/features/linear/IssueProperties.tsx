@@ -25,8 +25,27 @@ function Picker(props: {
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const pick = (o: Option) => {
+    props.onPick(o.id);
+    if (!props.multi) setOpen(false);
+  };
+  // As in Linear: with nothing typed, 1…9 then 0 pick the options in order.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (search || e.metaKey || e.ctrlKey || e.altKey || !/^[0-9]$/.test(e.key)) return;
+    const option = props.options[(Number(e.key) + 9) % 10];
+    if (!option) return;
+    e.preventDefault();
+    pick(option);
+  };
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        setSearch("");
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -36,24 +55,34 @@ function Picker(props: {
           {props.trigger}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 rounded-xl p-0">
-        <Command loop>
-          <CommandInput placeholder={t("linear.changeProperty", { property: props.label })} className="text-[13px]" />
-          <CommandList className="max-h-72">
+      <PopoverContent align="start" className="w-56 rounded-lg p-0">
+        <Command loop onKeyDown={onKeyDown}>
+          <CommandInput
+            value={search}
+            onValueChange={setSearch}
+            icon={false}
+            wrapperClassName="h-9 px-3"
+            placeholder={t("linear.changeProperty", { property: props.label })}
+            className="text-[13px]"
+          />
+          <CommandList className="max-h-72 p-1">
             <CommandEmpty>{t("linear.noMatch")}</CommandEmpty>
-            {props.options.map((o) => (
+            {props.options.map((o, i) => (
               <CommandItem
                 key={o.id}
                 value={o.id}
                 keywords={[o.label]}
-                onSelect={() => {
-                  props.onPick(o.id);
-                  if (!props.multi) setOpen(false);
-                }}
+                onSelect={() => pick(o)}
+                className="h-8 gap-2 px-2 [&_svg:not([class*='size-'])]:size-3.5"
               >
                 {o.icon}
                 <span className="min-w-0 flex-1 truncate">{o.label}</span>
-                {o.selected && <Check aria-hidden className="size-3.5" />}
+                {o.selected && <Check aria-hidden className="size-3.5 text-foreground" />}
+                {i < 10 && (
+                  <span className="w-3 text-right text-[11.5px] text-muted-foreground tabular-nums">
+                    {(i + 1) % 10}
+                  </span>
+                )}
               </CommandItem>
             ))}
           </CommandList>
@@ -152,7 +181,7 @@ function AssigneePicker({ orgId, issue, update }: PickerProps) {
         ...members.map((m) => ({
           id: m.id,
           label: m.name,
-          icon: <AuthorAvatar name={m.name} src={m.avatarUrl} className="size-5" />,
+          icon: <AuthorAvatar name={m.name} src={m.avatarUrl} className="size-4" />,
           selected: m.id === current?.id,
         })),
       ]}

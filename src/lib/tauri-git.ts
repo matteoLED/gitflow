@@ -43,6 +43,9 @@ import type {
   PullRequestRange,
   ReviewEvent,
   WorkflowRun,
+  Tag,
+  Release,
+  ReleaseInput,
   AgentInfo,
   AgentKind,
   AgentTask,
@@ -364,6 +367,13 @@ export const gitBackend = {
   linearProjectIssues: (orgId: string, projectId: string) =>
     invoke<LinearIssue[]>("linear_project_issues", { orgId, projectId }),
   linearImage: (orgId: string, url: string) => invoke<string>("linear_image", { orgId, url }),
+  linearCreateComment: (orgId: string, issueId: string, body: string, parentId: string | null) =>
+    invoke<null>("linear_create_comment", { orgId, issueId, body, parentId }),
+  linearUpdateComment: (orgId: string, id: string, body: string) =>
+    invoke<null>("linear_update_comment", { orgId, id, body }),
+  linearDeleteComment: (orgId: string, id: string) => invoke<null>("linear_delete_comment", { orgId, id }),
+  linearUploadImage: (orgId: string, filename: string, contentType: string, bytes: number[]) =>
+    invoke<string>("linear_upload_image", { orgId, filename, contentType, bytes }),
   getGithubUser: (repoPath: string) => invoke<GithubUser>("get_github_user", { repoPath }),
   getGitIdentity: () => invoke<GitIdentity>("get_git_identity"),
   setGitIdentity: (name: string, email: string) => invoke<GitIdentity>("set_git_identity", { name, email }),
@@ -397,6 +407,26 @@ export const gitBackend = {
   fetch: (repoPath: string) => invoke<null>("fetch", { repoPath }),
   pull: (repoPath: string) => invoke<null>("pull", { repoPath }),
   push: (repoPath: string) => invoke<null>("push", { repoPath }),
+  listTags: (repoPath: string) => invoke<Tag[]>("list_tags", { repoPath }),
+  /** Annotated when `message` is set; on HEAD when `target` is null. Never replaces an existing tag. */
+  createTag: (repoPath: string, name: string, target: string | null, message: string | null) =>
+    invoke<null>("create_tag", { repoPath, name, target, message }),
+  deleteTag: (repoPath: string, name: string) => invoke<null>("delete_tag", { repoPath, name }),
+  /** `git push origin refs/tags/<name>`, never forced. */
+  pushTag: (repoPath: string, name: string) => invoke<null>("push_tag", { repoPath, name }),
+  deleteRemoteTag: (repoPath: string, name: string) => invoke<null>("delete_remote_tag", { repoPath, name }),
+  listReleases: (repoPath: string) => invoke<Release[]>("list_releases", { repoPath }),
+  createRelease: (repoPath: string, input: ReleaseInput) => invoke<Release>("create_release", { repoPath, input }),
+  updateRelease: (repoPath: string, id: number, input: ReleaseInput) =>
+    invoke<Release>("update_release", { repoPath, id, input }),
+  /** Deletes the release only; its tag stays. */
+  deleteRelease: (repoPath: string, id: number) => invoke<null>("delete_release", { repoPath, id }),
+  /** GitHub's generated notes from `previous` (GitHub picks one when null) to `tag`. */
+  generateReleaseNotes: (repoPath: string, tag: string, previous: string | null, target: string | null) =>
+    invoke<{ name: string; body: string }>("generate_release_notes", { repoPath, tag, previous, target }),
+  /** `git log from..to` (subjects and bodies), capped, for the AI changelog. */
+  releaseCommits: (repoPath: string, from: string | null, to: string) =>
+    invoke<string>("release_commits", { repoPath, from, to }),
   listSubmodules: (repoPath: string) => invoke<Submodule[]>("list_submodules", { repoPath }),
   /** `git submodule update --init --recursive` (all, or one path). Explicit click only. */
   updateSubmodules: (repoPath: string, path: string | null) => invoke<null>("update_submodules", { repoPath, path }),

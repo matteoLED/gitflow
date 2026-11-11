@@ -4,7 +4,7 @@ import type { RepositoryInfo, WorkingSide } from "@/types/git";
 
 /** history: branches + commits; github: pull requests + their commits; changes: working tree; agents: AI runs. */
 export type View =
-  "home" | "inbox" | "work" | "history" | "github" | "changes" | "ci" | "agents" | "preview" | "linear" | "browser" | "graph" | "editor";
+  "home" | "inbox" | "work" | "history" | "github" | "changes" | "ci" | "releases" | "agents" | "preview" | "linear" | "browser" | "graph" | "editor";
 
 /** The pull request being reviewed: `base` is its merge-base, so `base..head` is its whole diff. */
 export type ActivePullRequest = {

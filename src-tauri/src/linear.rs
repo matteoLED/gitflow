@@ -302,7 +302,8 @@ pub fn issue(org_id: &str, id: &str) -> GitResult<Value> {
         "query($id: String!) {{ issue(id: $id) {{ {ISSUE_FIELDS} description createdAt
            creator {{ name avatarUrl }}
            attachments {{ nodes {{ title subtitle url sourceType }} }}
-           comments(first: 30) {{ nodes {{ body createdAt user {{ name avatarUrl }} botActor {{ name avatarUrl }} }} }} }} }}"
+           comments(first: 50) {{ nodes {{ id body createdAt parent {{ id }}
+             user {{ id name avatarUrl isMe }} botActor {{ name avatarUrl }} }} }} }} }}"
     );
     let data = graphql(&key_of(org_id)?, &query, json!({ "id": id }))?;
     data.get("issue")
@@ -502,7 +503,7 @@ pub fn team_members(org_id: &str, team_id: &str) -> GitResult<Value> {
     if !valid_id(team_id) {
         return Err(GitError::invalid("Invalid team id."));
     }
-    let query = "query($id: String!) { team(id: $id) { members(first: 250) { nodes { id name avatarUrl active } } } }";
+    let query = "query($id: String!) { team(id: $id) { members(first: 250) { nodes { id name avatarUrl url active } } } }";
     let data = graphql(&key_of(org_id)?, query, json!({ "id": team_id }))?;
     let members = data
         .pointer("/team/members/nodes")
@@ -658,9 +659,204 @@ fn upload_url(url: &str) -> bool {
         && !url.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
+const MAX_COMMENT: usize = 50_000;
+
+/// A comment's Markdown: some text, capped.
+fn comment_body(body: &str) -> GitResult<&str> {
+    let body = body.trim();
+    if body.is_empty() || body.len() > MAX_COMMENT {
+        return Err(GitError::invalid(
+            "A comment needs some text (50,000 characters at most).",
+        ));
+    }
+    Ok(body)
+}
+
+/// The `CommentCreateInput` of a comment on an issue, or of a reply in a thread (`parent_id`).
+fn comment_input(issue_id: &str, body: &str, parent_id: Option<&str>) -> GitResult<Value> {
+    if !valid_id(issue_id) || parent_id.is_some_and(|p| !valid_id(p)) {
+        return Err(GitError::invalid("Invalid issue or comment id."));
+    }
+    let mut input = json!({ "issueId": issue_id, "body": comment_body(body)? });
+    if let Some(parent) = parent_id {
+        input["parentId"] = json!(parent);
+    }
+    Ok(input)
+}
+
+fn succeeded(data: &Value, mutation: &str, failure: &str) -> GitResult<()> {
+    let success = data
+        .pointer(&format!("/{mutation}/success"))
+        .and_then(Value::as_bool);
+    if success == Some(true) {
+        Ok(())
+    } else {
+        Err(io(failure))
+    }
+}
+
+/// Comments on an issue, or replies to `parent_id`'s thread.
+pub fn create_comment(
+    org_id: &str,
+    issue_id: &str,
+    body: &str,
+    parent_id: Option<&str>,
+) -> GitResult<()> {
+    let input = comment_input(issue_id, body, parent_id)?;
+    let query =
+        "mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success } }";
+    let data = graphql(&key_of(org_id)?, query, json!({ "input": input }))?;
+    succeeded(&data, "commentCreate", "the comment wasn't posted")
+}
+
+/// Rewrites one of the user's comments (Linear refuses others').
+pub fn update_comment(org_id: &str, id: &str, body: &str) -> GitResult<()> {
+    if !valid_id(id) {
+        return Err(GitError::invalid("Invalid comment id."));
+    }
+    let body = comment_body(body)?;
+    let query = "mutation($id: String!, $input: CommentUpdateInput!) {
+        commentUpdate(id: $id, input: $input) { success } }";
+    let variables = json!({ "id": id, "input": { "body": body } });
+    let data = graphql(&key_of(org_id)?, query, variables)?;
+    succeeded(&data, "commentUpdate", "the comment wasn't updated")
+}
+
+pub fn delete_comment(org_id: &str, id: &str) -> GitResult<()> {
+    if !valid_id(id) {
+        return Err(GitError::invalid("Invalid comment id."));
+    }
+    let query = "mutation($id: String!) { commentDelete(id: $id) { success } }";
+    let data = graphql(&key_of(org_id)?, query, json!({ "id": id }))?;
+    succeeded(&data, "commentDelete", "the comment wasn't deleted")
+}
+
+const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// The `fileUpload` variables of an image, checked first: PNG, JPEG, GIF or WebP of 10 MB at most.
+fn upload_variables(content_type: &str, filename: &str, size: usize) -> GitResult<Value> {
+    let name_ok = !filename.is_empty()
+        && filename.chars().count() <= 255
+        && !filename
+            .chars()
+            .any(|c| c.is_control() || c == '/' || c == '\\');
+    if !IMAGE_TYPES.contains(&content_type) || !name_ok || size == 0 || size as u64 > MAX_IMAGE {
+        return Err(GitError::invalid(
+            "Only PNG, JPEG, GIF or WebP images of 10 MB at most.",
+        ));
+    }
+    Ok(json!({ "contentType": content_type, "filename": filename, "size": size }))
+}
+
+/// Headers of the upload PUT: type and cache first, then Linear's own (which win on a clash).
+fn upload_headers(content_type: &str, file: &Value) -> Vec<(String, String)> {
+    let mut headers = vec![
+        ("Content-Type".to_string(), content_type.to_string()),
+        (
+            "Cache-Control".to_string(),
+            "public, max-age=31536000".to_string(),
+        ),
+    ];
+    for h in file["headers"].as_array().into_iter().flatten() {
+        if let (Some(k), Some(v)) = (h["key"].as_str(), h["value"].as_str()) {
+            headers.retain(|(name, _)| !name.eq_ignore_ascii_case(k));
+            headers.push((k.to_string(), v.to_string()));
+        }
+    }
+    headers
+}
+
+/// Uploads a pasted or dropped image to Linear's storage; returns its asset URL for `![](…)`.
+pub fn upload_image(
+    org_id: &str,
+    filename: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> GitResult<String> {
+    let variables = upload_variables(content_type, filename, bytes.len())?;
+    let query = "mutation($contentType: String!, $filename: String!, $size: Int!) {
+        fileUpload(contentType: $contentType, filename: $filename, size: $size) {
+          success uploadFile { uploadUrl assetUrl headers { key value } } } }";
+    let data = graphql(&key_of(org_id)?, query, variables)?;
+    let file = data
+        .pointer("/fileUpload/uploadFile")
+        .ok_or_else(|| io("Linear refused the upload"))?;
+    let text = |p: &str| file.pointer(p).and_then(Value::as_str).unwrap_or_default();
+    let (target, asset) = (text("/uploadUrl"), text("/assetUrl"));
+    if !target.starts_with("https://") || !upload_url(asset) {
+        return Err(io("unexpected upload URL"));
+    }
+    // The signed URL carries its own rights: the API key never goes there.
+    let mut request = agent().put(target);
+    for (name, value) in upload_headers(content_type, file) {
+        request = request.header(name, value);
+    }
+    let status = request.send(bytes).map_err(io)?.status().as_u16();
+    if status >= 400 {
+        return Err(io(format!("upload failed (HTTP {status})")));
+    }
+    Ok(asset.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reply_names_its_thread() {
+        assert_eq!(
+            comment_input("issue-1", " Hi ", Some("c-1")).unwrap(),
+            json!({ "issueId": "issue-1", "body": "Hi", "parentId": "c-1" })
+        );
+    }
+
+    #[test]
+    fn a_comment_on_the_issue_has_no_parent() {
+        assert_eq!(
+            comment_input("issue-1", "Hi", None).unwrap(),
+            json!({ "issueId": "issue-1", "body": "Hi" })
+        );
+    }
+
+    #[test]
+    fn comments_refuse_odd_ids() {
+        assert!(comment_input("issue-1", "Hi", Some("x\" }")).is_err());
+    }
+
+    #[test]
+    fn comments_need_text_and_are_capped() {
+        let long = "a".repeat(MAX_COMMENT + 1);
+        assert!(
+            [comment_body("  "), comment_body(&long)]
+                .iter()
+                .all(Result::is_err)
+        );
+    }
+
+    #[test]
+    fn only_small_common_images_are_uploaded() {
+        assert!(upload_variables("image/png", "shot.png", 1024).is_ok());
+        assert!(
+            upload_variables("image/svg+xml", "a.svg", 10).is_err()
+                && upload_variables("image/png", "a.png", 10 * 1024 * 1024 + 1).is_err()
+                && upload_variables("image/png", "../a.png", 10).is_err()
+                && upload_variables("image/png", "a.png", 0).is_err()
+        );
+    }
+
+    #[test]
+    fn linear_upload_headers_win() {
+        let file = json!({ "headers": [{ "key": "cache-control", "value": "no-cache" },
+                                       { "key": "x-goog-meta", "value": "1" }] });
+        assert_eq!(
+            upload_headers("image/png", &file),
+            vec![
+                ("Content-Type".to_string(), "image/png".to_string()),
+                ("cache-control".to_string(), "no-cache".to_string()),
+                ("x-goog-meta".to_string(), "1".to_string()),
+            ]
+        );
+    }
 
     fn draft(title: &str, priority: u8) -> NewIssue {
         NewIssue {

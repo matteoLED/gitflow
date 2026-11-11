@@ -32,6 +32,7 @@ import { useHistorySearchStore } from "./history-search-store";
 import { isEmptySearch } from "./search-query";
 import { CommitMenu, type CommitActions } from "./CommitMenu";
 import { RebaseDialog } from "./RebaseDialog";
+import { TagDialog } from "@/features/releases/TagDialog";
 import { useRewrite } from "./use-rewrite";
 import { gitBackend } from "@/lib/tauri-git";
 import { useWorkspaceStore } from "@/stores/workspace-store";
@@ -382,6 +383,7 @@ export function CommitList({ repoPath }: { repoPath: string }) {
 
   const rewrite = useRewrite(repoPath);
   const [rebaseFrom, setRebaseFrom] = useState<string | null>(null);
+  const [tagTarget, setTagTarget] = useState<CommitSummary | null>(null);
   const actions: CommitActions = {
     cherryPick:
       historyRev === null
@@ -405,6 +407,7 @@ export function CommitList({ repoPath }: { repoPath: string }) {
               success: t("rewrite.fixedUp", { sha: c.hash.slice(0, 7) }),
             })
         : undefined,
+    tag: setTagTarget,
     busy: rewrite.isPending,
   };
 
@@ -484,6 +487,12 @@ export function CommitList({ repoPath }: { repoPath: string }) {
         </div>
       )}
       <RebaseDialog repoPath={repoPath} from={rebaseFrom} onClose={() => setRebaseFrom(null)} />
+      <TagDialog
+        repoPath={repoPath}
+        target={tagTarget && { hash: tagTarget.hash, label: tagTarget.hash.slice(0, 7) }}
+        open={tagTarget !== null}
+        onOpenChange={(open) => !open && setTagTarget(null)}
+      />
     </section>
   );
 }

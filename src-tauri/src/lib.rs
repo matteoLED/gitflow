@@ -171,6 +171,10 @@ pub fn run() {
             commands::linear_update_issue,
             commands::linear_team_members,
             commands::linear_labels,
+            commands::linear_create_comment,
+            commands::linear_update_comment,
+            commands::linear_delete_comment,
+            commands::linear_upload_image,
             commands::get_pull_request_details,
             commands::merge_pull_request,
             commands::comment_pull_request,
@@ -206,6 +210,17 @@ pub fn run() {
             commands::fetch,
             commands::pull,
             commands::push,
+            commands::list_tags,
+            commands::create_tag,
+            commands::delete_tag,
+            commands::push_tag,
+            commands::delete_remote_tag,
+            commands::list_releases,
+            commands::create_release,
+            commands::update_release,
+            commands::delete_release,
+            commands::generate_release_notes,
+            commands::release_commits,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

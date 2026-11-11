@@ -860,6 +860,37 @@ pub async fn linear_team_members(org_id: String, team_id: String) -> GitResult<s
 }
 
 #[tauri::command]
+pub async fn linear_create_comment(
+    org_id: String,
+    issue_id: String,
+    body: String,
+    parent_id: Option<String>,
+) -> GitResult<()> {
+    blocking(move || linear::create_comment(&org_id, &issue_id, &body, parent_id.as_deref())).await
+}
+
+#[tauri::command]
+pub async fn linear_update_comment(org_id: String, id: String, body: String) -> GitResult<()> {
+    blocking(move || linear::update_comment(&org_id, &id, &body)).await
+}
+
+#[tauri::command]
+pub async fn linear_delete_comment(org_id: String, id: String) -> GitResult<()> {
+    blocking(move || linear::delete_comment(&org_id, &id)).await
+}
+
+/// ponytail: bytes come as a JSON number array (~4x the image); a raw IPC body if 10 MB pastes feel slow.
+#[tauri::command]
+pub async fn linear_upload_image(
+    org_id: String,
+    filename: String,
+    content_type: String,
+    bytes: Vec<u8>,
+) -> GitResult<String> {
+    blocking(move || linear::upload_image(&org_id, &filename, &content_type, &bytes)).await
+}
+
+#[tauri::command]
 pub async fn linear_labels(org_id: String, team_id: String) -> GitResult<serde_json::Value> {
     blocking(move || linear::labels(&org_id, &team_id)).await
 }
@@ -1243,4 +1274,99 @@ pub async fn linear_set_notification_read(
 #[tauri::command]
 pub async fn linear_archive_notification(org_id: String, id: String) -> GitResult<()> {
     blocking(move || linear::archive_notification(&org_id, &id)).await
+}
+
+#[tauri::command]
+pub async fn list_tags(repo_path: String) -> GitResult<Vec<crate::git::tags::Tag>> {
+    blocking(move || crate::git::tags::list_tags(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn create_tag(
+    repo_path: String,
+    name: String,
+    target: Option<String>,
+    message: Option<String>,
+) -> GitResult<()> {
+    blocking(move || {
+        crate::git::tags::create_tag(
+            &repo(&repo_path)?,
+            &name,
+            target.as_deref(),
+            message.as_deref(),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_tag(repo_path: String, name: String) -> GitResult<()> {
+    blocking(move || crate::git::tags::delete_tag(&repo(&repo_path)?, &name)).await
+}
+
+#[tauri::command]
+pub async fn push_tag(repo_path: String, name: String) -> GitResult<()> {
+    blocking(move || crate::git::tags::push_tag(&repo(&repo_path)?, &name)).await
+}
+
+#[tauri::command]
+pub async fn delete_remote_tag(repo_path: String, name: String) -> GitResult<()> {
+    blocking(move || crate::git::tags::delete_remote_tag(&repo(&repo_path)?, &name)).await
+}
+
+#[tauri::command]
+pub async fn list_releases(repo_path: String) -> GitResult<serde_json::Value> {
+    blocking(move || crate::git::releases::list_releases(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn create_release(
+    repo_path: String,
+    input: crate::git::releases::ReleaseInput,
+) -> GitResult<serde_json::Value> {
+    blocking(move || crate::git::releases::create_release(&repo(&repo_path)?, &input)).await
+}
+
+#[tauri::command]
+pub async fn update_release(
+    repo_path: String,
+    id: u64,
+    input: crate::git::releases::ReleaseInput,
+) -> GitResult<serde_json::Value> {
+    blocking(move || crate::git::releases::update_release(&repo(&repo_path)?, id, &input)).await
+}
+
+#[tauri::command]
+pub async fn delete_release(repo_path: String, id: u64) -> GitResult<()> {
+    blocking(move || crate::git::releases::delete_release(&repo(&repo_path)?, id)).await
+}
+
+#[tauri::command]
+pub async fn generate_release_notes(
+    repo_path: String,
+    tag: String,
+    previous: Option<String>,
+    target: Option<String>,
+) -> GitResult<serde_json::Value> {
+    blocking(move || {
+        crate::git::releases::generate_notes(
+            &repo(&repo_path)?,
+            &tag,
+            previous.as_deref(),
+            target.as_deref(),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn release_commits(
+    repo_path: String,
+    from: Option<String>,
+    to: String,
+) -> GitResult<String> {
+    blocking(move || {
+        crate::git::releases::release_commits(&repo(&repo_path)?, from.as_deref(), &to)
+    })
+    .await
 }

@@ -32,16 +32,26 @@ function CommandDialog({
       >
         <DialogTitle className="sr-only">{title}</DialogTitle>
         <DialogDescription className="sr-only">{description}</DialogDescription>
-        <Command loop shouldFilter={shouldFilter}>{children}</Command>
+        <Command loop shouldFilter={shouldFilter}>
+          {children}
+        </Command>
       </DialogContent>
     </Dialog>
   );
 }
 
-function CommandInput({ className, ...props }: React.ComponentProps<typeof CommandPrimitive.Input>) {
+function CommandInput({
+  className,
+  wrapperClassName,
+  icon = true,
+  ...props
+}: React.ComponentProps<typeof CommandPrimitive.Input> & { wrapperClassName?: string; icon?: boolean }) {
   return (
-    <div data-slot="command-input-wrapper" className="flex h-12 items-center gap-2.5 border-b border-white/[0.07] px-4">
-      <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+    <div
+      data-slot="command-input-wrapper"
+      className={cn("flex h-12 items-center gap-2.5 border-b border-white/[0.07] px-4", wrapperClassName)}
+    >
+      {icon && <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />}
       <CommandPrimitive.Input
         data-slot="command-input"
         className={cn(

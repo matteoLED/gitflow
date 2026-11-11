@@ -216,7 +216,8 @@ export type LinearIssue = {
   assignee?: LinearMember | null;
 };
 type LinearPerson = { name: string; avatarUrl: string | null };
-export type LinearMember = LinearPerson & { id: string };
+/** `url` is the profile page (mentions link to it). */
+export type LinearMember = LinearPerson & { id: string; url?: string };
 export type LinearLabel = { id: string; name: string; color: string };
 /** Fields of an issue to change; absent ones stay as they are, `null` clears. */
 export type LinearIssuePatch = {
@@ -269,7 +270,16 @@ export type LinearIssueDetail = LinearIssue & {
   assignee: LinearMember | null;
   creator: LinearPerson | null;
   attachments: { nodes: { title: string; subtitle: string | null; url: string; sourceType: string | null }[] };
-  comments: { nodes: { body: string; createdAt: string; user: LinearPerson | null; botActor: LinearPerson | null }[] };
+  comments: { nodes: LinearComment[] };
+};
+export type LinearComment = {
+  id: string;
+  body: string;
+  createdAt: string;
+  /** The thread's first comment, for a reply. */
+  parent: { id: string } | null;
+  user: (LinearMember & { isMe: boolean }) | null;
+  botActor: LinearPerson | null;
 };
 
 export type AgentKind = "claude" | "codex";
@@ -627,4 +637,38 @@ export type LinearNotification = {
   title: string;
   url: string;
   comment: string | null;
+};
+
+export type Tag = {
+  name: string;
+  /** Commit the tag points to (an annotated tag is peeled). */
+  target: string;
+  date: string;
+  /** Only annotated tags have one. */
+  message: string | null;
+};
+
+/** The fields the Releases page reads from GitHub's REST release object. */
+export type Release = {
+  id: number;
+  tag_name: string;
+  target_commitish: string;
+  name: string | null;
+  body: string | null;
+  draft: boolean;
+  prerelease: boolean;
+  html_url: string;
+  created_at: string;
+  published_at: string | null;
+  author: { login: string } | null;
+};
+
+export type ReleaseInput = {
+  tagName: string;
+  /** Branch or commit the tag is created on when it doesn't exist yet. */
+  target: string | null;
+  name: string;
+  body: string;
+  draft: boolean;
+  prerelease: boolean;
 };

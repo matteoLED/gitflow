@@ -58,6 +58,8 @@ export async function startAgentRun(
   /** Works from this commit (a failing PR's head) in a new worktree, in a mode that can edit: never "plan".
    *  Its pull request goes into `target`, the branch being fixed. */
   base?: { commit: string; target: string },
+  /** A free-form prompt that must only read (plan mode, no worktree), whatever the composer's mode. */
+  readOnly = false,
 ) {
   try {
     const locale = useLocaleStore.getState().locale;
@@ -66,11 +68,11 @@ export async function startAgentRun(
     // Isolation: a new free-form conversation gets its own worktree; follow-ups keep working in the same one.
     const worktree = continuation
       ? runs.find((r) => r.thread === continuation.thread && r.worktree)?.worktree
-      : task.kind === "custom" && (runSettings.isolated || group || branch || base)
+      : task.kind === "custom" && !readOnly && (runSettings.isolated || group || branch || base)
         ? { ...(await gitBackend.createAgentWorktree(repoPath, base?.commit ?? null, branch)), target: base?.target }
         : undefined;
     const editMode = (branch || base) && runSettings.mode === "plan" ? "accept-edits" : runSettings.mode;
-    const mode = task.kind === "custom" ? editMode : ("plan" as const);
+    const mode = task.kind === "custom" && !readOnly ? editMode : ("plan" as const);
     const settings = { ...runSettings, mode, images, worktree: worktree?.path ?? null };
     const id = await gitBackend.startAgentRun(repoPath, agent, task, locale, continuation?.resume ?? null, settings);
     const thread = continuation?.thread ?? id;

@@ -2,6 +2,7 @@ import { Editor } from "@tiptap/react";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { descriptionExtensions } from "./IssueDescriptionEditor";
+import { imageProblem, mentionContent } from "./editor-extras";
 import { useAutosave } from "./use-update-issue";
 
 const roundTrip = (markdown: string) => {
@@ -46,6 +47,37 @@ describe("description editor", () => {
       "- two",
     ].join("\n");
     expect(roundTrip(text)).toBe(text);
+  });
+});
+
+describe("editor extras", () => {
+  it("keeps mentions as profile links and uploaded images as Markdown images", () => {
+    const text = "[@Ada Lovelace](https://linear.app/acme/profiles/ada) see ![](https://uploads.linear.app/a/b/c.png)";
+    expect(roundTrip(text)).toBe(text);
+  });
+
+  it("writes an inserted mention as a profile link", () => {
+    const editor = new Editor({ extensions: descriptionExtensions(undefined, (key) => key) });
+    editor.commands.insertContent(mentionContent({ name: "Ada", url: "https://linear.app/acme/profiles/ada" }));
+    const out = editor.getMarkdown();
+    editor.destroy();
+    expect(out.trim()).toBe("[@Ada](https://linear.app/acme/profiles/ada)");
+  });
+
+  it("mentions someone without a profile as plain text", () => {
+    expect(mentionContent({ name: "Ada" })[0]).toEqual({ type: "text", text: "@Ada" });
+  });
+
+  it("refuses SVGs", () => {
+    expect(imageProblem({ type: "image/svg+xml", size: 10 })).toBe("linear.editor.imageType");
+  });
+
+  it("refuses images over 10 MB", () => {
+    expect(imageProblem({ type: "image/png", size: 10 * 1024 * 1024 + 1 })).toBe("linear.editor.imageSize");
+  });
+
+  it("takes a small WebP", () => {
+    expect(imageProblem({ type: "image/webp", size: 1024 })).toBeNull();
   });
 });
 

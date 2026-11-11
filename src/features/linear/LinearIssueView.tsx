@@ -3,7 +3,6 @@ import { useMutation } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Copy, Play, ExternalLink, GitBranchPlus, Link2, Sparkles } from "lucide-react";
 import type { Components } from "react-markdown";
 import { GithubIcon } from "@/components/github-icon";
-import { AuthorAvatar } from "@/components/author-avatar";
 import { BrailleLoader } from "@/components/braille-loader";
 import { PanelHeader, PanelLoading } from "@/components/layout/panel";
 import { DataUnavailable } from "@/components/states";
@@ -27,6 +26,7 @@ import {
 import type { AgentKind, LinearIssueDetail } from "@/types/git";
 import { LinearIcon } from "./LinearIcon";
 import { IssueProperties, Meta } from "./IssueProperties";
+import { IssueActivity } from "./IssueActivity";
 import { LinearImage } from "./LinearImage";
 import { editableDescription } from "./editable-description";
 import { useLinearAccounts, useOpenIssue } from "./linear-queries";
@@ -175,7 +175,6 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
   const markdown: Components = {
     img: ({ src, alt }) => <LinearImage orgId={issue.orgId} src={typeof src === "string" ? src : ""} alt={alt ?? ""} />,
   };
-  const comments = [...data.comments.nodes].reverse();
   const description = data.description ?? "";
   const readOnly = description ? (
     <Suspense fallback={<p className="whitespace-pre-wrap">{description}</p>}>
@@ -247,6 +246,7 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
                   <DescriptionEditor
                     key={data.id}
                     orgId={issue.orgId}
+                    teamId={data.team.id}
                     initial={description}
                     onSave={(text) => update.mutate({ patch: { description: text }, shown: { description: text } })}
                   />
@@ -278,41 +278,7 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
                 </ul>
               </section>
             )}
-            <section className="mt-10">
-              <h2 className="mb-4 text-[13px] font-medium">{t("linear.activity")}</h2>
-              <ol className="relative space-y-5 before:absolute before:top-2 before:bottom-2 before:left-[9px] before:w-px before:bg-white/[0.07]">
-                <li className="relative flex items-center gap-3 text-[12.5px] text-muted-foreground">
-                  <span className="z-10 grid size-5 place-items-center rounded-full bg-background">
-                    <span className="size-1.5 rounded-full bg-muted-foreground/60" />
-                  </span>
-                  <span>
-                    <span className="text-foreground">{data.creator?.name ?? "Linear"}</span> {t("linear.createdIssue")}{" "}
-                    · {formatAge(data.createdAt, undefined, t.locale)}
-                  </span>
-                </li>
-                {comments.map((c, i) => {
-                  const who = c.user ?? c.botActor;
-                  return (
-                    <li key={i} className="relative flex gap-3">
-                      <AuthorAvatar
-                        name={who?.name ?? "Linear"}
-                        src={who?.avatarUrl ?? null}
-                        className="z-10 size-5 shrink-0 ring-4 ring-background"
-                      />
-                      <div className="surface min-w-0 flex-1 rounded-lg px-3.5 py-2.5">
-                        <p className="mb-1 text-[12.5px] text-muted-foreground">
-                          <span className="font-medium text-foreground">{who?.name ?? "Linear"}</span> ·{" "}
-                          {formatAge(c.createdAt, undefined, t.locale)}
-                        </p>
-                        <Suspense fallback={<p className="text-[13px] whitespace-pre-wrap">{c.body}</p>}>
-                          <Markdown text={c.body} components={markdown} />
-                        </Suspense>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-            </section>
+            <IssueActivity orgId={issue.orgId} issue={data} markdown={markdown} />
           </article>
         </div>
         <aside className="hidden w-[300px] shrink-0 overflow-y-auto border-l border-white/[0.06] bg-white/[0.012] lg:block">

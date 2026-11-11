@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { GitCommitVertical, ListOrdered, ArrowDownToDot, Undo2 } from "lucide-react";
+import { GitCommitVertical, ListOrdered, ArrowDownToDot, Tag, Undo2 } from "lucide-react";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { useT } from "@/i18n";
 import type { CommitSummary } from "@/types/git";
@@ -13,6 +13,7 @@ export type CommitActions = {
   rebaseFrom?: (commit: CommitSummary) => void;
   /** Only when viewing the current branch. */
   fixup?: (commit: CommitSummary) => void;
+  tag: (commit: CommitSummary) => void;
   busy: boolean;
 };
 
@@ -29,7 +30,7 @@ export function CommitMenu({
   children: ReactNode;
 }) {
   const t = useT();
-  const { cherryPick, revert, rebaseFrom, fixup, busy } = actions;
+  const { cherryPick, revert, rebaseFrom, fixup, tag, busy } = actions;
   const merge = commit.parents.length > 1;
   return (
     <ContextMenu>
@@ -57,6 +58,10 @@ export function CommitMenu({
             {t("rewrite.fixup")}
           </ContextMenuItem>
         )}
+        <ContextMenuItem className={ITEM} onSelect={() => tag(commit)}>
+          <Tag />
+          {t("tags.createHere")}
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

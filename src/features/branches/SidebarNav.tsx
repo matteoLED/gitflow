@@ -11,6 +11,7 @@ import {
   Layers,
   MonitorSmartphone,
   Network,
+  Package,
   Code2,
   Sparkles,
   SquareTerminal,
@@ -98,6 +99,7 @@ export function SidebarNav({ repoPath }: { repoPath: string }) {
         {row("changes", Layers, t("view.changes"), changes > 99 ? "99+" : changes)}
         {row("github", GithubIcon, t("view.github"))}
         {row("ci", Activity, "CI")}
+        {row("releases", Package, t("view.releases"))}
       </ul>
       <p className="mt-4 mb-1 px-2 text-[11.5px] font-medium text-muted-foreground">{t("view.tools")}</p>
       <ul className="space-y-px">

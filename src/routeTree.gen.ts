@@ -21,6 +21,7 @@ import { Route as InboxRouteImport } from './routes/inbox'
 import { Route as LinearRouteImport } from './routes/linear'
 import { Route as PreviewRouteImport } from './routes/preview'
 import { Route as PullsRouteImport } from './routes/pulls'
+import { Route as ReleasesRouteImport } from './routes/releases'
 import { Route as WorkRouteImport } from './routes/work'
 
 const IndexRoute = IndexRouteImport.update({
@@ -83,6 +84,11 @@ const PullsRoute = PullsRouteImport.update({
   path: '/pulls',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ReleasesRoute = ReleasesRouteImport.update({
+  id: '/releases',
+  path: '/releases',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WorkRoute = WorkRouteImport.update({
   id: '/work',
   path: '/work',
@@ -102,6 +108,7 @@ export interface FileRoutesByFullPath {
   '/linear': typeof LinearRoute
   '/preview': typeof PreviewRoute
   '/pulls': typeof PullsRoute
+  '/releases': typeof ReleasesRoute
   '/work': typeof WorkRoute
 }
 export interface FileRoutesByTo {
@@ -117,6 +124,7 @@ export interface FileRoutesByTo {
   '/linear': typeof LinearRoute
   '/preview': typeof PreviewRoute
   '/pulls': typeof PullsRoute
+  '/releases': typeof ReleasesRoute
   '/work': typeof WorkRoute
 }
 export interface FileRoutesById {
@@ -133,6 +141,7 @@ export interface FileRoutesById {
   '/linear': typeof LinearRoute
   '/preview': typeof PreviewRoute
   '/pulls': typeof PullsRoute
+  '/releases': typeof ReleasesRoute
   '/work': typeof WorkRoute
 }
 export interface FileRouteTypes {
@@ -150,6 +159,7 @@ export interface FileRouteTypes {
     | '/linear'
     | '/preview'
     | '/pulls'
+    | '/releases'
     | '/work'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -165,6 +175,7 @@ export interface FileRouteTypes {
     | '/linear'
     | '/preview'
     | '/pulls'
+    | '/releases'
     | '/work'
   id:
     | '__root__'
@@ -180,6 +191,7 @@ export interface FileRouteTypes {
     | '/linear'
     | '/preview'
     | '/pulls'
+    | '/releases'
     | '/work'
   fileRoutesById: FileRoutesById
 }
@@ -196,6 +208,7 @@ export interface RootRouteChildren {
   LinearRoute: typeof LinearRoute
   PreviewRoute: typeof PreviewRoute
   PullsRoute: typeof PullsRoute
+  ReleasesRoute: typeof ReleasesRoute
   WorkRoute: typeof WorkRoute
 }
 
@@ -285,6 +298,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PullsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/releases': {
+      id: '/releases'
+      path: '/releases'
+      fullPath: '/releases'
+      preLoaderRoute: typeof ReleasesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/work': {
       id: '/work'
       path: '/work'
@@ -308,6 +328,7 @@ const rootRouteChildren: RootRouteChildren = {
   LinearRoute: LinearRoute,
   PreviewRoute: PreviewRoute,
   PullsRoute: PullsRoute,
+  ReleasesRoute: ReleasesRoute,
   WorkRoute: WorkRoute,
 }
 export const routeTree = rootRouteImport

@@ -9,6 +9,7 @@ export const VIEW_PATHS = {
   changes: "/changes",
   github: "/pulls",
   ci: "/ci",
+  releases: "/releases",
   linear: "/linear",
   preview: "/preview",
   agents: "/agents",

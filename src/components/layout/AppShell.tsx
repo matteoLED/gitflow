@@ -45,6 +45,8 @@ const PullRequestPage = lazy(() => import("@/features/github/PullRequestPage"));
 const CiPage = lazy(() => import("@/features/ci/CiPage").then((m) => ({ default: m.CiPage })));
 const InboxList = lazy(() => import("@/features/inbox/InboxPage").then((m) => ({ default: m.InboxList })));
 const InboxDetail = lazy(() => import("@/features/inbox/InboxPage").then((m) => ({ default: m.InboxDetail })));
+const ReleasesList = lazy(() => import("@/features/releases/ReleasesPage").then((m) => ({ default: m.ReleasesList })));
+const ReleasesPage = lazy(() => import("@/features/releases/ReleasesPage").then((m) => ({ default: m.ReleasesPage })));
 const CiList = lazy(() => import("@/features/ci/CiPage").then((m) => ({ default: m.CiList })));
 const AssistantPanel = lazy(() => import("@/features/agents/AssistantPanel"));
 const CodeGraphPage = lazy(() => import("@/features/code-graph/CodeGraph").then((m) => ({ default: m.CodeGraphPage })));
@@ -228,6 +230,16 @@ function PageList({ repo, view }: { repo: RepositoryInfo; view: View }) {
         )}
       </ListPanel>
     );
+  if (view === "releases")
+    return (
+      <ListPanel title={t("view.releases")} filterLabel={t("common.filter")}>
+        {(query) => (
+          <Suspense fallback={null}>
+            <ReleasesList repoPath={repo.path} query={query} />
+          </Suspense>
+        )}
+      </ListPanel>
+    );
   if (view === "linear")
     return (
       <ListPanel title="Linear" filterLabel={t("common.filter")} actions={<CreateIssueButton />}>
@@ -291,6 +303,7 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
     view === "inbox" ||
     view === "github" ||
     view === "ci" ||
+    view === "releases" ||
     view === "agents" ||
     view === "preview" ||
     view === "linear" ||
@@ -311,21 +324,23 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
               ? t("view.github")
               : view === "ci"
                 ? "CI"
-                : view === "linear"
-                  ? "Linear"
-                  : t(
-                      view === "agents"
-                        ? "view.agents"
-                        : view === "browser"
-                          ? "view.browser"
-                          : view === "graph"
-                            ? "view.graph"
-                            : view === "editor"
-                              ? "view.editor"
-                              : view === "work"
-                                ? "view.work"
-                                : "view.preview",
-                    )
+                : view === "releases"
+                  ? t("view.releases")
+                  : view === "linear"
+                    ? "Linear"
+                    : t(
+                        view === "agents"
+                          ? "view.agents"
+                          : view === "browser"
+                            ? "view.browser"
+                            : view === "graph"
+                              ? "view.graph"
+                              : view === "editor"
+                                ? "view.editor"
+                                : view === "work"
+                                  ? "view.work"
+                                  : "view.preview",
+                      )
         }
         list={<PageList repo={repo} view={view} />}
       >
@@ -340,6 +355,8 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
             )
           ) : view === "ci" ? (
             <CiPage repoPath={repo.path} />
+          ) : view === "releases" ? (
+            <ReleasesPage repoPath={repo.path} />
           ) : view === "agents" ? (
             <AgentDetail repoPath={repo.path} />
           ) : view === "linear" ? (
