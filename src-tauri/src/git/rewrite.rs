@@ -86,7 +86,7 @@ fn is_ancestor(repo: &Path, ancestor: &str, of: &str) -> bool {
     git_text(repo, &["merge-base", ancestor, of]).is_ok_and(|base| base.trim() == ancestor)
 }
 
-fn on_a_remote(repo: &Path, sha: &str) -> GitResult<bool> {
+pub(crate) fn on_a_remote(repo: &Path, sha: &str) -> GitResult<bool> {
     let out = git_text(repo, &["branch", "-r", "--contains", sha])?;
     Ok(!out.trim().is_empty())
 }
@@ -370,6 +370,47 @@ pub fn interactive_rebase(
     outcome
 }
 
+/// Commits the index as `fixup! <target>` and folds it into `target` with a non-interactive autosquash rebase.
+/// Unstaged changes are stashed for the rebase and put back after (`--autostash`). Only for a commit of the
+/// current branch that isn't on a remote yet; a stop on conflicts is left to the operation bar.
+pub fn fixup(repo: &Path, hash: &str) -> GitResult<Outcome> {
+    if conflicts::operation(repo)?.is_some() {
+        return Err(GitError::invalid(
+            "Finish or abort the operation in progress first.",
+        ));
+    }
+    let sha = single_parent_commit(repo, hash, "fixed up")?;
+    rebase_plan(repo, &sha)?; // on the current branch, no merge on the way, not too many commits
+    if on_a_remote(repo, &sha)? {
+        return Err(GitError::invalid(
+            "This commit is already pushed: fixing it up would need a force-push.",
+        ));
+    }
+    // Exits 1 when something is staged; any other failure shows up again in the commit below.
+    if git(repo, &["diff", "--cached", "--quiet"]).is_ok() {
+        return Err(GitError::invalid("Stage the changes to fold in first."));
+    }
+    git(repo, &["commit", "--quiet", &format!("--fixup={sha}")])?;
+    let parent = parent_of(repo, &sha);
+    let mut args = vec!["rebase", "--interactive", "--autosquash", "--autostash"];
+    match &parent {
+        Some(parent) => args.push(parent),
+        None => args.push("--root"),
+    }
+    // The todo git writes is already right: accept it as is, and any message it would ask for.
+    let env = [("GIT_SEQUENCE_EDITOR", "true"), ("GIT_EDITOR", "true")];
+    let result = git_with(
+        repo,
+        &args,
+        &RunOptions {
+            timeout: NETWORK_TIMEOUT,
+            env: &env,
+            ..RunOptions::default()
+        },
+    );
+    finish(repo, result)
+}
+
 fn run_rebase(
     repo: &Path,
     plan: &[RebaseCommit],
@@ -598,6 +639,97 @@ mod tests {
         assert_eq!(outcome, Outcome::Stopped);
         conflicts::skip_commit(repo.path()).unwrap();
         assert_eq!(subjects(&repo), "init\nc");
+    }
+
+    #[test]
+    fn fixup_folds_staged_changes_into_an_older_commit() {
+        let (repo, h) = three();
+        repo.write("a.txt", "a fixed");
+        repo.write("c.txt", "unstaged");
+        repo.git(&["add", "a.txt"]);
+        assert_eq!(fixup(repo.path(), &h[0]).unwrap(), Outcome::Done);
+        let a_files = repo.git(&["show", "--format=", "--name-only", "HEAD~2"]);
+        let state = (
+            subjects(&repo),
+            repo.git(&["show", "HEAD~2:a.txt"]),
+            a_files,
+            repo.git(&["status", "--porcelain"]),
+        );
+        assert_eq!(
+            state,
+            (
+                "init\na\nb\nc".into(),
+                "a fixed".into(),
+                "a.txt".into(),
+                "M c.txt".into()
+            )
+        );
+    }
+
+    #[test]
+    fn fixup_works_on_the_root_commit() {
+        let (repo, _) = three();
+        let root = repo.git(&["rev-list", "--max-parents=0", "HEAD"]);
+        repo.write("init.txt", "fixed");
+        repo.git(&["add", "init.txt"]);
+        fixup(repo.path(), &root).unwrap();
+        assert_eq!(
+            (subjects(&repo), repo.git(&["show", "HEAD~3:init.txt"])),
+            ("init\na\nb\nc".into(), "fixed".into())
+        );
+    }
+
+    #[test]
+    fn fixup_refuses_without_staged_changes() {
+        let (repo, h) = three();
+        assert!(fixup(repo.path(), &h[0]).is_err());
+    }
+
+    #[test]
+    fn fixup_refuses_a_pushed_commit() {
+        let (repo, h) = three();
+        repo.git(&["update-ref", "refs/remotes/origin/main", &h[0]]);
+        repo.write("a.txt", "a fixed");
+        repo.git(&["add", "a.txt"]);
+        assert!(fixup(repo.path(), &h[0]).is_err());
+        assert_eq!(repo.git(&["rev-parse", "HEAD"]), h[2]);
+    }
+
+    #[test]
+    fn fixup_refuses_a_commit_off_the_branch() {
+        let (repo, h) = three();
+        repo.git(&["checkout", "-q", "-b", "other", &h[0]]);
+        repo.write("x.txt", "x");
+        let other = repo.commit_all("x");
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("a.txt", "a fixed");
+        repo.git(&["add", "a.txt"]);
+        assert!(fixup(repo.path(), &other).is_err());
+    }
+
+    #[test]
+    fn fixup_refuses_a_merge_commit() {
+        let (repo, h) = three();
+        repo.git(&["checkout", "-q", "-b", "side", &h[0]]);
+        repo.write("s.txt", "s");
+        repo.commit_all("s");
+        repo.git(&["checkout", "-q", "main"]);
+        repo.git(&["merge", "-q", "--no-edit", "side"]);
+        let merge = repo.git(&["rev-parse", "HEAD"]);
+        repo.write("a.txt", "a fixed");
+        repo.git(&["add", "a.txt"]);
+        assert!(fixup(repo.path(), &merge).is_err());
+    }
+
+    #[test]
+    fn a_conflicting_fixup_stops_for_the_operation_bar() {
+        let (repo, h) = three();
+        repo.write("b.txt", "b changed");
+        repo.commit_all("d");
+        repo.write("b.txt", "b changed again");
+        repo.git(&["add", "b.txt"]);
+        // Folded into `b`, the change no longer applies on top of the original b.txt.
+        assert_eq!(fixup(repo.path(), &h[1]).unwrap(), Outcome::Stopped);
     }
 
     #[test]

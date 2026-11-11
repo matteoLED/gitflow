@@ -8,6 +8,7 @@ import { pickAgent } from "@/features/agents/AgentButton";
 import { startAgentRun, useInstalledAgents } from "@/features/agents/use-agents";
 import { finalAnswer, useAgentsStore } from "@/stores/agents-store";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { PanelHeader } from "@/components/layout/panel";
 import { useCommits, useRefs, useWorkingTree } from "@/lib/git-queries";
@@ -189,25 +190,48 @@ function SplitBanner({ step, onStop }: { step: number; onStop: () => void }) {
   );
 }
 
+/** Whether HEAD can be amended without rewriting published history: not when its upstream already has it. */
+function useAmendable(repoPath: string) {
+  const refs = useRefs(repoPath).data;
+  const branch = refs?.branches.find((b) => b.name === refs.head.branch);
+  return {
+    available: refs !== undefined && !refs.head.unborn,
+    pushed: !!branch?.upstream && branch.ahead === 0,
+  };
+}
+
 function CommitForm({ repoPath, stagedCount, changed }: { repoPath: string; stagedCount: number; changed: string[] }) {
   const t = useT();
   const [message, setMessage] = useState("");
+  // The message typed before turning Amend on, given back when it's turned off.
+  const [draft, setDraft] = useState<string | null>(null);
   const [splitStep, setSplitStep] = useState<number | null>(null);
+  const amendable = useAmendable(repoPath);
+  const amend = draft !== null && amendable.available && !amendable.pushed;
   const generated = useAgentAnswer(repoPath, { kind: "commit-message" }, t("agents.commitMessage"), setMessage);
   const commit = useGitAction(repoPath, {
-    run: () => gitBackend.createCommit(repoPath, message),
-    success: t("changes.committed"),
-    failure: t("changes.commitFailed"),
+    run: () => (amend ? gitBackend.amendCommit(repoPath, message) : gitBackend.createCommit(repoPath, message)),
+    success: amend ? t("changes.amended") : t("changes.committed"),
+    failure: amend ? t("changes.amendFailed") : t("changes.commitFailed"),
   });
-  const canCommit = stagedCount > 0 && message.trim().length > 0 && !commit.isPending;
+  const canCommit = (amend || stagedCount > 0) && message.trim().length > 0 && !commit.isPending;
   const submit = () =>
     canCommit &&
     commit.mutate(undefined, {
       onSuccess: () => {
         setMessage("");
+        setDraft(null);
         setSplitStep((step) => (step === null ? null : step + 1));
       },
     });
+  const toggleAmend = (on: boolean) => {
+    if (!on) {
+      setMessage(draft ?? "");
+      return setDraft(null);
+    }
+    setDraft(message);
+    gitBackend.headMessage(repoPath).then(setMessage, () => undefined);
+  };
 
   return (
     <form
@@ -246,7 +270,11 @@ function CommitForm({ repoPath, stagedCount, changed }: { repoPath: string; stag
       )}
       <Button type="submit" disabled={!canCommit}>
         {commit.isPending && <BrailleLoader />}
-        {stagedCount === 0 ? t("changes.stageFirst") : t.plural("changes.commit", stagedCount)}
+        {amend
+          ? t("changes.amendSubmit")
+          : stagedCount === 0
+            ? t("changes.stageFirst")
+            : t.plural("changes.commit", stagedCount)}
       </Button>
       <div className="flex flex-wrap gap-1">
         {splitStep === null && (
@@ -263,6 +291,18 @@ function CommitForm({ repoPath, stagedCount, changed }: { repoPath: string; stag
           </Button>
         )}
         <AiSplit repoPath={repoPath} changed={changed} />
+        {amendable.available && (
+          <label
+            title={t(amendable.pushed ? "changes.amendPushed" : "changes.amendHint")}
+            className={cn(
+              "ml-auto flex h-7 items-center gap-2 px-2 text-[12.5px] text-muted-foreground",
+              amendable.pushed && "opacity-50",
+            )}
+          >
+            <Checkbox checked={amend} disabled={amendable.pushed} onCheckedChange={(v) => toggleAmend(v === true)} />
+            {t("changes.amend")}
+          </label>
+        )}
       </div>
     </form>
   );

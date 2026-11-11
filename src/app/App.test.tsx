@@ -23,6 +23,8 @@ vi.mock("@/lib/tauri-git", () => ({
     stageFiles: vi.fn(),
     unstageFiles: vi.fn(),
     createCommit: vi.fn(),
+    amendCommit: vi.fn(),
+    headMessage: vi.fn(),
     switchBranch: vi.fn(),
     createBranch: vi.fn(),
     fetch: vi.fn(),
@@ -213,6 +215,23 @@ describe("changes view", () => {
     await userEvent.keyboard("Fix typo");
     await userEvent.click(await screen.findByRole("button", { name: "Commit 1 file" }));
     expect(backend.createCommit).toHaveBeenCalledWith(REPO.path, "Fix typo");
+  });
+
+  it("amends the last commit, starting from its message", async () => {
+    backend.headMessage.mockResolvedValue("Previous message");
+    renderApp();
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Amend" }));
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Commit message" })).toHaveValue("Previous message"),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Amend last commit" }));
+    expect(backend.amendCommit).toHaveBeenCalledWith(REPO.path, "Previous message");
+  });
+
+  it("won't amend a commit its upstream already has", async () => {
+    backend.listRefs.mockResolvedValue({ ...REFS, branches: [{ ...REFS.branches[0], ahead: 0 }] });
+    renderApp();
+    expect(await screen.findByRole("checkbox", { name: "Amend" })).toBeDisabled();
   });
 });
 

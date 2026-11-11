@@ -35,6 +35,30 @@ pub fn unstage(repo: &Path, paths: &[String]) -> GitResult<()> {
 
 /// Commits the index; returns the new commit hash.
 pub fn commit(repo: &Path, message: &str) -> GitResult<String> {
+    commit_index(repo, message, &["commit", "--quiet", "--file=-"])
+}
+
+/// Replaces HEAD with the index and `message`; returns the new hash. Never a commit already on a remote:
+/// that would need a force-push.
+pub fn amend(repo: &Path, message: &str) -> GitResult<String> {
+    if head(repo)?.unborn {
+        return Err(GitError::invalid("There's no commit to amend yet."));
+    }
+    if super::rewrite::on_a_remote(repo, "HEAD")? {
+        return Err(GitError::invalid(
+            "The last commit is already pushed: amending it would need a force-push.",
+        ));
+    }
+    commit_index(repo, message, &["commit", "--quiet", "--amend", "--file=-"])
+}
+
+/// HEAD's full message, to start an amend from.
+pub fn head_message(repo: &Path) -> GitResult<String> {
+    let text = git_text(repo, &["log", "-1", "--format=%B", "HEAD", "--"])?;
+    Ok(text.trim_end().to_string())
+}
+
+fn commit_index(repo: &Path, message: &str, args: &[&str]) -> GitResult<String> {
     let message = message.trim();
     if message.is_empty() {
         return Err(GitError::invalid("Write a commit message first."));
@@ -43,7 +67,7 @@ pub fn commit(repo: &Path, message: &str) -> GitResult<String> {
         stdin: Some(message.as_bytes()),
         ..RunOptions::default()
     };
-    git_with(repo, &["commit", "--quiet", "--file=-"], &opts)?;
+    git_with(repo, args, &opts)?;
     Ok(git_text(repo, &["rev-parse", "HEAD"])?.trim().to_string())
 }
 
@@ -421,6 +445,36 @@ mod tests {
             working_tree(repo.path()).unwrap()[0].unstaged,
             Some(FileStatus::Untracked)
         );
+    }
+
+    #[test]
+    fn amend_rewrites_head_with_the_index_and_message() {
+        let repo = committed_repo();
+        repo.write("b.txt", "b\n");
+        stage(repo.path(), &["b.txt".into()]).unwrap();
+        amend(repo.path(), "Initial, amended\n\nBody").unwrap();
+        let commit = (
+            repo.git(&["log", "--format=%B"]),
+            repo.git(&["show", "--format=", "--name-only"]),
+        );
+        assert_eq!(
+            commit,
+            ("Initial, amended\n\nBody".into(), "a.txt\nb.txt".into())
+        );
+    }
+
+    #[test]
+    fn head_message_returns_the_full_message() {
+        let repo = committed_repo();
+        repo.git(&["commit", "-q", "--amend", "-m", "Title", "-m", "Body"]);
+        assert_eq!(head_message(repo.path()).unwrap(), "Title\n\nBody");
+    }
+
+    #[test]
+    fn amend_refuses_a_pushed_commit() {
+        let repo = committed_repo();
+        repo.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        assert!(amend(repo.path(), "Rewritten").is_err());
     }
 
     #[test]

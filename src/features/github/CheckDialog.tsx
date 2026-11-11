@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, Copy, ExternalLink, MoreHorizontal, RefreshCw, X } from "lucide-react";
+import { Check, ChevronDown, Copy, ExternalLink, MoreHorizontal, MousePointer2, RefreshCw, X } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { GithubIcon } from "@/components/github-icon";
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -16,7 +16,7 @@ import { useNoticesStore } from "@/stores/notices-store";
 import { toGitError } from "@/lib/errors";
 import { gitBackend } from "@/lib/tauri-git";
 import type { PullRequestCheck, PullRequestDetails } from "@/types/git";
-import { CheckIcon, checkDuration, checkLabel, checkOutcome, runIdOf } from "./ChecksMenu";
+import { CheckIcon, checkDuration, checkLabel, checkOutcome, resolveWithAgent, runIdOf } from "./ChecksMenu";
 import { JobLogView } from "./JobLog";
 import { cleanLine, jobIdOf, logByStep } from "./PullRequestCi";
 
@@ -110,6 +110,7 @@ function CheckFooter({ repoPath, pr, check }: { repoPath: string; pr: PullReques
   const client = useQueryClient();
   const notify = useNoticesStore((s) => s.notify);
   const [copied, setCopied] = useState(false);
+  const [fixing, setFixing] = useState(false);
   const sha = pr.commits[pr.commits.length - 1]?.oid ?? "";
   const outcome = checkOutcome(check);
   const runId = runIdOf(check);
@@ -185,6 +186,21 @@ function CheckFooter({ repoPath, pr, check }: { repoPath: string; pr: PullReques
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {outcome === "fail" && (
+        <button
+          type="button"
+          title={t("checks.fixWithAgent")}
+          disabled={fixing}
+          onClick={() => {
+            setFixing(true);
+            void resolveWithAgent(repoPath, pr, [check]).finally(() => setFixing(false));
+          }}
+          className="flex shrink-0 items-center gap-1.5 rounded-md border border-white/10 px-2 py-1 hover:enabled:bg-white/[0.06] disabled:opacity-50"
+        >
+          {fixing ? <BrailleLoader /> : <MousePointer2 aria-hidden className="size-3.5" />}
+          {t("checks.fix")}
+        </button>
+      )}
       <button
         type="button"
         disabled={runId === null || outcome === "pending" || rerun.isPending}

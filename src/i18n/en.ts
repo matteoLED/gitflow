@@ -292,6 +292,12 @@ export const en = {
   "changes.commit_other": "Commit {count} files",
   "changes.committed": "Commit created",
   "changes.commitFailed": "Commit failed",
+  "changes.amend": "Amend",
+  "changes.amendHint": "Replace the last commit with the staged changes and this message",
+  "changes.amendPushed": "The last commit is already pushed: amending it would need a force-push",
+  "changes.amendSubmit": "Amend last commit",
+  "changes.amended": "Commit amended",
+  "changes.amendFailed": "Amend failed",
   "changes.sideStaged": "Staged changes (index vs. HEAD)",
   "changes.sideUnstaged": "Unstaged changes (working tree vs. index)",
   "changes.sideUntracked": "New untracked file",
@@ -1131,7 +1137,8 @@ export const en = {
   "agents.flow": "Flow",
 
   "linear.startWith": "Start with {agent}",
-  "linear.startHint": "The agent implements the issue on the current branch, in the mode chosen on the Agents page.",
+  "linear.startHint":
+    "The agent implements the issue in its own worktree, on Linear's branch for it, and the issue moves to In Progress.",
 
   "checks.rerunStarted": "Failing checks re-run",
   "checks.rerunFailed": "Couldn't re-run the checks",
@@ -1149,6 +1156,7 @@ export const en = {
   "checks.copyFailed": "Couldn't copy",
   "checks.rerun": "Re-run",
   "checks.fixWithAgent": "Fix with an agent",
+  "checks.fix": "Fix",
   "comments.add": "Comment this line",
   "comments.placeholder": "Leave a code comment…",
   "comments.reply": "Leave a reply…",
@@ -1360,6 +1368,8 @@ export const en = {
   "rewrite.rebaseFromHere": "Interactive rebase from here…",
   "rewrite.cherryPicked": "Cherry-picked {sha}",
   "rewrite.reverted": "Reverted {sha}",
+  "rewrite.fixup": "Fixup staged changes into this commit",
+  "rewrite.fixedUp": "Staged changes folded into {sha}",
   "rewrite.stopped": "Stopped on conflicts",
   "rewrite.stoppedHint": "Resolve them, then Continue in the bar at the top — or Abort to go back.",
   "rewrite.failed": "Couldn't rewrite history",
@@ -1466,6 +1476,7 @@ export const en = {
   "undo.title.amend": "Undo amend",
   "undo.title.merge": "Undo merge",
   "undo.title.rebase": "Undo rebase",
+  "undo.title.fixup": "Undo fixup",
   "undo.title.pull": "Undo pull",
   "undo.title.reset": "Undo reset",
   "undo.title.checkout": "Undo checkout",
@@ -1477,6 +1488,8 @@ export const en = {
     "Undo merge of {label}: moves {branch} back to {target}. Local changes are kept; Git refuses if they would be lost.",
   "undo.rebase":
     "Undo rebase: moves {branch} back to {target}, where it was before the rebase. Local changes are kept; Git refuses if they would be lost.",
+  "undo.fixup":
+    "Undo the fixup into “{label}”: moves {branch} back to {target}, before the fixup. The folded changes stay staged.",
   "undo.pull":
     "Undo pull: moves {branch} back to {target}, where it was before the pull. Local changes are kept; Git refuses if they would be lost.",
   "undo.reset":

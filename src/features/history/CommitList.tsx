@@ -397,6 +397,14 @@ export function CommitList({ repoPath }: { repoPath: string }) {
         success: t("rewrite.reverted", { sha: c.hash.slice(0, 7) }),
       }),
     rebaseFrom: historyRev === null ? (c) => setRebaseFrom(c.hash) : undefined,
+    fixup:
+      historyRev === null
+        ? (c) =>
+            rewrite.mutate({
+              run: () => gitBackend.fixupCommit(repoPath, c.hash),
+              success: t("rewrite.fixedUp", { sha: c.hash.slice(0, 7) }),
+            })
+        : undefined,
     busy: rewrite.isPending,
   };
 

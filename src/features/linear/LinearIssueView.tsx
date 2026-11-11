@@ -99,15 +99,15 @@ function useCreateBranch(repoPath: string) {
   });
 }
 
-/** Starts Claude Code or Codex on the issue, in the composer's mode, and shows the run. */
-function StartAgent({ repoPath, issue }: { repoPath: string; issue: LinearIssueDetail }) {
+/** Starts Claude Code or Codex on the issue, in its own worktree on Linear's branch, and shows the run. */
+function StartAgent({ repoPath, orgId, issue }: { repoPath: string; orgId?: string; issue: LinearIssueDetail }) {
   const t = useT();
   const installed = useInstalledAgents().data;
   const preferred = useAgentsStore((s) => s.preferredAgent);
   const [starting, setStarting] = useState(false);
   const start = async (agent: AgentKind) => {
     setStarting(true);
-    await startIssueAgent(repoPath, agent, issue);
+    await startIssueAgent(repoPath, agent, issue, orgId);
     setStarting(false);
   };
   const available = (kind: AgentKind) => installed?.find((a) => a.kind === kind)?.installed ?? false;
@@ -195,7 +195,7 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
         <ChevronRight aria-hidden className="size-3.5 text-muted-foreground/60" />
         <span className="font-medium">{data.identifier}</span>
         <div className="ml-auto flex items-center gap-1">
-          <StartAgent repoPath={repoPath} issue={data} />
+          <StartAgent repoPath={repoPath} orgId={issue.orgId} issue={data} />
           <Button
             variant="ghost"
             size="sm"

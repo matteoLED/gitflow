@@ -99,7 +99,7 @@ export const gitBackend = {
     invoke<string | null>("get_avatar_url", { repoPath, hash, email }),
   listPullRequests: (repoPath: string) => invoke<PullRequest[]>("list_pull_requests", { repoPath }),
   /** Fetches the PR head into FETCH_HEAD (no branch created); returns its commit range and merge-base. */
-  fetchPullRequest: (repoPath: string, pr: PullRequest) =>
+  fetchPullRequest: (repoPath: string, pr: Pick<PullRequest, "number" | "baseRefName" | "headRefOid">) =>
     invoke<PullRequestRange>("fetch_pull_request", {
       repoPath,
       number: pr.number,
@@ -245,6 +245,8 @@ export const gitBackend = {
   cherryPickCommit: (repoPath: string, hash: string) =>
     invoke<RewriteOutcome>("cherry_pick_commit", { repoPath, hash }),
   revertCommit: (repoPath: string, hash: string) => invoke<RewriteOutcome>("revert_commit", { repoPath, hash }),
+  /** Commits the staged changes as `fixup!` of `hash` and autosquashes them into it. */
+  fixupCommit: (repoPath: string, hash: string) => invoke<RewriteOutcome>("fixup_commit", { repoPath, hash }),
   rebasePlan: (repoPath: string, from: string) => invoke<RebaseCommit[]>("rebase_plan", { repoPath, from }),
   /** Refuses with `alreadyPushed` unless `confirmed` when the rewritten commits are on a remote. */
   interactiveRebase: (repoPath: string, from: string, steps: RebaseStep[], confirmed: boolean) =>
@@ -254,7 +256,9 @@ export const gitBackend = {
   /** Resolves whole files with one side, then marks them resolved. */
   resolveWithSide: (repoPath: string, paths: string[], theirs: boolean) =>
     invoke<null>("resolve_with_side", { repoPath, paths, theirs }),
-  createAgentWorktree: (repoPath: string) => invoke<Worktree>("create_agent_worktree", { repoPath }),
+  /** From `base` (else HEAD), on `branch` (reused when free, else suffixed) or a new `agent/<id>` branch. */
+  createAgentWorktree: (repoPath: string, base?: string | null, branch?: string | null) =>
+    invoke<Worktree>("create_agent_worktree", { repoPath, base: base ?? null, branch: branch ?? null }),
   agentWorktreeStatus: (repoPath: string, path: string) =>
     invoke<WorktreeStatus>("agent_worktree_status", { repoPath, path }),
   /** Commits what the agent left, then merges its branch into the current one. */
@@ -265,9 +269,9 @@ export const gitBackend = {
     invoke<string>("compare_agent_worktrees", { repoPath, a, b }),
   mergeAgentWorktree: (repoPath: string, path: string, message: string) =>
     invoke<null>("merge_agent_worktree", { repoPath, path, message }),
-  /** Commits what's left, pushes the agent's branch and opens a PR into the current branch; resolves with its URL. */
-  publishAgentWorktree: (repoPath: string, path: string, title: string, body: string) =>
-    invoke<string>("publish_agent_worktree", { repoPath, path, title, body }),
+  /** Commits what's left, pushes the agent's branch and opens a PR into `target` (else the current branch). */
+  publishAgentWorktree: (repoPath: string, path: string, title: string, body: string, target?: string) =>
+    invoke<string>("publish_agent_worktree", { repoPath, path, title, body, target: target ?? null }),
   removeAgentWorktree: (repoPath: string, path: string, deleteBranch: boolean) =>
     invoke<null>("remove_agent_worktree", { repoPath, path, deleteBranch }),
   /** Claude Code's custom commands and skills, project then user. */
@@ -333,6 +337,9 @@ export const gitBackend = {
   stageFiles: (repoPath: string, paths: string[]) => invoke<null>("stage_files", { repoPath, paths }),
   unstageFiles: (repoPath: string, paths: string[]) => invoke<null>("unstage_files", { repoPath, paths }),
   createCommit: (repoPath: string, message: string) => invoke<string>("create_commit", { repoPath, message }),
+  /** Replaces HEAD with the index and `message`; refused once HEAD is on a remote. */
+  amendCommit: (repoPath: string, message: string) => invoke<string>("amend_commit", { repoPath, message }),
+  headMessage: (repoPath: string) => invoke<string>("head_message", { repoPath }),
   /** Applies hunks of one file's diff (from `buildPartialPatch`) to the index or, for discard, the working tree. */
   applyHunks: (repoPath: string, path: string, hunks: string, mode: PatchMode) =>
     invoke<null>("apply_hunks", { repoPath, path, hunks, mode }),

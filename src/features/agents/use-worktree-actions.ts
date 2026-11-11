@@ -41,7 +41,13 @@ export function useWorktreeActions(repoPath: string, worktree: Worktree, title: 
     });
   const publish = () =>
     act.mutate(async () => {
-      const url = await gitBackend.publishAgentWorktree(repoPath, worktree.path, title, t("worktree.prBody"));
+      const url = await gitBackend.publishAgentWorktree(
+        repoPath,
+        worktree.path,
+        title,
+        t("worktree.prBody"),
+        worktree.target,
+      );
       notify({ tone: "success", title: t("worktree.published", { branch: worktree.branch }), detail: url });
       if (url) await gitBackend.openGithubUrl(url);
     });

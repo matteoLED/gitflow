@@ -176,7 +176,7 @@ pub fn list_workflow_runs(repo: &Path) -> GitResult<serde_json::Value> {
 /// One run with its jobs and their steps.
 pub fn workflow_run(repo: &Path, id: u64) -> GitResult<serde_json::Value> {
     let id = id.to_string();
-    let fields = "databaseId,displayTitle,workflowName,status,conclusion,headBranch,event,createdAt,updatedAt,url,jobs";
+    let fields = "databaseId,displayTitle,workflowName,status,conclusion,headBranch,headSha,event,createdAt,updatedAt,url,jobs";
     gh_json(repo, &["run", "view", &id, "--json", fields])
 }
 

@@ -95,7 +95,7 @@ function CreateForm({ onDone, initial }: { onDone: () => void; initial?: IssueDr
       notify({ tone: "success", title: t("linear.created", { id: issue.identifier }) });
       onDone();
       if (after !== "open" && repoPath) {
-        await startIssueAgent(repoPath, after, issue);
+        await startIssueAgent(repoPath, after, issue, orgId);
       } else if (orgId) {
         useLinearStore.getState().setIssue(issue.id, orgId);
         useWorkspaceStore.getState().setView("linear");

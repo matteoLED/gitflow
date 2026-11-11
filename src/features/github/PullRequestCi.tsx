@@ -16,6 +16,7 @@ import type { PullRequestDetails, WorkflowJob, WorkflowRun } from "@/types/git";
 import { StatusIcon, ghStatus } from "@/features/agents/status";
 import { parseAnsi, stripAnsi } from "./ansi";
 import { checkOutcome, resolveWithAgent } from "./ChecksMenu";
+import { fixCiWithAgent } from "./ci-fix";
 import { JobLogView } from "./JobLog";
 
 export const jobIdOf = (job: WorkflowJob) => Number(job.url.match(/\/job\/(\d+)/)?.[1] ?? 0) || null;
@@ -126,6 +127,16 @@ export function RunDetail({ repoPath, pr, id }: { repoPath: string; pr?: PullReq
     },
     onError: (error) => notify({ tone: "error", title: t("checks.rerunFailed"), detail: toGitError(error).message }),
   });
+  const [fixing, setFixing] = useState(false);
+  // Outside a PR (the CI page): the run's failed jobs, from the commit it ran on.
+  const fixRun = async (data: WorkflowRun) => {
+    const failures = (data.jobs ?? [])
+      .filter((j) => j.conclusion === "failure" || j.conclusion === "timed_out")
+      .map((j) => ({ name: j.name, workflow: data.workflowName, jobId: jobIdOf(j), runId: data.databaseId }));
+    setFixing(true);
+    await fixCiWithAgent(repoPath, { branch: data.headBranch, pr: null, failures }, data.headSha ?? "");
+    setFixing(false);
+  };
   if (run.isError)
     return <DataUnavailable title={t("agents.actionsError")} error={run.error} onRetry={() => void run.refetch()} />;
   if (!run.data) return <PanelLoading title={t("agents.loadingRun")} variant="grid-syncing" />;
@@ -154,6 +165,18 @@ export function RunDetail({ repoPath, pr, id }: { repoPath: string; pr?: PullReq
             >
               <MousePointer2 aria-hidden className="size-3.5" />
               {t("checks.resolveWithAgent")}
+            </Button>
+          )}
+          {!pr && failed && data.headSha && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={fixing}
+              onClick={() => void fixRun(data)}
+              className="h-7 gap-1.5 rounded-full text-[12.5px]"
+            >
+              {fixing ? <BrailleLoader /> : <MousePointer2 aria-hidden className="size-3.5" />}
+              {t("checks.fixWithAgent")}
             </Button>
           )}
           {failed && (

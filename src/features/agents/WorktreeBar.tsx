@@ -29,6 +29,8 @@ export function WorktreeBar({
     title,
     running,
   );
+  // A CI fix's pull request goes into the branch it fixes; anything else into the checked-out branch.
+  const into = worktree.target ?? current;
   // Removed (here or by hand): nothing left to act on.
   if (status.isError) return null;
   return (
@@ -62,13 +64,13 @@ export function WorktreeBar({
         {busy && <BrailleLoader className="text-primary" />}
         <button
           type="button"
-          disabled={running || changes === 0 || busy || !current}
+          disabled={running || changes === 0 || busy || !into}
           title={running ? t("worktree.waitAgent") : undefined}
           onClick={publish}
           className={`${BUTTON} text-foreground hover:bg-white/[0.08]`}
         >
           <GitPullRequestArrow aria-hidden className="size-3.5" />
-          {current ? t("worktree.prInto", { branch: current }) : t("worktree.pr")}
+          {into ? t("worktree.prInto", { branch: into }) : t("worktree.pr")}
         </button>
         <button
           type="button"

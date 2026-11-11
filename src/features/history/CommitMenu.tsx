@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { GitCommitVertical, ListOrdered, Undo2 } from "lucide-react";
+import { GitCommitVertical, ListOrdered, ArrowDownToDot, Undo2 } from "lucide-react";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { useT } from "@/i18n";
 import type { CommitSummary } from "@/types/git";
@@ -11,12 +11,14 @@ export type CommitActions = {
   revert: (commit: CommitSummary) => void;
   /** Only when viewing the current branch. */
   rebaseFrom?: (commit: CommitSummary) => void;
+  /** Only when viewing the current branch. */
+  fixup?: (commit: CommitSummary) => void;
   busy: boolean;
 };
 
 const ITEM = "text-[12.5px]";
 
-/** Right-click menu of a commit row. Merge commits can't be cherry-picked, reverted or rebased from here. */
+/** Right-click menu of a commit row. Merge commits can't be cherry-picked, reverted, rebased from or fixed up here. */
 export function CommitMenu({
   commit,
   actions,
@@ -27,7 +29,7 @@ export function CommitMenu({
   children: ReactNode;
 }) {
   const t = useT();
-  const { cherryPick, revert, rebaseFrom, busy } = actions;
+  const { cherryPick, revert, rebaseFrom, fixup, busy } = actions;
   const merge = commit.parents.length > 1;
   return (
     <ContextMenu>
@@ -47,6 +49,12 @@ export function CommitMenu({
           <ContextMenuItem className={ITEM} disabled={busy || merge} onSelect={() => rebaseFrom(commit)}>
             <ListOrdered />
             {t("rewrite.rebaseFromHere")}
+          </ContextMenuItem>
+        )}
+        {fixup && (
+          <ContextMenuItem className={ITEM} disabled={busy || merge} onSelect={() => fixup(commit)}>
+            <ArrowDownToDot />
+            {t("rewrite.fixup")}
           </ContextMenuItem>
         )}
       </ContextMenuContent>

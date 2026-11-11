@@ -33,6 +33,13 @@ describe("agent run settings", () => {
     expect(settingsOf()?.mode).toBe("plan");
   });
 
+  it("runs on a named branch in its own worktree, able to edit even when the composer plans", async () => {
+    useAgentsStore.setState({ runSettings: { mode: "plan", model: null, effort: null } });
+    await startAgentRun("/r", "claude", { kind: "custom", prompt: "a" }, "a", undefined, [], undefined, "eng-1");
+    expect(vi.mocked(gitBackend.createAgentWorktree)).toHaveBeenCalledWith("/r", null, "eng-1");
+    expect(settingsOf()).toMatchObject({ mode: "accept-edits", worktree: "/wt/1" });
+  });
+
   it("runs an isolated conversation in a new worktree, and its follow-ups in the same one", async () => {
     useAgentsStore.setState({ runSettings: { mode: "auto", model: null, effort: null, isolated: true } });
     await startAgentRun("/r", "claude", { kind: "custom", prompt: "a" }, "a");

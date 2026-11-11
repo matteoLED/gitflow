@@ -205,8 +205,13 @@ pub async fn resolve_with_side(
 }
 
 #[tauri::command]
-pub async fn create_agent_worktree(repo_path: String) -> GitResult<worktrees::Worktree> {
-    blocking(move || worktrees::create(&repo(&repo_path)?)).await
+pub async fn create_agent_worktree(
+    repo_path: String,
+    base: Option<String>,
+    branch: Option<String>,
+) -> GitResult<worktrees::Worktree> {
+    blocking(move || worktrees::create(&repo(&repo_path)?, base.as_deref(), branch.as_deref()))
+        .await
 }
 
 #[tauri::command]
@@ -238,8 +243,12 @@ pub async fn publish_agent_worktree(
     path: String,
     title: String,
     body: String,
+    target: Option<String>,
 ) -> GitResult<String> {
-    blocking(move || worktrees::publish(&repo(&repo_path)?, &path, &title, &body)).await
+    blocking(move || {
+        worktrees::publish(&repo(&repo_path)?, &path, &title, &body, target.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -953,6 +962,21 @@ pub async fn commit_groups(
 #[tauri::command]
 pub async fn create_commit(repo_path: String, message: String) -> GitResult<String> {
     blocking(move || write::commit(&repo(&repo_path)?, &message)).await
+}
+
+#[tauri::command]
+pub async fn amend_commit(repo_path: String, message: String) -> GitResult<String> {
+    blocking(move || write::amend(&repo(&repo_path)?, &message)).await
+}
+
+#[tauri::command]
+pub async fn head_message(repo_path: String) -> GitResult<String> {
+    blocking(move || write::head_message(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn fixup_commit(repo_path: String, hash: String) -> GitResult<rewrite::Outcome> {
+    blocking(move || rewrite::fixup(&repo(&repo_path)?, &hash)).await
 }
 
 #[tauri::command]

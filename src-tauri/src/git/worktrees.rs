@@ -54,21 +54,96 @@ fn new_id() -> String {
     format!("{:x}", nanos & 0xffff_ffff_ffff)
 }
 
-/// A new worktree on a new `agent/<id>` branch, from the current HEAD (uncommitted changes stay where they are).
-pub fn create(repo: &Path) -> GitResult<Worktree> {
-    create_at(repo, &root(repo)?)
+/// A new worktree from `base` (an existing commit-ish, e.g. a PR's head) or the current HEAD. The user's own
+/// checkout is never touched: uncommitted changes stay where they are. It's on a new `agent/<id>` branch, or on
+/// `branch` when given: reused if it exists and isn't checked out elsewhere (then `base` is ignored), else
+/// `branch-2`, `-3`… An invalid name falls back to `agent/<id>`.
+pub fn create(repo: &Path, base: Option<&str>, branch: Option<&str>) -> GitResult<Worktree> {
+    create_at(repo, &root(repo)?, base, branch)
 }
 
-fn create_at(repo: &Path, root: &Path) -> GitResult<Worktree> {
+fn create_at(
+    repo: &Path,
+    root: &Path,
+    base: Option<&str>,
+    branch: Option<&str>,
+) -> GitResult<Worktree> {
+    let base = match base {
+        Some(name) => resolved_commit(repo, name)?,
+        None => "HEAD".to_string(),
+    };
     let id = new_id();
-    let branch = format!("agent/{id}");
     std::fs::create_dir_all(root).map_err(|e| GitError::invalid(e.to_string()))?;
     let path = root.join(&id).to_string_lossy().into_owned();
+    let wanted = branch.filter(|b| valid_branch(repo, b));
+    if let Some(name) = wanted
+        && branch_exists(repo, name)
+        && !checked_out(repo, name)?
+    {
+        git(repo, &["worktree", "add", "-q", &path, name])?;
+        return Ok(Worktree {
+            path,
+            branch: name.into(),
+        });
+    }
+    let branch = match wanted {
+        Some(name) => unused_name(repo, name),
+        None => format!("agent/{id}"),
+    };
     git(
         repo,
-        &["worktree", "add", "-q", "-b", &branch, &path, "HEAD"],
+        &["worktree", "add", "-q", "-b", &branch, &path, &base],
     )?;
     Ok(Worktree { path, branch })
+}
+
+/// A well-formed branch name (no `@{-1}` shorthands, no leading dash that could pass for a flag).
+fn valid_branch(repo: &Path, name: &str) -> bool {
+    !name.starts_with('-')
+        && git(repo, &["check-ref-format", &format!("refs/heads/{name}")]).is_ok()
+}
+
+fn branch_exists(repo: &Path, name: &str) -> bool {
+    let full = format!("refs/heads/{name}");
+    git(repo, &["rev-parse", "--verify", "--quiet", &full]).is_ok()
+}
+
+/// Whether any worktree of the repository (its main one included) has `name` checked out.
+fn checked_out(repo: &Path, name: &str) -> GitResult<bool> {
+    let line = format!("branch refs/heads/{name}");
+    Ok(git_text(repo, &["worktree", "list", "--porcelain"])?
+        .lines()
+        .any(|l| l == line))
+}
+
+/// `name` if free, else the first of `name-2`, `name-3`… that doesn't exist yet.
+fn unused_name(repo: &Path, name: &str) -> String {
+    std::iter::once(name.to_string())
+        .chain((2..).map(|n| format!("{name}-{n}")))
+        .find(|b| !branch_exists(repo, b))
+        .unwrap_or_default()
+}
+
+/// The commit a validated revision names, refused when it doesn't exist here.
+fn resolved_commit(repo: &Path, name: &str) -> GitResult<String> {
+    let name = super::validate::revision(name.trim())?;
+    let commit = format!("{name}^{{commit}}");
+    git_text(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &commit,
+        ],
+    )
+    .map(|out| out.trim().to_string())
+    .map_err(|_| {
+        GitError::invalid(format!(
+            "“{name}” isn't in this repository yet: fetch, then try again."
+        ))
+    })
 }
 
 /// The repository's agent worktrees (others the user made by hand aren't the app's to touch).
@@ -210,12 +285,22 @@ fn commit_leftovers<'a>(dir: &Path, message: &'a str) -> GitResult<&'a str> {
 
 /// Opens a pull request of the agent's branch into the branch checked out in the repository: what's left
 /// uncommitted is committed with `title`, the branch is pushed, then `gh pr create`. Returns the PR's URL.
-pub fn publish(repo: &Path, path: &str, title: &str, body: &str) -> GitResult<String> {
+/// Opens the pull request into `target` (a failing PR's branch the agent fixed), else the checked-out branch.
+pub fn publish(
+    repo: &Path,
+    path: &str,
+    title: &str,
+    body: &str,
+    target: Option<&str>,
+) -> GitResult<String> {
     let worktree = owned(repo, &root(repo)?, path)?;
     let dir = Path::new(&worktree.path);
-    let base = super::read::head(repo)?
-        .branch
-        .ok_or_else(|| GitError::invalid("Check out the branch the pull request should target."))?;
+    let base = match target {
+        Some(target) => super::validate::revision(target)?.to_string(),
+        None => super::read::head(repo)?.branch.ok_or_else(|| {
+            GitError::invalid("Check out the branch the pull request should target.")
+        })?,
+    };
     // Checked before anything is committed or pushed: a run's title is the start of its prompt, possibly
     // several lines, which `gh pr create` would refuse after the push.
     let title = one_line_title(title);
@@ -267,7 +352,7 @@ mod tests {
     #[test]
     fn an_agent_worktree_merges_back_with_its_uncommitted_work() {
         let (repo, _dir, root) = setup();
-        let worktree = create_at(repo.path(), &root).unwrap();
+        let worktree = create_at(repo.path(), &root, None, None).unwrap();
         assert_eq!(
             list_at(repo.path(), &root).unwrap(),
             std::slice::from_ref(&worktree)
@@ -287,9 +372,29 @@ mod tests {
     }
 
     #[test]
+    fn a_worktree_can_start_from_another_commit_without_touching_the_checkout() {
+        let (repo, _dir, root) = setup();
+        repo.git(&["branch", "pr-head"]);
+        repo.write("a.txt", "two\n");
+        repo.commit_all("next");
+        let worktree = create_at(repo.path(), &root, Some("pr-head"), None).unwrap();
+        assert_eq!(
+            fs::read_to_string(Path::new(&worktree.path).join("a.txt")).unwrap(),
+            "one\n"
+        );
+    }
+
+    #[test]
+    fn a_worktree_base_that_is_an_option_or_unknown_is_refused() {
+        let (repo, _dir, root) = setup();
+        assert!(create_at(repo.path(), &root, Some("--orphan"), None).is_err());
+        assert!(create_at(repo.path(), &root, Some("nope"), None).is_err());
+    }
+
+    #[test]
     fn removing_drops_the_worktree_and_its_branch() {
         let (repo, _dir, root) = setup();
-        let worktree = create_at(repo.path(), &root).unwrap();
+        let worktree = create_at(repo.path(), &root, None, None).unwrap();
         remove_at(repo.path(), &root, &worktree.path, true).unwrap();
         assert!(list_at(repo.path(), &root).unwrap().is_empty());
         assert!(repo.git(&["branch", "--list", &worktree.branch]).is_empty());
@@ -298,7 +403,7 @@ mod tests {
     #[test]
     fn the_diff_covers_commits_uncommitted_edits_and_new_files() {
         let (repo, _dir, root) = setup();
-        let worktree = create_at(repo.path(), &root).unwrap();
+        let worktree = create_at(repo.path(), &root, None, None).unwrap();
         let dir = Path::new(&worktree.path);
         fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
         git(dir, &["commit", "-qam", "two"]).unwrap();
@@ -315,8 +420,8 @@ mod tests {
     #[test]
     fn comparing_two_worktrees_diffs_their_branches() {
         let (repo, _dir, root) = setup();
-        let a = create_at(repo.path(), &root).unwrap();
-        let b = create_at(repo.path(), &root).unwrap();
+        let a = create_at(repo.path(), &root, None, None).unwrap();
+        let b = create_at(repo.path(), &root, None, None).unwrap();
         fs::write(Path::new(&b.path).join("a.txt"), "other\n").unwrap();
         git(Path::new(&b.path), &["commit", "-qam", "b"]).unwrap();
         let patch = compare_at(repo.path(), &root, &a.path, &b.path).unwrap();
@@ -327,8 +432,8 @@ mod tests {
     #[test]
     fn comparing_includes_uncommitted_work_and_leaves_the_index_alone() {
         let (repo, _dir, root) = setup();
-        let a = create_at(repo.path(), &root).unwrap();
-        let b = create_at(repo.path(), &root).unwrap();
+        let a = create_at(repo.path(), &root, None, None).unwrap();
+        let b = create_at(repo.path(), &root, None, None).unwrap();
         fs::write(Path::new(&b.path).join("new.txt"), "draft\n").unwrap();
         let patch = compare_at(repo.path(), &root, &a.path, &b.path).unwrap();
         assert!(patch.contains("+draft"));
@@ -344,6 +449,30 @@ mod tests {
         assert!(owned(repo.path(), &root, "/tmp").is_err());
         let own = repo.path().to_string_lossy().into_owned();
         assert!(remove_at(repo.path(), &root, &own, true).is_err());
+    }
+
+    #[test]
+    fn a_named_branch_is_created_then_reused_or_suffixed() {
+        let (repo, _dir, root) = setup();
+        let name = Some("mat/eng-1-fix");
+        let first = create_at(repo.path(), &root, None, name).unwrap();
+        assert_eq!(first.branch, "mat/eng-1-fix");
+        // Still checked out in the first worktree: a suffixed branch instead.
+        let second = create_at(repo.path(), &root, None, name).unwrap();
+        assert_eq!(second.branch, "mat/eng-1-fix-2");
+        remove_at(repo.path(), &root, &first.path, false).unwrap();
+        // Free again: reused as is.
+        let third = create_at(repo.path(), &root, None, name).unwrap();
+        assert_eq!(third.branch, "mat/eng-1-fix");
+    }
+
+    #[test]
+    fn an_invalid_branch_name_falls_back_to_an_agent_branch() {
+        let (repo, _dir, root) = setup();
+        for bad in ["bad..name", "-x", "@{-1}"] {
+            let worktree = create_at(repo.path(), &root, None, Some(bad)).unwrap();
+            assert!(worktree.branch.starts_with("agent/"));
+        }
     }
 
     #[test]

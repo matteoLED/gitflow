@@ -291,6 +291,12 @@ export const fr: Record<MessageKey, string> = {
   "changes.commit_other": "Committer {count} fichiers",
   "changes.committed": "Commit créé",
   "changes.commitFailed": "Échec du commit",
+  "changes.amend": "Amender",
+  "changes.amendHint": "Remplace le dernier commit par les modifications indexées et ce message",
+  "changes.amendPushed": "Le dernier commit est déjà poussé : l’amender demanderait un force-push",
+  "changes.amendSubmit": "Amender le dernier commit",
+  "changes.amended": "Commit amendé",
+  "changes.amendFailed": "Échec de l’amend",
   "changes.sideStaged": "Modifications indexées (index vs HEAD)",
   "changes.sideUnstaged": "Modifications non indexées (copie de travail vs index)",
   "changes.sideUntracked": "Nouveau fichier non suivi",
@@ -1135,7 +1141,8 @@ export const fr: Record<MessageKey, string> = {
   "agents.flow": "Déroulé",
 
   "linear.startWith": "Démarrer avec {agent}",
-  "linear.startHint": "L'agent implémente le ticket sur la branche actuelle, dans le mode choisi sur la page Agents.",
+  "linear.startHint":
+    "L'agent implémente le ticket dans son propre worktree, sur la branche Linear du ticket, et le ticket passe en cours.",
 
   "checks.rerunStarted": "Checks en échec relancés",
   "checks.rerunFailed": "Impossible de relancer les checks",
@@ -1153,6 +1160,7 @@ export const fr: Record<MessageKey, string> = {
   "checks.copyFailed": "Copie impossible",
   "checks.rerun": "Relancer",
   "checks.fixWithAgent": "Corriger avec un agent",
+  "checks.fix": "Corriger",
   "comments.add": "Commenter cette ligne",
   "comments.placeholder": "Laisser un commentaire de code…",
   "comments.reply": "Répondre…",
@@ -1364,6 +1372,8 @@ export const fr: Record<MessageKey, string> = {
   "rewrite.rebaseFromHere": "Rebase interactif à partir d’ici…",
   "rewrite.cherryPicked": "{sha} cherry-pické",
   "rewrite.reverted": "{sha} annulé",
+  "rewrite.fixup": "Intégrer les modifications indexées à ce commit",
+  "rewrite.fixedUp": "Modifications indexées intégrées à {sha}",
   "rewrite.stopped": "Arrêté sur des conflits",
   "rewrite.stoppedHint": "Résolvez-les, puis Continuer dans la barre en haut — ou Abandonner pour revenir en arrière.",
   "rewrite.failed": "Impossible de réécrire l’historique",
@@ -1471,6 +1481,7 @@ export const fr: Record<MessageKey, string> = {
   "undo.title.amend": "Annuler l'amend",
   "undo.title.merge": "Annuler le merge",
   "undo.title.rebase": "Annuler le rebase",
+  "undo.title.fixup": "Annuler le fixup",
   "undo.title.pull": "Annuler le pull",
   "undo.title.reset": "Annuler le reset",
   "undo.title.checkout": "Annuler le checkout",
@@ -1483,6 +1494,8 @@ export const fr: Record<MessageKey, string> = {
     "Annuler le merge de {label} : ramène {branch} sur {target}. Les modifications locales sont conservées ; Git refuse s'il fallait les perdre.",
   "undo.rebase":
     "Annuler le rebase : ramène {branch} sur {target}, sa position avant le rebase. Les modifications locales sont conservées ; Git refuse s'il fallait les perdre.",
+  "undo.fixup":
+    "Annuler le fixup dans « {label} » : ramène {branch} sur {target}, avant le fixup. Les modifications intégrées restent indexées.",
   "undo.pull":
     "Annuler le pull : ramène {branch} sur {target}, sa position avant le pull. Les modifications locales sont conservées ; Git refuse s'il fallait les perdre.",
   "undo.reset":

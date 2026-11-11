@@ -139,6 +139,8 @@ export type WorkflowRun = {
   status: RunStatus;
   conclusion: RunConclusion;
   headBranch: string;
+  /** Only from `getWorkflowRun`. */
+  headSha?: string;
   event: string;
   createdAt: string;
   startedAt?: string;
@@ -484,7 +486,8 @@ export type RebaseCommit = { hash: string; subject: string; message: string; aut
 export type RebaseStep = { hash: string; action: RebaseAction; message: string | null };
 
 /** An agent's own checkout of the repository, on its own branch. */
-export type Worktree = { path: string; branch: string };
+/** `target`: the branch its pull request goes into when not the checked-out one (a failing PR's, for a CI fix). */
+export type Worktree = { path: string; branch: string; target?: string };
 export type WorktreeStatus = { changed: number; ahead: number };
 
 /** A Claude Code custom command or skill, typed after `/` in a message. */
@@ -563,7 +566,8 @@ export type StashEntry = {
 
 export type StashOutcome = { conflicts: boolean };
 
-export type UndoKind = "commit" | "amend" | "merge" | "rebase" | "pull" | "reset" | "checkout" | "branchDelete";
+export type UndoKind =
+  "commit" | "amend" | "merge" | "rebase" | "fixup" | "pull" | "reset" | "checkout" | "branchDelete";
 
 /** The last undoable operation; sent back as is to undo it (the backend checks nothing moved since). */
 export type UndoAction = {

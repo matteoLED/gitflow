@@ -3,16 +3,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, CircleDashed, ListChecks, MousePointer2, RefreshCw, X } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useT } from "@/i18n";
+import { getT, useT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
-import { useAgentsStore } from "@/stores/agents-store";
 import { useNoticesStore } from "@/stores/notices-store";
-import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { PullRequestCheck, PullRequestDetails } from "@/types/git";
-import { startAgentRun } from "@/features/agents/use-agents";
-import { CheckDialog } from "./CheckDialog";
+import { CheckDialog, jobIdOfCheck } from "./CheckDialog";
+import { fixCiWithAgent } from "./ci-fix";
 
 export type Outcome = "pass" | "fail" | "pending" | "skip";
 
@@ -105,23 +103,23 @@ function Group({
   );
 }
 
-/** Asks an agent to fix the failing checks, with how to read their logs. */
+/** Asks an agent to fix the failing checks, from the PR's head in its own worktree, with their logs. */
 export async function resolveWithAgent(repoPath: string, pr: PullRequestDetails, failing: PullRequestCheck[]) {
-  const runs = [...new Set(failing.map(runIdOf).filter((id): id is number => id !== null))];
-  const prompt = [
-    `The CI of pull request #${pr.number} ("${pr.title}", branch ${pr.headRefName}) fails on: ${failing.map(nameOf).join(", ")}.`,
-    runs.length
-      ? `Read the failing logs with ${runs.map((id) => `\`gh run view ${id} --log-failed\``).join(", ")}.`
-      : null,
-    "Find the cause, fix it on the current branch with the smallest change, run the relevant tests, then summarize the fix.",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-  const { preferredAgent } = useAgentsStore.getState();
-  const id = await startAgentRun(repoPath, preferredAgent, { kind: "custom", prompt }, `Fix CI of #${pr.number}`);
-  if (!id) return;
-  useAgentsStore.getState().select({ type: "run", id });
-  useWorkspaceStore.getState().setView("agents");
+  const failures = failing.map((c) => ({
+    name: nameOf(c),
+    workflow: c.workflowName ?? null,
+    jobId: jobIdOfCheck(c),
+    runId: runIdOf(c),
+  }));
+  try {
+    // The head commit may not be here yet (someone else's PR): fetched without touching any local branch.
+    const headRefOid = pr.commits[pr.commits.length - 1]?.oid ?? "";
+    const { head } = await gitBackend.fetchPullRequest(repoPath, { ...pr, headRefOid });
+    await fixCiWithAgent(repoPath, { branch: pr.headRefName, pr, failures }, head);
+  } catch (error) {
+    const { message, detail } = toGitError(error);
+    useNoticesStore.getState().notify({ tone: "error", title: getT()("agents.startFailed", { message }), detail });
+  }
 }
 
 const ROUND_ACTION =
@@ -222,14 +220,11 @@ export function ChecksMenu({ repoPath, pr }: { repoPath: string; pr: PullRequest
   return (
     <div className="space-y-1">
       <Popover open={menuOpen} onOpenChange={setMenuOpen}>
-        <PopoverTrigger className="-mx-1 flex items-center gap-2 rounded-full px-2.5 py-1 text-[13px] outline-none hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-white/[0.08]">
+        <PopoverTrigger className="-mx-1 flex items-center gap-2 rounded-full bg-white/[0.06] px-2.5 py-1 text-[13px] tabular-nums outline-none transition-colors hover:bg-white/[0.09] focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-white/[0.1]">
           {pending.length > 0 ? (
             <BrailleLoader className="text-primary" />
           ) : (
-            <ListChecks
-              aria-hidden
-              className={cn("size-4", allGood ? "text-check-passed" : "text-check-failed")}
-            />
+            <ListChecks aria-hidden className={cn("size-4", allGood ? "text-check-passed" : "text-check-failed")} />
           )}
           {t("pr.checksPassed", { passed: passed.length, total: checks.length })}
         </PopoverTrigger>

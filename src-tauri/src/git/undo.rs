@@ -22,6 +22,8 @@ pub enum UndoKind {
     Amend,
     Merge,
     Rebase,
+    /// A `fixup!` commit folded into an older one by an autosquash rebase.
+    Fixup,
     Pull,
     Reset,
     Checkout,
@@ -196,6 +198,15 @@ fn last_reflog(repo: &Path, branch: Option<&str>) -> GitResult<Option<UndoAction
         if kind == UndoKind::Reset && previous == Some(sha) {
             continue;
         }
+        if kind == UndoKind::Rebase
+            && let Some(action) = branch.and_then(|b| fixup_before_rebase(repo, b))
+        {
+            return Ok(Some(UndoAction {
+                current: sha.to_string(),
+                at: reflog_time(selector).unwrap_or(0),
+                ..action
+            }));
+        }
         let target = match kind {
             // The rebase's own steps are in HEAD's reflog; the branch's reflog has just before and after.
             UndoKind::Rebase | UndoKind::Pull if subject.contains("(finish)") => {
@@ -233,6 +244,31 @@ fn last_reflog(repo: &Path, branch: Option<&str>) -> GitResult<Option<UndoAction
     Ok(None)
 }
 
+/// A rebase that came right after a `fixup!` commit on `branch` (the app's "fixup into this commit"): undone in
+/// one go, back to before the fixup commit. `current` and `at` are left to the caller.
+fn fixup_before_rebase(repo: &Path, branch: &str) -> Option<UndoAction> {
+    let full = format!("refs/heads/{branch}");
+    let text = git_text(repo, &["reflog", "-n3", "--format=%H%x00%gs", &full]).ok()?;
+    let entries: Vec<(&str, &str)> = text.lines().filter_map(|l| l.split_once('\0')).collect();
+    let [_, (fixup_sha, subject), (before, _)] = entries[..] else {
+        return None;
+    };
+    let label = subject.strip_prefix("commit: fixup! ")?;
+    let parent = git_text(
+        repo,
+        &["rev-parse", "--verify", "--quiet", &format!("{fixup_sha}^")],
+    )
+    .ok()?;
+    (parent.trim() == before).then(|| UndoAction {
+        kind: UndoKind::Fixup,
+        label: label.to_string(),
+        branch: Some(branch.to_string()),
+        target: before.to_string(),
+        current: String::new(),
+        at: 0,
+    })
+}
+
 /// The most recent undoable operation, or `None` (also while a merge or rebase is stopped).
 pub fn last(repo: &Path) -> GitResult<Option<UndoAction>> {
     let info = head(repo)?;
@@ -268,6 +304,21 @@ pub fn undo(repo: &Path, expected: &UndoAction) -> GitResult<()> {
     let target = validate::object_id(&expected.target)?;
     match expected.kind {
         UndoKind::Commit | UndoKind::Amend => git(repo, &["reset", "--soft", target]).map(drop),
+        // Back to the fixup commit (refused if local changes would be lost), then before it: its changes staged.
+        UndoKind::Fixup => {
+            let branch = validate::revision(expected.branch.as_deref().unwrap_or_default())?;
+            let fixup = git_text(
+                repo,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{branch}@{{1}}"),
+                ],
+            )?;
+            git(repo, &["reset", "--keep", fixup.trim()])?;
+            git(repo, &["reset", "--soft", target]).map(drop)
+        }
         UndoKind::Merge | UndoKind::Rebase | UndoKind::Pull => {
             git(repo, &["reset", "--keep", target]).map(drop)
         }
@@ -382,6 +433,28 @@ mod tests {
         repo.git(&["rebase", "-q", "main"]);
         let action = undo_last(&repo);
         assert_eq!((action.kind, head_sha(&repo)), (UndoKind::Rebase, before));
+    }
+
+    #[test]
+    fn undo_fixup_restores_the_branch_with_the_changes_staged() {
+        let (repo, _) = repo();
+        repo.write("b.txt", "b\n");
+        let before = repo.commit_all("second");
+        repo.write("a.txt", "fixed\n");
+        repo.git(&["add", "a.txt"]);
+        let first = repo.git(&["rev-parse", "HEAD~1"]);
+        crate::git::rewrite::fixup(repo.path(), &first).unwrap();
+        let action = undo_last(&repo);
+        let staged = repo.git(&["diff", "--cached", "--name-only"]);
+        assert_eq!(
+            (action.kind, action.label, head_sha(&repo), staged),
+            (
+                UndoKind::Fixup,
+                "first".to_string(),
+                before,
+                "a.txt".to_string()
+            )
+        );
     }
 
     #[test]
