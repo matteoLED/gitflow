@@ -131,12 +131,9 @@ function useActions(repoPath: string): Action[] {
     },
     {
       id: "inbox",
-      label: t("work.filter.inbox"),
+      label: t("view.inbox"),
       icon: <Inbox />,
-      act: () => {
-        useWorkStore.getState().setFilter("inbox");
-        setView("work");
-      },
+      act: () => setView("inbox"),
     },
     {
       id: "new-agent",

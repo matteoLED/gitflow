@@ -6,6 +6,8 @@ import { PanelHeader, PanelLoading } from "@/components/layout/panel";
 import { DataUnavailable, EmptyState } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { LazyMarkdown } from "@/features/agents/LazyMarkdown";
+import { LinearIcon } from "@/features/linear/LinearIcon";
+import { useActiveAccount } from "@/features/linear/linear-queries";
 import { useT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { formatAge } from "@/lib/format-date";
@@ -15,7 +17,8 @@ import { cn } from "@/lib/utils";
 import { useNoticesStore } from "@/stores/notices-store";
 import type { Release, Tag } from "@/types/git";
 import { ReleaseForm } from "./ReleaseForm";
-import { releasesKey, useReleases, useTags } from "./release-queries";
+import { groupByPipeline, LinearReleaseDetail, StageDot } from "./LinearReleases";
+import { releasesKey, useLinearReleases, useReleases, useTags } from "./release-queries";
 import { useReleasesStore, type ReleasesSelection } from "./releases-store";
 import { TagDialog } from "./TagDialog";
 
@@ -39,16 +42,21 @@ function ReleaseBadges({ release }: { release: Release }) {
   return null;
 }
 
-/** List column: releases on GitHub, then local tags. A GitHub failure leaves the tags usable. */
+/** List column: Linear's releases (when connected), releases on GitHub, then local tags. One failing source leaves the others usable. */
 export function ReleasesList({ repoPath, query }: { repoPath: string; query: string }) {
   const t = useT();
   const { selection, select } = useReleasesStore();
+  const account = useActiveAccount();
+  const linear = useLinearReleases(account?.id);
   const releases = useReleases(repoPath);
   const tags = useTags(repoPath).data ?? [];
   const [tagOpen, setTagOpen] = useState(false);
   const q = query.toLowerCase();
   const shownReleases = (releases.data ?? []).filter((r) => `${r.name ?? ""} ${r.tag_name}`.toLowerCase().includes(q));
   const shownTags = tags.filter((tag) => tag.name.toLowerCase().includes(q));
+  const linearGroups = groupByPipeline(
+    (linear.data?.releases ?? []).filter((r) => `${r.name} ${r.version ?? ""}`.toLowerCase().includes(q)),
+  );
   const row = (target: ReleasesSelection, content: ReactNode) => (
     <li key={JSON.stringify(target)}>
       <button
@@ -73,7 +81,44 @@ export function ReleasesList({ repoPath, query }: { repoPath: string; query: str
           {t("tags.new")}
         </Button>
       </div>
-      <p className="px-2 pt-1 pb-1 text-[11.5px] font-medium text-muted-foreground">{t("releases.title")}</p>
+      {account && (
+        <>
+          <p className="flex items-center gap-1.5 px-2 pt-1 pb-1 text-[11.5px] font-medium text-muted-foreground">
+            <LinearIcon className="size-3" />
+            {t("linearReleases.title")}
+          </p>
+          {linear.isError && (
+            <p className="px-2 text-[12px] text-muted-foreground">{toGitError(linear.error).message}</p>
+          )}
+          {linear.data && linearGroups.length === 0 && (
+            <p className="px-2 text-[12px] text-muted-foreground">{t("linearReleases.none")}</p>
+          )}
+          {linearGroups.map((group) => (
+            <div key={group.id}>
+              {linearGroups.length > 1 && (
+                <p className="truncate px-2 pt-2 pb-0.5 text-[11px] text-muted-foreground/70">{group.name}</p>
+              )}
+              <ul className="space-y-px">
+                {group.releases.map((r) =>
+                  row(
+                    { kind: "linear", id: r.id },
+                    <>
+                      <StageDot stage={r.stage} />
+                      <span className="min-w-0 flex-1 truncate">{r.name}</span>
+                      {r.version && r.version !== r.name && (
+                        <span className="shrink-0 font-mono text-[11.5px] text-muted-foreground">{r.version}</span>
+                      )}
+                    </>,
+                  ),
+                )}
+              </ul>
+            </div>
+          ))}
+        </>
+      )}
+      <p className={cn("px-2 pb-1 text-[11.5px] font-medium text-muted-foreground", account ? "pt-4" : "pt-1")}>
+        {t("releases.title")}
+      </p>
       {releases.isError ? (
         <p className="px-2 text-[12px] text-muted-foreground">{toGitError(releases.error).message}</p>
       ) : (
@@ -283,6 +328,8 @@ export function ReleasesPage({ repoPath }: { repoPath: string }) {
   const { selection, select } = useReleasesStore();
   const releases = useReleases(repoPath);
   const tags = useTags(repoPath);
+  const account = useActiveAccount();
+  const linear = useLinearReleases(account?.id);
   if (selection?.kind === "new")
     return (
       <section className="flex h-full flex-col">
@@ -298,6 +345,21 @@ export function ReleasesPage({ repoPath }: { repoPath: string }) {
   if (selection?.kind === "tag") {
     const tag = tags.data?.find((x) => x.name === selection.name);
     if (tag) return <TagDetail key={tag.name} repoPath={repoPath} tag={tag} />;
+  }
+  if (selection?.kind === "linear" && account) {
+    const release = linear.data?.releases.find((r) => r.id === selection.id);
+    if (release)
+      return (
+        <LinearReleaseDetail
+          key={release.id}
+          orgId={account.id}
+          repoPath={repoPath}
+          release={release}
+          stages={linear.data?.pipelines.find((p) => p.id === release.pipeline.id)?.stages ?? []}
+          header={<Header icon={<LinearIcon className="size-3.5 text-muted-foreground" />} title={release.name} />}
+        />
+      );
+    if (!linear.data && !linear.isError) return <PanelLoading title={t("common.loading")} />;
   }
   if (selection?.kind === "release") {
     if (releases.isError)

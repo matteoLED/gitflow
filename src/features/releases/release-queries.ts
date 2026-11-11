@@ -11,3 +11,22 @@ export const releasesKey = (repoPath: string) => ["releases", repoPath] as const
 
 export const useReleases = (repoPath: string) =>
   useQuery({ queryKey: releasesKey(repoPath), queryFn: () => gitBackend.listReleases(repoPath), staleTime: 60_000 });
+
+export const linearReleasesKey = (orgId: string | undefined) => ["linear", "releases", orgId] as const;
+
+/** Linear's release pipelines and their latest releases. */
+export const useLinearReleases = (orgId: string | undefined) =>
+  useQuery({
+    queryKey: linearReleasesKey(orgId),
+    queryFn: () => gitBackend.linearReleases(orgId ?? ""),
+    enabled: !!orgId,
+    staleTime: 60_000,
+  });
+
+export const useLinearReleaseIssues = (orgId: string | undefined, releaseId: string) =>
+  useQuery({
+    queryKey: ["linear", "release-issues", orgId, releaseId],
+    queryFn: () => gitBackend.linearReleaseIssues(orgId ?? "", releaseId),
+    enabled: !!orgId,
+    staleTime: 60_000,
+  });

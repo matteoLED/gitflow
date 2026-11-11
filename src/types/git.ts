@@ -247,6 +247,38 @@ export type LinearProject = {
   lead: LinearPerson | null;
   teams: { nodes: { id: string; key: string }[] };
 };
+export type LinearReleaseStage = {
+  id: string;
+  name: string;
+  type: "planned" | "started" | "completed" | "canceled";
+  color: string;
+  position: number;
+};
+export type LinearReleasePipeline = {
+  id: string;
+  name: string;
+  type: "continuous" | "scheduled";
+  url: string;
+  stages: LinearReleaseStage[];
+};
+export type LinearRelease = {
+  id: string;
+  name: string;
+  /** "v1.2.3" or a short commit hash; unique within the pipeline. */
+  version: string | null;
+  description: string | null;
+  url: string;
+  startDate: string | null;
+  targetDate: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  canceledAt: string | null;
+  createdAt: string;
+  issueCount: number;
+  stage: LinearReleaseStage;
+  pipeline: { id: string; name: string };
+};
+export type LinearReleases = { pipelines: LinearReleasePipeline[]; releases: LinearRelease[] };
 /** githubstatus.com: incidents not resolved yet, and services not fully operational. */
 export type GithubStatus = {
   incidents: { name: string; impact: "none" | "minor" | "major" | "critical"; url: string }[];

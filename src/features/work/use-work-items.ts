@@ -1,11 +1,8 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useShallow } from "zustand/react/shallow";
-import { useGithubUser, usePullRequests, useRefs, workflowRunsQuery } from "@/lib/git-queries";
+import { usePullRequests, useRefs, workflowRunsQuery } from "@/lib/git-queries";
 import { useWorkspaceIssues } from "@/features/linear/linear-queries";
-import { useAgentsStore, type AgentRun } from "@/stores/agents-store";
-import { useWorkStore, type WorkFilter } from "@/stores/work-store";
-import { inboxItems, unread } from "./inbox";
+import type { WorkFilter } from "@/stores/work-store";
 import { workItems, type WorkItem } from "./work-items";
 
 /** Branches, pull requests, CI and Linear issues of the repository, as one list of work. */
@@ -41,30 +38,4 @@ export function filterWork(items: WorkItem[], filter: WorkFilter): WorkItem[] {
   if (filter === "cleanup")
     return items.filter((i) => !i.current && (i.local || i.remote) && (i.status === "merged" || i.status === "stale"));
   return items;
-}
-
-/**
- * The latest run of each conversation of the repository, when it has finished: the only runs the inbox shows.
- * Steps streaming into a running run leave this list (and every component reading the inbox) untouched.
- */
-function finishedThreads(runs: AgentRun[], repoPath: string) {
-  const seen = new Set<string>();
-  return runs.filter((r) => {
-    if (r.repoPath !== repoPath || seen.has(r.thread)) return false;
-    seen.add(r.thread);
-    return r.status === "done" || r.status === "failed";
-  });
-}
-
-/** The inbox of the repository: what needs the user, minus what they marked done. */
-export function useInbox(repoPath: string) {
-  const work = useWorkItems(repoPath).data;
-  const me = useGithubUser(repoPath).data?.login ?? null;
-  const issues = useWorkspaceIssues().data;
-  const runs = useAgentsStore(useShallow((s) => finishedThreads(s.runs, repoPath)));
-  const dismissed = useWorkStore((s) => s.dismissed);
-  return useMemo(() => {
-    if (!work) return undefined;
-    return unread(inboxItems({ work, me, issues: issues ?? [], runs }), dismissed);
-  }, [work, me, issues, runs, dismissed]);
 }

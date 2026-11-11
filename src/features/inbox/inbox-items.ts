@@ -1,3 +1,4 @@
+import type { MessageKey, Translator } from "@/i18n";
 import type { AgentRun } from "@/stores/agents-store";
 import type { GithubNotification, LinearNotification, WorkflowRun } from "@/types/git";
 
@@ -27,6 +28,29 @@ export type InboxItem = {
 
 /** A choice the user made on an item, kept until the item changes. */
 export type InboxMark = { version: string; state: "read" | "unread" | "done" };
+
+const REASONS: Record<string, MessageKey> = {
+  review_requested: "inbox.reason.reviewRequested",
+  mention: "inbox.reason.mention",
+  team_mention: "inbox.reason.mention",
+  comment: "inbox.reason.comment",
+  author: "inbox.reason.author",
+  assign: "inbox.reason.assigned",
+  state_change: "inbox.reason.stateChange",
+  ci_activity: "inbox.reason.ciActivity",
+  issueAssignedToYou: "inbox.reason.assigned",
+  issueMention: "inbox.reason.mention",
+  issueCommentMention: "inbox.reason.mention",
+  issueNewComment: "inbox.reason.comment",
+  issueComment: "inbox.reason.comment",
+  issueStatusChanged: "inbox.reason.stateChange",
+  issueCreated: "inbox.reason.created",
+  done: "inbox.reason.agentDone",
+  failed: "inbox.reason.failed",
+};
+
+/** The reason of an item, in words. */
+export const reasonOf = (t: Translator, item: InboxItem) => t(REASONS[item.reason] ?? "inbox.reason.other");
 
 const DAY = 86_400_000;
 /** Local events (agent runs, CI failures) older than this aren't news anymore. */

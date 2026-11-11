@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, Cloud, GitBranch } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { PanelHeader } from "@/components/layout/panel";
+import { RowSkeleton, SkeletonList } from "@/components/skeletons";
 import { DataUnavailable, EmptyState } from "@/components/states";
 import { useOpenPullRequest } from "@/features/github/PullRequestList";
 import { useCheckout } from "@/features/branches/use-checkout";
@@ -17,7 +18,6 @@ import { filterWork, useWorkItems } from "./use-work-items";
 import { WorkDetail } from "./WorkDetail";
 import { DeleteBranchesButton } from "./DeleteBranches";
 import { cleanable, deletable } from "./use-delete-branches";
-import { InboxPage, WorkRowsSkeleton } from "./InboxPage";
 import { IssueHoverCard, PullRequestHoverCard } from "@/features/refs/RefPreview";
 
 const CI_DOT: Record<CiState, string> = {
@@ -188,7 +188,6 @@ export function WorkPage({ repoPath }: { repoPath: string }) {
   const work = useWorkItems(repoPath);
   const item = selected ? work.data?.find((i) => i.branch === selected) : undefined;
   if (item) return <WorkDetail repoPath={repoPath} item={item} />;
-  if (filter === "inbox") return <InboxPage repoPath={repoPath} />;
   const header = (
     <PanelHeader className="gap-1.5 text-[13px]">
       <span className="font-medium">{t(`work.filter.${filter}`)}</span>
@@ -210,7 +209,11 @@ export function WorkPage({ repoPath }: { repoPath: string }) {
     return (
       <section aria-label={t("view.work")} className="flex h-full flex-col">
         {header}
-        <WorkRowsSkeleton height={44} lines={1} />
+        <SkeletonList
+          rows={10}
+          className="min-h-0 flex-1"
+          row={(i) => <RowSkeleton i={i} height={44} lines={1} className="gap-3 border-b border-white/[0.04] px-5" />}
+        />
       </section>
     );
   const items = filterWork(work.data, filter);

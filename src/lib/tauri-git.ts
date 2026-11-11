@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   GithubNotification,
+  LinearReleases,
   LinearNotification,
   EditedFile,
   StashEntry,
@@ -366,6 +367,11 @@ export const gitBackend = {
   linearActiveCycles: (orgId: string) => invoke<LinearCycle[]>("linear_active_cycles", { orgId }),
   linearProjectIssues: (orgId: string, projectId: string) =>
     invoke<LinearIssue[]>("linear_project_issues", { orgId, projectId }),
+  linearReleases: (orgId: string) => invoke<LinearReleases>("linear_releases", { orgId }),
+  linearReleaseIssues: (orgId: string, releaseId: string) =>
+    invoke<LinearIssue[]>("linear_release_issues", { orgId, releaseId }),
+  linearSetReleaseStage: (orgId: string, releaseId: string, stageId: string) =>
+    invoke<null>("linear_set_release_stage", { orgId, releaseId, stageId }),
   linearImage: (orgId: string, url: string) => invoke<string>("linear_image", { orgId, url }),
   linearCreateComment: (orgId: string, issueId: string, body: string, parentId: string | null) =>
     invoke<null>("linear_create_comment", { orgId, issueId, body, parentId }),

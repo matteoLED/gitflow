@@ -2,7 +2,8 @@ import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { summarize } from "@/features/agents/usage-stats";
 import { useActiveAccount, useActiveCycles, useWorkspaceIssues } from "@/features/linear/linear-queries";
-import { useInbox, useWorkItems } from "@/features/work/use-work-items";
+import { useInbox } from "@/features/inbox/use-inbox";
+import { useWorkItems } from "@/features/work/use-work-items";
 import { useT } from "@/i18n";
 import { useGithubUser, useWorkflowRuns } from "@/lib/git-queries";
 import { gitBackend } from "@/lib/tauri-git";
@@ -59,7 +60,7 @@ const openWork = (filter: WorkFilter) => {
 export function Kpis({ repo }: { repo: RepositoryInfo }) {
   const t = useT();
   const [now] = useState(Date.now);
-  const inbox = useInbox(repo.path);
+  const inbox = useInbox(repo.path).items?.filter((i) => i.unread);
   const work = useWorkItems(repo.path).data;
   const me = useGithubUser(repo.path).data?.login ?? null;
   const runs = useWorkflowRuns(repo.path).data;
@@ -74,8 +75,15 @@ export function Kpis({ repo }: { repo: RepositoryInfo }) {
 
   const openPrs = work?.filter((w) => w.pr?.state === "OPEN") ?? [];
   const mine = openPrs.filter((w) => w.local || (me && w.pr?.author.login === me));
-  const toReview = inbox?.filter((i) => i.reason === "review").length ?? 0;
-  const failing = inbox?.filter((i) => i.reason === "ciFailed").length ?? 0;
+  // Teammates' pull requests waiting on a review: not drafts, not approved, not back with their author.
+  const toReview = openPrs.filter(
+    (w) =>
+      !mine.includes(w) &&
+      !w.pr?.isDraft &&
+      w.pr?.reviewDecision !== "APPROVED" &&
+      w.pr?.reviewDecision !== "CHANGES_REQUESTED",
+  ).length;
+  const failing = inbox?.filter((i) => i.target.kind === "ci").length ?? 0;
   // ponytail: CI health over the 100 latest runs `gh` returns; enough for a week on most repositories.
   const week = (runs ?? []).filter((r) => r.status === "completed" && now - new Date(r.createdAt).getTime() < WEEK);
   const passed = week.filter((r) => ["success", "skipped", "neutral"].includes(r.conclusion)).length;
@@ -91,7 +99,7 @@ export function Kpis({ repo }: { repo: RepositoryInfo }) {
         value={inbox?.length}
         tone={failing > 0 ? "alert" : undefined}
         hint={failing > 0 ? t("kpi.inboxFailing", { count: failing }) : inbox && t("kpi.inboxHint")}
-        onClick={() => openWork("inbox")}
+        onClick={() => useWorkspaceStore.getState().setView("inbox")}
       />
       <Tile
         label={t("kpi.pulls")}

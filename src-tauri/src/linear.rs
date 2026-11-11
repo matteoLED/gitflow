@@ -798,6 +798,102 @@ pub fn upload_image(
     Ok(asset.to_string())
 }
 
+/// Release pipelines (with their stages) and the latest releases, in one request.
+/// ponytail: the 100 most recently updated releases; paginate with `after:` if older ones matter.
+const RELEASES: &str = "query {
+    releasePipelines(first: 50) { nodes { id name type url stages { nodes { id name type color position } } } }
+    releases(first: 100, orderBy: updatedAt) { nodes {
+      id name version description url startDate targetDate startedAt completedAt canceledAt createdAt
+      issueCount stage { id name type color position } pipeline { id name } } } }";
+
+/// `{ pipelines, releases }` out of the answer to RELEASES; missing lists are empty.
+fn release_lists(data: &Value) -> Value {
+    let nodes = |path: &str| data.pointer(path).cloned().unwrap_or(json!([]));
+    let mut pipelines = nodes("/releasePipelines/nodes");
+    for pipeline in pipelines.as_array_mut().into_iter().flatten() {
+        pipeline["stages"] = pipeline
+            .pointer("/stages/nodes")
+            .cloned()
+            .unwrap_or(json!([]));
+    }
+    json!({ "pipelines": pipelines, "releases": nodes("/releases/nodes") })
+}
+
+/// Linear's releases: its pipelines (with their stages) and their latest releases.
+pub fn releases(org_id: &str) -> GitResult<Value> {
+    let data = graphql(&key_of(org_id)?, RELEASES, json!({}))?;
+    Ok(release_lists(&data))
+}
+
+/// The issues shipped in (or planned for) a release.
+pub fn release_issues(org_id: &str, release_id: &str) -> GitResult<Value> {
+    if !valid_id(release_id) {
+        return Err(GitError::invalid("Invalid release id."));
+    }
+    let query = format!(
+        "query($id: String!) {{ release(id: $id) {{ issues(first: 250) {{ nodes {{ {ISSUE_FIELDS} }} }} }} }}"
+    );
+    let data = graphql(&key_of(org_id)?, &query, json!({ "id": release_id }))?;
+    Ok(data
+        .pointer("/release/issues/nodes")
+        .cloned()
+        .unwrap_or(json!([])))
+}
+
+fn stage_variables(release_id: &str, stage_id: &str) -> GitResult<Value> {
+    if !valid_id(release_id) || !valid_id(stage_id) {
+        return Err(GitError::invalid("Invalid release or stage id."));
+    }
+    Ok(json!({ "id": release_id, "input": { "stageId": stage_id } }))
+}
+
+/// Moves a release to another stage of its pipeline (Linear stamps started/completed dates).
+pub fn set_release_stage(org_id: &str, release_id: &str, stage_id: &str) -> GitResult<()> {
+    let variables = stage_variables(release_id, stage_id)?;
+    let query = "mutation($id: String!, $input: ReleaseUpdateInput!) {
+        releaseUpdate(id: $id, input: $input) { success } }";
+    let data = graphql(&key_of(org_id)?, query, variables)?;
+    succeeded(&data, "releaseUpdate", "the release wasn't moved")
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+
+    #[test]
+    fn release_lists_flatten_stages() {
+        let data = json!({
+            "releasePipelines": { "nodes": [{ "id": "p", "stages": { "nodes": [{ "id": "s" }] } }] },
+            "releases": { "nodes": [{ "id": "r" }] }
+        });
+        assert_eq!(
+            release_lists(&data),
+            json!({ "pipelines": [{ "id": "p", "stages": [{ "id": "s" }] }], "releases": [{ "id": "r" }] })
+        );
+    }
+
+    #[test]
+    fn release_lists_default_to_empty() {
+        assert_eq!(
+            release_lists(&json!({})),
+            json!({ "pipelines": [], "releases": [] })
+        );
+    }
+
+    #[test]
+    fn stage_moves_refuse_odd_ids() {
+        assert!(stage_variables("r-1", "s\" }").is_err());
+    }
+
+    #[test]
+    fn stage_moves_send_only_the_stage() {
+        assert_eq!(
+            stage_variables("r-1", "s-1").unwrap(),
+            json!({ "id": "r-1", "input": { "stageId": "s-1" } })
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

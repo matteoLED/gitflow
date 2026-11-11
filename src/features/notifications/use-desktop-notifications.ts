@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
-import { useInbox } from "@/features/work/use-work-items";
+import { reasonOf } from "@/features/inbox/inbox-items";
+import { useInbox } from "@/features/inbox/use-inbox";
 import { useT } from "@/i18n";
 
 const WARM_UP = 30_000;
@@ -13,34 +14,32 @@ const permission = () =>
     .catch(() => false));
 
 /**
- * A macOS notification for what lands in the inbox while the app is in the background: a check that fails,
- * a review asked or answered, an agent that finished. What's already there at launch stays quiet.
+ * A macOS notification for what lands unread in the inbox while the app is in the background: a GitHub or Linear
+ * notification, a check that fails, an agent that finished. What's already there at launch stays quiet.
  */
 export function useDesktopNotifications(repoPath: string) {
   const t = useT();
-  const items = useInbox(repoPath);
+  const items = useInbox(repoPath).items;
   const seen = useRef(new Set<string>());
   const [since] = useState(Date.now);
   useEffect(() => {
     if (!items) return;
-    // Once per thing and reason: a pull request still waiting for review doesn't ring again on each push.
-    // An agent conversation rings for each run that ends in it.
-    const ids = items.map((item) =>
-      item.reason === "agentFinished" ? `${item.key}@${item.version}` : `${item.key}:${item.reason}`,
-    );
+    // Once per thing and version: an item rings again only when it changes (a new comment, another run).
+    const unread = items.filter((item) => item.unread);
+    const ids = unread.map((item) => `${item.key}@${item.version}`);
     const known = seen.current;
     // Sources (GitHub, Linear, agents) arrive one by one at launch: all of that is the starting point.
     if (Date.now() - since < WARM_UP) {
       for (const id of ids) known.add(id);
       return;
     }
-    const fresh = items.filter((_, i) => !known.has(ids[i]));
+    const fresh = unread.filter((_, i) => !known.has(ids[i]));
     for (const id of ids) known.add(id);
     if (fresh.length === 0 || document.hasFocus()) return;
     void permission().then((ok) => {
       if (!ok) return;
       for (const item of fresh.slice(0, 3))
-        sendNotification({ title: `${t(`inbox.${item.reason}`)} · ${item.title}`, body: item.detail });
+        sendNotification({ title: `${reasonOf(t, item)} · ${item.title}`, body: item.context });
     });
   }, [items, since, t]);
 }

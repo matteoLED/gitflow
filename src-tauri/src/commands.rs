@@ -837,6 +837,28 @@ pub async fn linear_team_states(org_id: String) -> GitResult<serde_json::Value> 
 }
 
 #[tauri::command]
+pub async fn linear_releases(org_id: String) -> GitResult<serde_json::Value> {
+    blocking(move || linear::releases(&org_id)).await
+}
+
+#[tauri::command]
+pub async fn linear_release_issues(
+    org_id: String,
+    release_id: String,
+) -> GitResult<serde_json::Value> {
+    blocking(move || linear::release_issues(&org_id, &release_id)).await
+}
+
+#[tauri::command]
+pub async fn linear_set_release_stage(
+    org_id: String,
+    release_id: String,
+    stage_id: String,
+) -> GitResult<()> {
+    blocking(move || linear::set_release_stage(&org_id, &release_id, &stage_id)).await
+}
+
+#[tauri::command]
 pub async fn linear_set_issue_state(
     org_id: String,
     issue_id: String,

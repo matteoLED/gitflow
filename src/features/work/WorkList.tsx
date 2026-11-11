@@ -1,12 +1,11 @@
 import { useShallow } from "zustand/react/shallow";
-import { Brush, CircleUser, GitPullRequest, Inbox, Layers, type LucideIcon } from "lucide-react";
+import { Brush, CircleUser, GitPullRequest, Layers, type LucideIcon } from "lucide-react";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { useWorkStore, type WorkFilter } from "@/stores/work-store";
-import { filterWork, useInbox, useWorkItems } from "./use-work-items";
+import { filterWork, useWorkItems } from "./use-work-items";
 
 const FILTERS: [WorkFilter, LucideIcon][] = [
-  ["inbox", Inbox],
   ["all", Layers],
   ["mine", CircleUser],
   ["pulls", GitPullRequest],
@@ -18,7 +17,6 @@ export function WorkList({ repoPath }: { repoPath: string }) {
   const t = useT();
   const { filter, setFilter } = useWorkStore(useShallow((s) => ({ filter: s.filter, setFilter: s.setFilter })));
   const items = useWorkItems(repoPath).data;
-  const inbox = useInbox(repoPath);
   return (
     <nav aria-label={t("view.work")} className="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-2">
       <ul className="space-y-px">
@@ -35,17 +33,11 @@ export function WorkList({ repoPath }: { repoPath: string }) {
             >
               <Icon aria-hidden className="size-4 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">{t(`work.filter.${value}`)}</span>
-              {value === "inbox"
-                ? !!inbox?.length && (
-                    <span className="rounded-full bg-primary/20 px-1.5 text-[11px] font-medium text-primary tabular-nums">
-                      {inbox.length}
-                    </span>
-                  )
-                : items && (
-                    <span className="text-[11.5px] text-muted-foreground tabular-nums">
-                      {filterWork(items, value).length}
-                    </span>
-                  )}
+              {items && (
+                <span className="text-[11.5px] text-muted-foreground tabular-nums">
+                  {filterWork(items, value).length}
+                </span>
+              )}
             </button>
           </li>
         ))}

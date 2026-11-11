@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { LinearIcon } from "@/features/linear/LinearIcon";
-import { useT, type MessageKey, type Translator } from "@/i18n";
+import { useT, type MessageKey } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { formatAge } from "@/lib/format-date";
 import { nextListIndex } from "@/lib/list-navigation";
@@ -24,7 +24,7 @@ import { useCiStore } from "@/stores/ci-store";
 import { useInboxStore } from "@/stores/inbox-store";
 import { useLinearStore } from "@/stores/linear-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
-import { filterInbox, type InboxItem, type InboxSource } from "./inbox-items";
+import { filterInbox, reasonOf, type InboxItem, type InboxSource } from "./inbox-items";
 import { useInbox, useInboxActions, useOpenInboxItem } from "./use-inbox";
 
 const PullRequestPage = lazy(() => import("@/features/github/PullRequestPage"));
@@ -42,27 +42,6 @@ const SOURCES: { value: InboxSource; icon: Icon; label: MessageKey }[] = [
 ];
 const ICONS = Object.fromEntries(SOURCES.map((s) => [s.value, s.icon])) as Record<InboxSource, Icon>;
 
-const REASONS: Record<string, MessageKey> = {
-  review_requested: "inbox.reason.reviewRequested",
-  mention: "inbox.reason.mention",
-  team_mention: "inbox.reason.mention",
-  comment: "inbox.reason.comment",
-  author: "inbox.reason.author",
-  assign: "inbox.reason.assigned",
-  state_change: "inbox.reason.stateChange",
-  ci_activity: "inbox.reason.ciActivity",
-  issueAssignedToYou: "inbox.reason.assigned",
-  issueMention: "inbox.reason.mention",
-  issueCommentMention: "inbox.reason.mention",
-  issueNewComment: "inbox.reason.comment",
-  issueComment: "inbox.reason.comment",
-  issueStatusChanged: "inbox.reason.stateChange",
-  issueCreated: "inbox.reason.created",
-  done: "inbox.reason.agentDone",
-  failed: "inbox.reason.failed",
-};
-
-const reasonOf = (t: Translator, item: InboxItem) => t(REASONS[item.reason] ?? "inbox.reason.other");
 const failed = (item: InboxItem) => item.reason === "failed";
 
 /** Shortcuts apply with nothing focused or within the list: the detail views keep their own keys. */
