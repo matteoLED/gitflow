@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, Plus, Trash2 } from "lucide-react";
@@ -27,7 +28,7 @@ const MODELS = ["inherit", "opus", "sonnet", "haiku", "fable"] as const;
 export function AgentDefinitionsSection({ repoPath, query }: { repoPath: string; query: string }) {
   const t = useT();
   const defs = useAgentDefinitions(repoPath).data ?? [];
-  const { selection, select } = useAgentsStore();
+  const { selection, select } = useAgentsStore(useShallow((s) => ({ selection: s.selection, select: s.select })));
   const needle = query.toLowerCase();
   const shown = defs.filter((d) => `${d.name} ${d.description}`.toLowerCase().includes(needle));
   const isSelected = (d: AgentDefinition) =>

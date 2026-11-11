@@ -1,6 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { DataUnavailable } from "@/components/states";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -34,7 +34,7 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { AgentKind, AgentTask, WorkflowJob } from "@/types/git";
 import { ClaudeIcon, CodexIcon } from "./agent-icons";
 import { StatusIcon, ghStatus } from "./status";
-import { ContextMeter, UsageRing, threadUsage } from "./ContextMeter";
+import { UsageRing, threadUsage } from "./ContextMeter";
 import { contextWindowOf, costOf } from "./pricing";
 import { UsageView } from "./UsageView";
 import { AgentDefinitionEditor } from "./AgentDefinitions";
@@ -221,7 +221,7 @@ function Composer({ repoPath }: { repoPath: string }) {
     for (const agent of agents) {
       // One after the other: concurrent `git worktree add` would contend for the repository's locks.
       const id = await startAgentRun(repoPath, agent, task, title, undefined, images, group);
-      first ??= id;
+      if (first === null) first = id;
     }
     setStarting(false);
     if (group) select({ type: "board" });
@@ -317,7 +317,8 @@ function Composer({ repoPath }: { repoPath: string }) {
 
 /** Everything said in a conversation: the runs of one thread, oldest first. */
 function useThread(thread: string) {
-  const runs = useAgentsStore((s) => s.runs);
+  // Only this thread's runs: a step streamed into another conversation doesn't re-render this one.
+  const runs = useAgentsStore(useShallow((s) => s.runs.filter((r) => r.thread === thread)));
   return threadRuns(runs, thread);
 }
 
@@ -352,33 +353,41 @@ function StopButton({ runId }: { runId: string }) {
 function RunView({ repoPath, run }: { repoPath: string; run: AgentRun }) {
   const t = useT();
   const runs = useThread(run.thread);
-  const live = runs.find((r) => r.status === "running");
+  // Primitives from here on: a streamed step replaces the run objects, the header and composer stay put.
+  const liveId = runs.find((r) => r.status === "running")?.id ?? null;
   const resume = [...runs].reverse().find((r) => r.sessionId)?.sessionId ?? null;
-  const status = live ? "running" : (runs[runs.length - 1]?.status ?? run.status);
+  const status = liveId ? "running" : (runs[runs.length - 1]?.status ?? run.status);
   const agentName = run.agent === "claude" ? "Claude Code" : "Codex";
+  const { tokens, window, cost } = threadUsage(runs, run.agent);
+  const onStop = liveId ? () => void gitBackend.cancelAgentRun(liveId) : undefined;
+  // Its own memo: the compiler would otherwise rebuild it with everything derived from `runs`, at every step.
+  const onSend = useMemo(
+    () => (resume ? continueIn(repoPath, run.agent, run.thread, resume) : undefined),
+    [repoPath, run.agent, run.thread, resume],
+  );
   return (
     <>
       <PanelHeader className="gap-2">
         <StatusIcon status={status} />
         <h2 className="min-w-0 flex-1 truncate text-[13px] font-semibold">{run.title}</h2>
         <span className="text-[12px] text-muted-foreground">{agentName}</span>
-        {live && <StopButton runId={live.id} />}
+        {liveId && <StopButton runId={liveId} />}
       </PanelHeader>
-      {run.worktree && <WorktreeBar repoPath={repoPath} worktree={run.worktree} title={run.title} running={!!live} />}
+      {run.worktree && <WorktreeBar repoPath={repoPath} worktree={run.worktree} title={run.title} running={!!liveId} />}
       <ChatThread
         steps={runs.flatMap((r) => r.steps)}
-        running={!!live}
+        running={!!liveId}
         agentLabel={agentName}
         settings={
           <>
             <RunSettingsBar agent={run.agent} />
-            <ContextMeter runs={runs} agent={run.agent} />
+            <UsageRing tokens={tokens} window={window} cost={cost} />
           </>
         }
-        onStop={live ? () => void gitBackend.cancelAgentRun(live.id) : undefined}
-        onSend={resume ? continueIn(repoPath, run.agent, run.thread, resume) : undefined}
+        onStop={onStop}
+        onSend={onSend}
       />
-      {!resume && !live && <p className="sr-only">{t("agents.cannotContinue")}</p>}
+      {!resume && !liveId && <p className="sr-only">{t("agents.cannotContinue")}</p>}
     </>
   );
 }
@@ -408,14 +417,16 @@ function SessionView({ repoPath, id }: { repoPath: string; id: string }) {
   });
   const thread = `session:${id}`;
   const followUps = useThread(thread);
-  const live = followUps.find((r) => r.status === "running");
+  const liveId = followUps.find((r) => r.status === "running")?.id ?? null;
   const resume = [...followUps].reverse().find((r) => r.sessionId)?.sessionId ?? id;
   const title = useQuery({
     queryKey: ["agent-sessions", repoPath],
     enabled: false,
     queryFn: () => gitBackend.listAgentSessions(repoPath),
   }).data?.find((s) => s.id === id)?.title;
-  const usage = useSessionUsage(repoPath, id, followUps);
+  const { tokens, window, cost } = useSessionUsage(repoPath, id, followUps);
+  const onStop = liveId ? () => void gitBackend.cancelAgentRun(liveId) : undefined;
+  const onSend = useMemo(() => continueIn(repoPath, "claude", thread, resume), [repoPath, thread, resume]);
   if (steps.isError)
     return (
       <DataUnavailable title={t("agents.sessionError")} error={steps.error} onRetry={() => void steps.refetch()} />
@@ -427,20 +438,20 @@ function SessionView({ repoPath, id }: { repoPath: string; id: string }) {
         <ClaudeIcon className="size-3.5 text-[#d97757]" />
         <h2 className="min-w-0 flex-1 truncate text-[13px] font-semibold">{title ?? id}</h2>
         <span className="text-[12px] text-muted-foreground">{t.plural("agents.steps", steps.data.length)}</span>
-        {live && <StopButton runId={live.id} />}
+        {liveId && <StopButton runId={liveId} />}
       </PanelHeader>
       <ChatThread
         steps={[...steps.data, ...unsavedFollowUps(steps.data, followUps).flatMap((r) => r.steps)]}
-        running={!!live}
+        running={!!liveId}
         agentLabel="Claude Code"
         settings={
           <>
             <RunSettingsBar agent="claude" />
-            <UsageRing {...usage} />
+            <UsageRing tokens={tokens} window={window} cost={cost} />
           </>
         }
-        onStop={live ? () => void gitBackend.cancelAgentRun(live.id) : undefined}
-        onSend={continueIn(repoPath, "claude", thread, resume)}
+        onStop={onStop}
+        onSend={onSend}
       />
     </>
   );

@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useState } from "react";
 import { ChevronDown, CircleDashed, Columns3, Rows3 } from "lucide-react";
 import {
@@ -305,7 +306,7 @@ export function LinearBoard() {
 
 function LayoutSwitch() {
   const t = useT();
-  const { layout, setLayout } = useLinearStore();
+  const { layout, setLayout } = useLinearStore(useShallow((s) => ({ layout: s.layout, setLayout: s.setLayout })));
   return (
     <div role="radiogroup" aria-label={t("linear.layout")} className="mr-1 flex rounded-md bg-white/[0.05] p-0.5">
       {(

@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useState } from "react";
 import { Activity, ChevronLeft, CircleCheck, CircleMinus, CircleX } from "lucide-react";
 import { PanelHeader, PanelLoading } from "@/components/layout/panel";
@@ -207,7 +208,7 @@ function RecentRuns({ runs }: { runs: WorkflowRun[] }) {
 /** CI page: health of the repository's GitHub Actions, then any run in detail. */
 export function CiPage({ repoPath }: { repoPath: string }) {
   const t = useT();
-  const { workflow, run: openRun, openRun: setRun } = useCiStore();
+  const { workflow, run: openRun, openRun: setRun } = useCiStore(useShallow((s) => ({ workflow: s.workflow, run: s.run, openRun: s.openRun })));
   const runs = useWorkflowRuns(repoPath);
   // Fixed when the page opens: the 7-day window doesn't drift between renders.
   const [now] = useState(() => Date.now());
@@ -293,7 +294,7 @@ export function CiPage({ repoPath }: { repoPath: string }) {
 /** List column of the CI page: every workflow with its success rate. */
 export function CiList({ repoPath, query }: { repoPath: string; query: string }) {
   const t = useT();
-  const { workflow, setWorkflow } = useCiStore();
+  const { workflow, setWorkflow } = useCiStore(useShallow((s) => ({ workflow: s.workflow, setWorkflow: s.setWorkflow })));
   const runs = useWorkflowRuns(repoPath).data ?? [];
   const rows = byWorkflow(runs).filter((w) => !query || w.name.toLowerCase().includes(query.toLowerCase()));
   const row = (name: string | null, label: string, rate: number | null, status?: WorkflowRun) => (

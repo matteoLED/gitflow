@@ -27,7 +27,7 @@ import { LinearIcon } from "@/features/linear/LinearIcon";
 import { PriorityIcon, StateDot } from "@/features/linear/LinearList";
 import { useActiveAccount, useMyIssues } from "@/features/linear/linear-queries";
 import { usePreviewTargets } from "@/features/preview/PreviewList";
-import type { RepositoryInfo } from "@/types/git";
+import type { PreviewTarget, RepositoryInfo } from "@/types/git";
 import { Kpis } from "./Kpis";
 
 const go = (view: View) => useWorkspaceStore.getState().setView(view);
@@ -284,40 +284,45 @@ function ChecksCard({ repo }: { repo: RepositoryInfo }) {
 function PreviewCard({ repo }: { repo: RepositoryInfo }) {
   const t = useT();
   const targets = usePreviewTargets(repo.path).data ?? [];
-  const { runs, select } = usePreviewStore();
   if (targets.length === 0) return null;
   return (
     <Card icon={<MonitorSmartphone />} title={t("view.preview")} view="preview">
-      {targets.slice(0, 5).map((target) => {
-        const run = runOf(runs, target.id);
-        return (
-          <Row
-            key={target.id}
-            lead={
-              <span
-                className={cn(
-                  "size-2 rounded-full",
-                  run.status === "ready"
-                    ? "bg-added-foreground"
-                    : run.status === "starting"
-                      ? "bg-primary"
-                      : run.status === "failed"
-                        ? "bg-removed-foreground"
-                        : "bg-white/20",
-                )}
-              />
-            }
-            title={target.name}
-            meta={`${target.framework} · ${target.dir || "."}`}
-            trail={run.url ?? undefined}
-            onClick={() => {
-              select(target.id);
-              go("preview");
-            }}
-          />
-        );
-      })}
+      {targets.slice(0, 5).map((target) => (
+        <PreviewRow key={target.id} target={target} />
+      ))}
     </Card>
+  );
+}
+
+/** Status and address only: a log line from the app doesn't re-render the card. */
+function PreviewRow({ target }: { target: PreviewTarget }) {
+  const status = usePreviewStore((s) => runOf(s.runs, target.id).status);
+  const url = usePreviewStore((s) => runOf(s.runs, target.id).url);
+  const select = usePreviewStore((s) => s.select);
+  return (
+    <Row
+      lead={
+        <span
+          className={cn(
+            "size-2 rounded-full",
+            status === "ready"
+              ? "bg-added-foreground"
+              : status === "starting"
+                ? "bg-primary"
+                : status === "failed"
+                  ? "bg-removed-foreground"
+                  : "bg-white/20",
+          )}
+        />
+      }
+      title={target.name}
+      meta={`${target.framework} · ${target.dir || "."}`}
+      trail={url ?? undefined}
+      onClick={() => {
+        select(target.id);
+        go("preview");
+      }}
+    />
   );
 }
 

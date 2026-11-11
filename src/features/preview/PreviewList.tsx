@@ -41,17 +41,22 @@ export async function startBackground(repoPath: string, target: PreviewTarget) {
 
 function Row({ repoPath, target }: { repoPath: string; target: PreviewTarget }) {
   const t = useT();
-  const { runs, selected, select } = usePreviewStore(
-    useShallow((s) => ({ runs: s.runs, selected: s.selected, select: s.select })),
+  // Primitives only: the app's log lines don't re-render the list.
+  const run = usePreviewStore(
+    useShallow((s) => {
+      const { status, inWorkspace } = runOf(s.runs, target.id);
+      return { status, inWorkspace };
+    }),
   );
-  const run = runOf(runs, target.id);
+  const selected = usePreviewStore((s) => s.selected === target.id);
+  const select = usePreviewStore((s) => s.select);
   const live = run.status === "starting" || run.status === "ready";
   const Icon = { server: Server, web: Globe, workspace: Boxes, expo: Smartphone, flutter: Smartphone }[target.kind];
   return (
     <li
       className={cn(
         "group/app flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-white/[0.06]",
-        selected === target.id && "bg-white/10",
+        selected && "bg-white/10",
       )}
     >
       <button

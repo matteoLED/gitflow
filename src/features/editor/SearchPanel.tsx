@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { CaseSensitive, ChevronDown, ChevronRight, Regex, Replace, ReplaceAll, WholeWord } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
@@ -208,74 +209,126 @@ export function SearchPanel({ repoPath }: { repoPath: string }) {
             ? t(search.data.truncated ? "editor.resultsTruncated" : "editor.results", { count, files: groups.length })
             : null}
       </p>
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2 font-mono text-[12px]">
-        {groups.map(([path, matches]) => {
+      <SearchResults
+        groups={groups}
+        closed={closed}
+        renderFile={(path, matches) => {
           const open = !closed.has(path);
           const slash = path.lastIndexOf("/");
           return (
-            <div key={path}>
-              <div className="group relative">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setClosed((s) => (s.has(path) ? new Set([...s].filter((p) => p !== path)) : new Set([...s, path])))
-                  }
-                  className="flex h-6 w-full items-center gap-1.5 rounded-md px-1.5 text-left font-sans text-[12.5px] hover:bg-white/[0.05]"
-                  title={path}
-                >
-                  <ChevronRight
-                    aria-hidden
-                    className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}
-                  />
-                  <FileIcon path={path} className="size-3.5 shrink-0" />
-                  <span className="shrink-0">{path.slice(slash + 1)}</span>
-                  <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground">
-                    {path.slice(0, Math.max(slash, 0))}
-                  </span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{matches.length}</span>
-                </button>
-                {canReplace && <HoverReplace label={t("editor.replaceInFile")} onClick={() => void replace([path])} />}
-              </div>
-              {open &&
-                matches.map((m) => {
-                  const text = m.text.trimStart();
-                  const range = matchRange(text, deferred, opts);
-                  return (
-                    <div key={`${m.line}:${m.column}`} className="group relative">
-                      <button
-                        type="button"
-                        onClick={() => openAt(repoPath, m.path, m.line, m.column)}
-                        className="flex h-[22px] w-full items-center gap-2 rounded-md pr-1.5 pl-7 text-left hover:bg-white/[0.05]"
+            <div className="group relative">
+              <button
+                type="button"
+                onClick={() =>
+                  setClosed((s) => (s.has(path) ? new Set([...s].filter((p) => p !== path)) : new Set([...s, path])))
+                }
+                className="flex h-6 w-full items-center gap-1.5 rounded-md px-1.5 text-left font-sans text-[12.5px] hover:bg-white/[0.05]"
+                title={path}
+              >
+                <ChevronRight
+                  aria-hidden
+                  className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}
+                />
+                <FileIcon path={path} className="size-3.5 shrink-0" />
+                <span className="shrink-0">{path.slice(slash + 1)}</span>
+                <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground">
+                  {path.slice(0, Math.max(slash, 0))}
+                </span>
+                <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{matches.length}</span>
+              </button>
+              {canReplace && <HoverReplace label={t("editor.replaceInFile")} onClick={() => void replace([path])} />}
+            </div>
+          );
+        }}
+        renderMatch={(m) => {
+          const text = m.text.trimStart();
+          const range = matchRange(text, deferred, opts);
+          return (
+            <div className="group relative">
+              <button
+                type="button"
+                onClick={() => openAt(repoPath, m.path, m.line, m.column)}
+                className="flex h-[22px] w-full items-center gap-2 rounded-md pr-1.5 pl-7 text-left hover:bg-white/[0.05]"
+              >
+                <span className="w-8 shrink-0 text-right text-muted-foreground tabular-nums">{m.line}</span>
+                <span className="min-w-0 truncate whitespace-pre text-foreground/80">
+                  {range ? (
+                    <>
+                      {text.slice(0, range[0])}
+                      <mark
+                        className={cn(
+                          "rounded-[2px] bg-amber-400/30 text-foreground",
+                          replaceOpen && "bg-removed/30 line-through",
+                        )}
                       >
-                        <span className="w-8 shrink-0 text-right text-muted-foreground tabular-nums">{m.line}</span>
-                        <span className="min-w-0 truncate whitespace-pre text-foreground/80">
-                          {range ? (
-                            <>
-                              {text.slice(0, range[0])}
-                              <mark
-                                className={cn(
-                                  "rounded-[2px] bg-amber-400/30 text-foreground",
-                                  replaceOpen && "bg-removed/30 line-through",
-                                )}
-                              >
-                                {text.slice(range[0], range[1])}
-                              </mark>
-                              {replaceOpen && replacement && !opts.regex && (
-                                <mark className="rounded-[2px] bg-added/30 text-foreground">{replacement}</mark>
-                              )}
-                              {text.slice(range[1])}
-                            </>
-                          ) : (
-                            text
-                          )}
-                        </span>
-                      </button>
-                      {canReplace && (
-                        <HoverReplace label={t("editor.replaceLine")} onClick={() => void replace([m.path], m.line)} />
+                        {text.slice(range[0], range[1])}
+                      </mark>
+                      {replaceOpen && replacement && !opts.regex && (
+                        <mark className="rounded-[2px] bg-added/30 text-foreground">{replacement}</mark>
                       )}
-                    </div>
-                  );
-                })}
+                      {text.slice(range[1])}
+                    </>
+                  ) : (
+                    text
+                  )}
+                </span>
+              </button>
+              {canReplace && (
+                <HoverReplace label={t("editor.replaceLine")} onClick={() => void replace([m.path], m.line)} />
+              )}
+            </div>
+          );
+        }}
+      />
+    </div>
+  );
+}
+
+const FILE_ROW = 24; // h-6
+const MATCH_ROW = 22; // h-[22px]
+
+type ResultRow = { kind: "file"; path: string; matches: SearchMatch[] } | { kind: "match"; match: SearchMatch };
+
+/** Results can run to thousands of lines (git grep caps them, not this list): only the visible rows are mounted. */
+function SearchResults({
+  groups,
+  closed,
+  renderFile,
+  renderMatch,
+}: {
+  groups: [string, SearchMatch[]][];
+  closed: ReadonlySet<string>;
+  renderFile: (path: string, matches: SearchMatch[]) => React.ReactNode;
+  renderMatch: (match: SearchMatch) => React.ReactNode;
+}) {
+  const rows = useMemo(
+    () =>
+      groups.flatMap(([path, matches]): ResultRow[] => [
+        { kind: "file", path, matches },
+        ...(closed.has(path) ? [] : matches.map((match) => ({ kind: "match", match }) as const)),
+      ]),
+    [groups, closed],
+  );
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (i) => (rows[i].kind === "file" ? FILE_ROW : MATCH_ROW),
+    overscan: 16,
+    initialRect: { width: 0, height: 800 },
+  });
+  return (
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2 font-mono text-[12px]">
+      <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map((item) => {
+          const row = rows[item.index];
+          return (
+            <div
+              key={row.kind === "file" ? row.path : `${row.match.path}:${row.match.line}:${row.match.column}`}
+              className="absolute inset-x-0"
+              style={{ transform: `translateY(${item.start}px)` }}
+            >
+              {row.kind === "file" ? renderFile(row.path, row.matches) : renderMatch(row.match)}
             </div>
           );
         })}

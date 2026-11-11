@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState } from "react";
 import {
   Archive,
@@ -69,7 +70,7 @@ export function CommandPalette({ repo }: { repo: RepositoryInfo }) {
 
 function Commands({ repo, close }: { repo: RepositoryInfo; close: () => void }) {
   const t = useT();
-  const { setView, switchRepo, repos } = useWorkspaceStore();
+  const { setView, switchRepo, repos } = useWorkspaceStore(useShallow((s) => ({ setView: s.setView, switchRepo: s.switchRepo, repos: s.repos })));
   const work = useWorkItems(repo.path).data ?? [];
   const issues = useWorkspaceIssues().data ?? [];
   const runs = useAgentsStore((s) => s.runs).filter((r) => r.repoPath === repo.path && r.thread === r.id);

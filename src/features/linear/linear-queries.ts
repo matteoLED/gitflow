@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { gitBackend } from "@/lib/tauri-git";
 import { ALL_WORKSPACES, useLinearStore } from "@/stores/linear-store";
@@ -132,7 +133,7 @@ export function useIssue(orgId: string | undefined, id: string | null) {
 
 /** The open issue, read with its own workspace's key. */
 export function useOpenIssue() {
-  const { issue, issueOrg } = useLinearStore();
+  const { issue, issueOrg } = useLinearStore(useShallow((s) => ({ issue: s.issue, issueOrg: s.issueOrg })));
   const active = useActiveAccount();
   return { orgId: issueOrg ?? active?.id, ...useIssue(issueOrg ?? active?.id, issue) };
 }

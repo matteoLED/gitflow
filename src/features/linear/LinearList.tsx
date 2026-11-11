@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useState } from "react";
 import { Box, Check, ChevronDown, CircleDashed, CircleUser, Layers, Plus } from "lucide-react";
 import { RowSkeleton, SkeletonList } from "@/components/skeletons";
@@ -219,7 +220,7 @@ export function LinearList({ query }: { query: string }) {
     (n, c) => n + c.issues.filter((i) => i.state.type !== "completed" && i.state.type !== "canceled").length,
     0,
   );
-  const { page, project, setPage, setProject } = useLinearStore();
+  const { page, project, setPage, setProject } = useLinearStore(useShallow((s) => ({ page: s.page, project: s.project, setPage: s.setPage, setProject: s.setProject })));
   const [showAll, setShowAll] = useState(false);
   if (accounts.data && accounts.data.length === 0) {
     return (

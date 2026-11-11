@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { Brush, CircleUser, GitPullRequest, Inbox, Layers, type LucideIcon } from "lucide-react";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -15,7 +16,7 @@ const FILTERS: [WorkFilter, LucideIcon][] = [
 /** The Work page's views, Linear-style, each with its count. */
 export function WorkList({ repoPath }: { repoPath: string }) {
   const t = useT();
-  const { filter, setFilter } = useWorkStore();
+  const { filter, setFilter } = useWorkStore(useShallow((s) => ({ filter: s.filter, setFilter: s.setFilter })));
   const items = useWorkItems(repoPath).data;
   const inbox = useInbox(repoPath);
   return (

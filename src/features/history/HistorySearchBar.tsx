@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -48,7 +49,7 @@ function Field({
 export function HistorySearchBar() {
   const t = useT();
   const regexId = useId();
-  const { query, setQuery, focusRequested, focusHandled } = useHistorySearchStore();
+  const { query, setQuery, focusRequested, focusHandled } = useHistorySearchStore(useShallow((s) => ({ query: s.query, setQuery: s.setQuery, focusRequested: s.focusRequested, focusHandled: s.focusHandled })));
   const inputRef = useRef<HTMLInputElement>(null);
   const search = parseHistoryQuery(query);
   const edit = (next: HistorySearch) => setQuery(formatHistoryQuery(next));

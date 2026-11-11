@@ -27,7 +27,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useT, type MessageKey } from "@/i18n";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
-import { runOf, usePreviewStore, type Device, type LogLine } from "@/stores/preview-store";
+import { runOf, usePreviewStore, type Device } from "@/stores/preview-store";
 import { startBackground, startPreview, usePreviewTargets } from "./PreviewList";
 import { WorkspaceTasks } from "./WorkspaceTasks";
 import { useUiStore } from "@/stores/ui-store";
@@ -149,18 +149,27 @@ function ServerStatus({ url }: { url: string | null }) {
 /** Front-ends usually need their API: offers to start the stopped backends in one click. */
 function BackendHint({ repoPath }: { repoPath: string }) {
   const t = useT();
-  const runs = usePreviewStore((s) => s.runs);
   const targets = usePreviewTargets(repoPath).data ?? [];
-  // A backend may already run inside a monorepo run (turbo, start.sh…): its task shows up in that run's logs.
-  const workspaceTasks = new Set(
-    targets
-      .filter((x) => x.kind === "workspace" && runOf(runs, x.id).status === "ready")
-      .flatMap((x) => runOf(runs, x.id).logs.map((l) => l.task)),
+  // Ids only: log lines streaming in re-render this when they change which backends look stopped, not each time.
+  const stoppedIds = usePreviewStore(
+    useShallow((s) => {
+      // A backend may already run inside a monorepo run (turbo, start.sh…): its task shows up in that run's logs.
+      const workspaceTasks = new Set(
+        targets
+          .filter((x) => x.kind === "workspace" && runOf(s.runs, x.id).status === "ready")
+          .flatMap((x) => runOf(s.runs, x.id).logs.map((l) => l.task)),
+      );
+      const runsElsewhere = (name: string) =>
+        workspaceTasks.has(name) || workspaceTasks.has(name.split("/").pop() ?? name);
+      return targets
+        .filter(
+          (b) =>
+            b.kind === "server" && !["starting", "ready"].includes(runOf(s.runs, b.id).status) && !runsElsewhere(b.name),
+        )
+        .map((b) => b.id);
+    }),
   );
-  const runsElsewhere = (name: string) => workspaceTasks.has(name) || workspaceTasks.has(name.split("/").pop() ?? name);
-  const stopped = targets.filter(
-    (b) => b.kind === "server" && !["starting", "ready"].includes(runOf(runs, b.id).status) && !runsElsewhere(b.name),
-  );
+  const stopped = targets.filter((b) => stoppedIds.includes(b.id));
   if (stopped.length === 0) return null;
   return (
     <div className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-white/8 bg-card px-3 py-1.5 text-[12.5px] text-muted-foreground">
@@ -180,7 +189,8 @@ function BackendHint({ repoPath }: { repoPath: string }) {
   );
 }
 
-function Logs({ lines, tall = false }: { lines: LogLine[]; tall?: boolean }) {
+function Logs({ targetId, tall = false }: { targetId: string; tall?: boolean }) {
+  const lines = usePreviewStore((s) => runOf(s.runs, targetId).logs);
   const ref = useRef<HTMLPreElement>(null);
   useEffect(() => ref.current?.scrollTo({ top: ref.current.scrollHeight }), [lines.length]);
   return (
@@ -302,10 +312,16 @@ function AddressBar({ base, live }: { base: string | null; live: boolean }) {
 /** Main panel of the Preview view: the running app in a desktop, tablet or phone frame. */
 export function PreviewPanel({ repoPath }: { repoPath: string }) {
   const t = useT();
-  const { runs, selected } = usePreviewStore(useShallow((s) => ({ runs: s.runs, selected: s.selected })));
+  const selected = usePreviewStore((s) => s.selected);
   const targets = usePreviewTargets(repoPath).data ?? [];
   const target = targets.find((x) => x.id === selected) ?? targets[0];
-  const run = runOf(runs, target?.id ?? null);
+  // Primitives only: the logs are read by the components showing them, so a log line doesn't re-render the panel.
+  const run = usePreviewStore(
+    useShallow((s) => {
+      const { status, url, inWorkspace, logs } = runOf(s.runs, target?.id ?? null);
+      return { status, url, inWorkspace, hasLogs: logs.length > 0 };
+    }),
+  );
   const [showLogs, setShowLogs] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   useEffect(() => {
@@ -388,8 +404,8 @@ export function PreviewPanel({ repoPath }: { repoPath: string }) {
           {fullscreen ? <Minimize2 /> : <Maximize2 />}
         </HeaderButton>
       </PanelHeader>
-      {target.kind === "workspace" && (run.status === "ready" || run.logs.length > 0) ? (
-        <WorkspaceTasks repoPath={repoPath} logs={run.logs} targetId={target.id} running={run.status === "ready"} />
+      {target.kind === "workspace" && (run.status === "ready" || run.hasLogs) ? (
+        <WorkspaceTasks repoPath={repoPath} targetId={target.id} running={run.status === "ready"} />
       ) : (
         <>
           {target.kind !== "server" && <BackendHint repoPath={repoPath} />}
@@ -416,8 +432,8 @@ export function PreviewPanel({ repoPath }: { repoPath: string }) {
               }
             />
           )}
-          {(showLogs || failed || run.status === "starting" || target.kind === "server") && run.logs.length > 0 && (
-            <Logs lines={run.logs} tall={target.kind === "server"} />
+          {(showLogs || failed || run.status === "starting" || target.kind === "server") && run.hasLogs && (
+            <Logs targetId={target.id} tall={target.kind === "server"} />
           )}
           {target.kind === "server" && (run.status === "starting" || run.status === "ready") && (
             <InputBar targetId={target.id} />

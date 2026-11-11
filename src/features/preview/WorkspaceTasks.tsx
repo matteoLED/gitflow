@@ -21,16 +21,15 @@ function useTasks(logs: LogLine[]) {
 /** A monorepo run, like Turborepo's TUI: every task on the left, the selected one's output on the right. */
 export function WorkspaceTasks({
   repoPath,
-  logs,
   targetId,
   running,
 }: {
   repoPath: string;
-  logs: LogLine[];
   targetId: string;
   running: boolean;
 }) {
   const t = useT();
+  const logs = usePreviewStore((s) => runOf(s.runs, targetId).logs);
   const [task, setTask] = useState(ALL);
   const tasks = useTasks(logs);
   const runs = usePreviewStore((s) => s.runs);

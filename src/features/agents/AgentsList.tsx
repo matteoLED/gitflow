@@ -81,14 +81,16 @@ const matches = (query: string, ...texts: (string | null)[]) =>
 
 function AppRuns({ repoPath, query }: { repoPath: string; query: string }) {
   const t = useT();
-  // One entry per conversation: its first run.
-  const runs = useAgentsStore((s) => s.runs).filter(
-    (r) => r.repoPath === repoPath && r.thread === r.id && matches(query, r.title),
+  // One entry per conversation: its first run. Ids only: a streamed step re-renders its row, not the list.
+  const ids = useAgentsStore(
+    useShallow((s) =>
+      s.runs.filter((r) => r.repoPath === repoPath && r.thread === r.id && matches(query, r.title)).map((r) => r.id),
+    ),
   );
   const select = useAgentsStore((s) => s.select);
   return (
-    <Section title={t("agents.runs")} count={runs.length}>
-      {runs.length === 0 &&
+    <Section title={t("agents.runs")} count={ids.length}>
+      {ids.length === 0 &&
         (query ? (
           <Empty>{t("agents.noRuns")}</Empty>
         ) : (
@@ -103,17 +105,35 @@ function AppRuns({ repoPath, query }: { repoPath: string; query: string }) {
             />
           </li>
         ))}
-      {runs.map((run) => (
-        <Item
-          key={run.id}
-          selection={{ type: "run", id: run.id }}
-          icon={<StatusIcon status={run.status} />}
-          title={run.title}
-          meta={`${run.agent === "claude" ? "Claude Code" : "Codex"} · ${t.plural("agents.steps", run.steps.length)}`}
-          age={run.startedAt}
-        />
+      {ids.map((id) => (
+        <RunItem key={id} id={id} />
       ))}
     </Section>
+  );
+}
+
+function RunItem({ id }: { id: string }) {
+  const t = useT();
+  const run = useAgentsStore(
+    useShallow((s) => {
+      const r = s.runs.find((r) => r.id === id);
+      return {
+        status: r?.status ?? "running",
+        title: r?.title ?? "",
+        agent: r?.agent,
+        steps: r?.steps.length ?? 0,
+        startedAt: r?.startedAt ?? null,
+      };
+    }),
+  );
+  return (
+    <Item
+      selection={{ type: "run", id }}
+      icon={<StatusIcon status={run.status} />}
+      title={run.title}
+      meta={`${run.agent === "claude" ? "Claude Code" : "Codex"} · ${t.plural("agents.steps", run.steps)}`}
+      age={run.startedAt}
+    />
   );
 }
 

@@ -311,13 +311,12 @@ export function ChatThread({
   focusKey,
 }: ChatThreadProps) {
   const t = useT();
-  const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const root = useWorkspaceStore((s) => s.repo?.path ?? null);
   const items = useMemo(() => toChat(steps, root), [steps, root]);
   const [mode, setMode] = useState<"chat" | "graph">("chat");
-  const attachments = useAttachments();
+  const hasItems = items.length > 0;
 
   // Follows new steps while the user is at the bottom; leaves them alone once they scroll up.
   useLayoutEffect(() => {
@@ -342,6 +341,105 @@ export function ChatThread({
     return () => window.removeEventListener("keydown", onKey);
   }, [running, onStop]);
 
+  const onSent = () => {
+    stick.current = true;
+  };
+
+  // Built apart from the transcript so a new step doesn't re-render the loader.
+  const working = (
+    <p className="flex items-center gap-2 px-2 py-2 text-[12.5px] text-muted-foreground">
+      <BrailleLoader className="text-primary" />
+      {t("agents.working")}
+    </p>
+  );
+
+  // The toggle and the composer are their own components with steady props: a streamed step re-renders the
+  // transcript's new entry, not them.
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {!compact && hasItems && <ViewToggle mode={mode} onChange={setMode} />}
+      <div ref={scrollRef} className={cn("min-h-0 flex-1 overflow-y-auto", compact ? "px-3" : "px-6")}>
+        {mode === "graph" && !compact ? (
+          <Suspense fallback={null}>
+            <AgentGraph items={items} running={running} />
+          </Suspense>
+        ) : (
+          <div className="mx-auto max-w-[780px] pt-2 pb-6">
+            {items.length === 0 && !running && empty}
+            {items.map((item, i) => (
+              <Entry key={item.key} item={item} live={running && i === items.length - 1} />
+            ))}
+            {running && items[items.length - 1]?.type !== "tools" && working}
+          </div>
+        )}
+      </div>
+      <Composer
+        root={root}
+        running={running}
+        onSend={onSend}
+        onStop={onStop}
+        onSent={onSent}
+        agentLabel={agentLabel}
+        context={context}
+        compact={compact}
+        placeholder={placeholder}
+        settings={settings}
+        focusKey={focusKey}
+      />
+    </div>
+  );
+}
+
+function ViewToggle({ mode, onChange }: { mode: "chat" | "graph"; onChange: (mode: "chat" | "graph") => void }) {
+  const t = useT();
+  return (
+    <div className="flex shrink-0 justify-center pt-2">
+      <div role="tablist" className="flex gap-0.5 rounded-full border border-white/[0.07] p-0.5">
+        {(
+          [
+            ["chat", MessagesSquare, t("agents.viewChat")],
+            ["graph", GitFork, t("agents.viewGraph")],
+          ] as const
+        ).map(([value, Icon, label]) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            aria-selected={mode === value}
+            onClick={() => onChange(value)}
+            className="flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[12px] text-muted-foreground hover:text-foreground aria-selected:bg-white/[0.08] aria-selected:text-foreground"
+          >
+            <Icon aria-hidden className="size-3.5" />
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type ComposerProps = Pick<
+  ChatThreadProps,
+  "running" | "onSend" | "onStop" | "agentLabel" | "context" | "compact" | "placeholder" | "settings" | "focusKey"
+> & { root: string | null; onSent: () => void };
+
+/** The message box under the transcript: draft, completion menu, attachments, send / stop. */
+function Composer({
+  root,
+  running,
+  onSend,
+  onStop,
+  onSent,
+  agentLabel,
+  context,
+  compact,
+  placeholder,
+  settings,
+  focusKey,
+}: ComposerProps) {
+  const t = useT();
+  const [draft, setDraft] = useState("");
+  const attachments = useAttachments();
   const {
     menu: completion,
     chips,
@@ -359,7 +457,7 @@ export function ChatThread({
     onSend(text || t("attach.lookAtThis"), images);
     setDraft("");
     attachments.clear();
-    stick.current = true;
+    onSent();
   };
   useEffect(() => {
     if (focusKey) inputRef.current?.focus();
@@ -373,120 +471,74 @@ export function ChatThread({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {!compact && items.length > 0 && (
-        <div className="flex shrink-0 justify-center pt-2">
-          <div role="tablist" className="flex gap-0.5 rounded-full border border-white/[0.07] p-0.5">
-            {(
-              [
-                ["chat", MessagesSquare, t("agents.viewChat")],
-                ["graph", GitFork, t("agents.viewGraph")],
-              ] as const
-            ).map(([value, Icon, label]) => (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                aria-selected={mode === value}
-                onClick={() => setMode(value)}
-                className="flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[12px] text-muted-foreground hover:text-foreground aria-selected:bg-white/[0.08] aria-selected:text-foreground"
-              >
-                <Icon aria-hidden className="size-3.5" />
-                {label}
-              </button>
-            ))}
-          </div>
+    <div className={cn("pt-1 pb-3", compact ? "px-3" : "px-6")}>
+      {running && onStop && (
+        <div className="mb-2 flex justify-center">
+          <button
+            type="button"
+            onClick={onStop}
+            className="flex h-7 items-center gap-1.5 rounded-full border border-white/[0.1] bg-popover px-3 text-[12.5px] text-foreground shadow-lg hover:bg-accent"
+          >
+            <Square aria-hidden className="size-3 fill-current" />
+            {t("agents.stop")}
+            <kbd className="kbd ml-1">esc</kbd>
+          </button>
         </div>
       )}
-      <div ref={scrollRef} className={cn("min-h-0 flex-1 overflow-y-auto", compact ? "px-3" : "px-6")}>
-        {mode === "graph" && !compact ? (
-          <Suspense fallback={null}>
-            <AgentGraph items={items} running={running} />
-          </Suspense>
-        ) : (
-          <div className="mx-auto max-w-[780px] pt-2 pb-6">
-            {items.length === 0 && !running && empty}
-            {items.map((item, i) => (
-              <Entry key={item.key} item={item} live={running && i === items.length - 1} />
-            ))}
-            {running && items[items.length - 1]?.type !== "tools" && (
-              <p className="flex items-center gap-2 px-2 py-2 text-[12.5px] text-muted-foreground">
-                <BrailleLoader className="text-primary" />
-                {t("agents.working")}
-              </p>
-            )}
+      <div
+        ref={composerRef}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={attachments.onDrop}
+        className="relative mx-auto max-w-[780px] rounded-xl border border-white/[0.07] bg-[color-mix(in_oklab,var(--foreground)_5%,var(--background))] transition-colors focus-within:border-white/[0.14]"
+      >
+        {completion}
+        {context && <div className="flex flex-wrap gap-1.5 px-2.5 pt-2.5">{context}</div>}
+        <AttachmentStrip attachments={attachments} />
+        <div className="relative">
+          {chips}
+          <Textarea
+            ref={inputRef}
+            onSelect={trackCaret}
+            onScroll={syncChips}
+            onPaste={attachments.onPaste}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKeyDown}
+            disabled={!onSend}
+            aria-label={t("agents.message")}
+            placeholder={onSend ? (placeholder ?? t("agents.continuePlaceholder")) : t("agents.cannotContinue")}
+            className={cn(COMPOSER_FIELD, "relative text-transparent caret-foreground")}
+          />
+        </div>
+        <div className="flex items-center gap-1.5 px-2 pt-1 pb-2">
+          {onSend && <AttachButton attachments={attachments} />}
+          {/* Grows so a trailing item of `settings` (the context ring) can sit by the send button. */}
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            {settings ?? <span className="text-[11.5px] text-muted-foreground">{agentLabel}</span>}
           </div>
-        )}
-      </div>
-      <div className={cn("pt-1 pb-3", compact ? "px-3" : "px-6")}>
-        {running && onStop && (
-          <div className="mb-2 flex justify-center">
-            <button
-              type="button"
+          {running && onStop ? (
+            <Button
+              size="icon-sm"
+              variant="secondary"
+              aria-label={t("agents.stop")}
               onClick={onStop}
-              className="flex h-7 items-center gap-1.5 rounded-full border border-white/[0.1] bg-popover px-3 text-[12.5px] text-foreground shadow-lg hover:bg-accent"
+              className="ml-auto size-8 shrink-0 rounded-full"
             >
-              <Square aria-hidden className="size-3 fill-current" />
-              {t("agents.stop")}
-              <kbd className="kbd ml-1">esc</kbd>
-            </button>
-          </div>
-        )}
-        <div
-          ref={composerRef}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={attachments.onDrop}
-          className="relative mx-auto max-w-[780px] rounded-xl border border-white/[0.07] bg-[color-mix(in_oklab,var(--foreground)_5%,var(--background))] transition-colors focus-within:border-white/[0.14]"
-        >
-          {completion}
-          {context && <div className="flex flex-wrap gap-1.5 px-2.5 pt-2.5">{context}</div>}
-          <AttachmentStrip attachments={attachments} />
-          <div className="relative">
-            {chips}
-            <Textarea
-              ref={inputRef}
-              onSelect={trackCaret}
-              onScroll={syncChips}
-              onPaste={attachments.onPaste}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={onKeyDown}
-              disabled={!onSend}
-              aria-label={t("agents.message")}
-              placeholder={onSend ? (placeholder ?? t("agents.continuePlaceholder")) : t("agents.cannotContinue")}
-              className={cn(COMPOSER_FIELD, "relative text-transparent caret-foreground")}
-            />
-          </div>
-          <div className="flex items-center gap-1.5 px-2 pt-1 pb-2">
-            {onSend && <AttachButton attachments={attachments} />}
-            {/* Grows so a trailing item of `settings` (the context ring) can sit by the send button. */}
-            <div className="flex min-w-0 flex-1 items-center gap-1.5">
-              {settings ?? <span className="text-[11.5px] text-muted-foreground">{agentLabel}</span>}
-            </div>
-            {running && onStop ? (
-              <Button
-                size="icon-sm"
-                variant="secondary"
-                aria-label={t("agents.stop")}
-                onClick={onStop}
-                className="ml-auto size-8 shrink-0 rounded-full"
-              >
-                <Square className="size-3" />
-              </Button>
-            ) : (
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label={t("agents.send")}
-                disabled={(!draft.trim() && attachments.items.length === 0) || !onSend || attachments.saving}
-                onClick={send}
-                // Linear's send: a quiet grey circle, brighter once there's something to send.
-                className="ml-auto size-8 shrink-0 rounded-full bg-white/[0.12] text-foreground hover:bg-white/[0.18] disabled:bg-white/[0.06] disabled:text-muted-foreground disabled:opacity-100"
-              >
-                <ArrowUp className="size-4" />
-              </Button>
-            )}
-          </div>
+              <Square className="size-3" />
+            </Button>
+          ) : (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label={t("agents.send")}
+              disabled={(!draft.trim() && attachments.items.length === 0) || !onSend || attachments.saving}
+              onClick={send}
+              // Linear's send: a quiet grey circle, brighter once there's something to send.
+              className="ml-auto size-8 shrink-0 rounded-full bg-white/[0.12] text-foreground hover:bg-white/[0.18] disabled:bg-white/[0.06] disabled:text-muted-foreground disabled:opacity-100"
+            >
+              <ArrowUp className="size-4" />
+            </Button>
+          )}
         </div>
       </div>
     </div>

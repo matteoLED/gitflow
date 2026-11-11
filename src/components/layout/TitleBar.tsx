@@ -200,7 +200,7 @@ function RecentMenu() {
 
 function Tabs() {
   const t = useT();
-  const { tabs, active, activate, close, open } = useTabsStore();
+  const { tabs, active, activate, close, open } = useTabsStore(useShallow((s) => ({ tabs: s.tabs, active: s.active, activate: s.activate, close: s.close, open: s.open })));
   const activeRef = useRef<HTMLDivElement>(null);
   // Keeps the active tab in view when there are more tabs than room.
   useEffect(() => activeRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" }), [active, tabs.length]);
