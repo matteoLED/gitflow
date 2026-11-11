@@ -6,6 +6,7 @@ import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { useLinearStore } from "@/stores/linear-store";
 import type { LinearProject } from "@/types/git";
+import { AssistantToggle } from "@/features/agents/AssistantToggle";
 import { CreateIssueButton } from "./CreateIssue";
 import { LinearIcon } from "./LinearIcon";
 import { ProgressRing } from "./LinearList";
@@ -89,6 +90,7 @@ export function LinearProjects() {
       <span className="font-medium">{t("linear.projects")}</span>
       {projects.data && <span className="text-muted-foreground">{projects.data.length}</span>}
       <span className="ml-auto" />
+      <AssistantToggle />
       <CreateIssueButton variant="header" />
     </PanelHeader>
   );

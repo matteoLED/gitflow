@@ -1,3 +1,4 @@
+import { proposalPre } from "@/features/linear/IssueProposal";
 import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { shallow } from "zustand/shallow";
 import { useComposerMenu } from "./ComposerMenu";
@@ -203,15 +204,22 @@ const Thinking = memo(function Thinking({ step }: { step: AgentStep }) {
   );
 });
 
+/** Blocks an agent's reply can hold beyond Markdown: Linear issues it proposes, created in one click. */
+const AGENT_BLOCKS = { pre: proposalPre };
+
 /** An agent's reply: the repository's PRs, issues and commits it names preview on hover. */
 const AgentMessage = memo(function AgentMessage({ text }: { text: string }) {
   const repoPath = useWorkspaceStore((s) => s.repo?.path ?? null);
-  return repoPath ? <LinkedMessage text={text} repoPath={repoPath} /> : <Markdown text={text} />;
+  return repoPath ? (
+    <LinkedMessage text={text} repoPath={repoPath} />
+  ) : (
+    <Markdown text={text} components={AGENT_BLOCKS} />
+  );
 });
 
 function LinkedMessage({ text, repoPath }: { text: string; repoPath: string }) {
   const { known } = useKnownRefs(repoPath);
-  return <Markdown text={text} refs={{ repoPath, known }} />;
+  return <Markdown text={text} refs={{ repoPath, known }} components={AGENT_BLOCKS} />;
 }
 
 const Entry = memo(
@@ -284,6 +292,8 @@ type ChatThreadProps = {
   empty?: React.ReactNode;
   /** Chips above the composer: what the agent will be told about. */
   context?: React.ReactNode;
+  /** What the last run changed in the checkout, to keep or put back: shown on top of the composer. */
+  edits?: React.ReactNode;
   /** Narrow layout for the side panel. */
   compact?: boolean;
   placeholder?: string;
@@ -305,6 +315,7 @@ export function ChatThread({
   agentLabel,
   empty,
   context,
+  edits,
   compact = false,
   placeholder,
   settings,
@@ -381,6 +392,7 @@ export function ChatThread({
         onSent={onSent}
         agentLabel={agentLabel}
         context={context}
+        edits={edits}
         compact={compact}
         placeholder={placeholder}
         settings={settings}
@@ -420,7 +432,16 @@ function ViewToggle({ mode, onChange }: { mode: "chat" | "graph"; onChange: (mod
 
 type ComposerProps = Pick<
   ChatThreadProps,
-  "running" | "onSend" | "onStop" | "agentLabel" | "context" | "compact" | "placeholder" | "settings" | "focusKey"
+  | "running"
+  | "onSend"
+  | "onStop"
+  | "agentLabel"
+  | "context"
+  | "edits"
+  | "compact"
+  | "placeholder"
+  | "settings"
+  | "focusKey"
 > & { root: string | null; onSent: () => void };
 
 /** The message box under the transcript: draft, completion menu, attachments, send / stop. */
@@ -432,6 +453,7 @@ function Composer({
   onSent,
   agentLabel,
   context,
+  edits,
   compact,
   placeholder,
   settings,
@@ -492,6 +514,7 @@ function Composer({
         className="relative mx-auto max-w-[780px] rounded-xl border border-white/[0.07] bg-[color-mix(in_oklab,var(--foreground)_5%,var(--background))] transition-colors focus-within:border-white/[0.14]"
       >
         {completion}
+        {edits}
         {context && <div className="flex flex-wrap gap-1.5 px-2.5 pt-2.5">{context}</div>}
         <AttachmentStrip attachments={attachments} />
         <div className="relative">

@@ -1,6 +1,7 @@
 // Typed client for the Rust Git commands. The UI never builds command lines: it only calls these.
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  EditedFile,
   StashEntry,
   StashOutcome,
   UndoAction,
@@ -57,6 +58,9 @@ import type {
   LinearAccount,
   LinearIssue,
   LinearIssueDetail,
+  LinearIssuePatch,
+  LinearLabel,
+  LinearMember,
   LinearOrganization,
   LinearTeamStates,
   LinearProject,
@@ -264,6 +268,13 @@ export const gitBackend = {
   /** Commits what the agent left, then merges its branch into the current one. */
   /** Multi-file patch: the agent's commits plus its uncommitted work, against where its branch forked. */
   agentWorktreeDiff: (repoPath: string, path: string) => invoke<string>("agent_worktree_diff", { repoPath, path }),
+  /** The working tree on disk as a tree id, nothing staged: taken before and after an agent edits the checkout. */
+  snapshotWorkingTree: (repoPath: string) => invoke<string>("snapshot_working_tree", { repoPath }),
+  agentEdits: (repoPath: string, before: string, after: string) =>
+    invoke<EditedFile[]>("agent_edits", { repoPath, before, after }),
+  /** Puts a file back as it was before the run; refused if it changed since. */
+  rejectAgentEdit: (repoPath: string, before: string, after: string, path: string) =>
+    invoke<null>("reject_agent_edit", { repoPath, before, after, path }),
   /** Multi-file patch of `git diff <branch of a> <branch of b>`. */
   compareAgentWorktrees: (repoPath: string, a: string, b: string) =>
     invoke<string>("compare_agent_worktrees", { repoPath, a, b }),
@@ -317,6 +328,8 @@ export const gitBackend = {
   linearAccounts: () => invoke<LinearAccount[]>("linear_accounts"),
   linearRemoveAccount: (orgId: string) => invoke<null>("linear_remove_account", { orgId }),
   linearMyIssues: (orgId: string) => invoke<LinearIssue[]>("linear_my_issues", { orgId }),
+  /** Every open (or recently closed) issue of the workspace, anyone's. */
+  linearAllIssues: (orgId: string) => invoke<LinearIssue[]>("linear_all_issues", { orgId }),
   linearIssue: (orgId: string, id: string) => invoke<LinearIssueDetail>("linear_issue", { orgId, id }),
   /** Every workspace of the user; may fail when Linear refuses it to API keys. */
   linearOrganizations: (orgId: string) => invoke<LinearOrganization[]>("linear_organizations", { orgId }),
@@ -324,6 +337,11 @@ export const gitBackend = {
   linearTeamStates: (orgId: string) => invoke<LinearTeamStates[]>("linear_team_states", { orgId }),
   linearSetIssueState: (orgId: string, issueId: string, stateId: string) =>
     invoke<null>("linear_set_issue_state", { orgId, issueId, stateId }),
+  linearUpdateIssue: (orgId: string, issueId: string, patch: LinearIssuePatch) =>
+    invoke<null>("linear_update_issue", { orgId, issueId, patch }),
+  linearTeamMembers: (orgId: string, teamId: string) =>
+    invoke<LinearMember[]>("linear_team_members", { orgId, teamId }),
+  linearLabels: (orgId: string, teamId: string) => invoke<LinearLabel[]>("linear_labels", { orgId, teamId }),
   linearCreateIssue: (orgId: string, issue: NewLinearIssue) =>
     invoke<CreatedLinearIssue>("linear_create_issue", { orgId, issue }),
   linearProjects: (orgId: string) => invoke<LinearProject[]>("linear_projects", { orgId }),

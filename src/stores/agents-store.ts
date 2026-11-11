@@ -32,7 +32,12 @@ export type AgentRun = {
   group?: string;
   /** Latest known context fill and cost of this run. */
   usage?: Partial<AgentUsage>;
+  /** Run in the user's own checkout: snapshots around it, to review its edits file by file (Zed-like). */
+  edits?: RunEdits;
 };
+
+/** Tree ids of the working tree before and after the run; `settled`: files accepted or rejected since. */
+export type RunEdits = { before: string; after?: string; settled?: string[] };
 
 /** Null fields mean "not reported this time": the previous value stays. */
 function mergeUsage(previous: Partial<AgentUsage> | undefined, next: AgentUsage): Partial<AgentUsage> {
@@ -65,6 +70,7 @@ type AgentsState = {
   setAssistantThread: (thread: string | null) => void;
   addRun: (run: Omit<AgentRun, "status" | "steps" | "sessionId">) => void;
   applyEvent: (event: AgentRunEvent) => void;
+  setEdits: (id: string, edits: RunEdits) => void;
   select: (selection: AgentSelection) => void;
   /** Tab of the Agents list: runs and sessions, sub-agent definitions, or GitHub Actions. */
   listTab: AgentsListTab;
@@ -175,6 +181,7 @@ export const useAgentsStore = create<AgentsState>()(
             }),
           };
         }),
+      setEdits: (id, edits) => set(({ runs }) => ({ runs: runs.map((r) => (r.id === id ? { ...r, edits } : r)) })),
       select: (selection) => set({ selection }),
       listTab: "runs",
       setListTab: (listTab) => set({ listTab }),

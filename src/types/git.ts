@@ -212,10 +212,22 @@ export type LinearIssue = {
   team: { id: string; key: string; name: string };
   project: { id: string; name: string; icon: string | null; color: string } | null;
   cycle: { number: number } | null;
-  labels: { nodes: { name: string; color: string }[] };
-  assignee?: LinearPerson | null;
+  labels: { nodes: LinearLabel[] };
+  assignee?: LinearMember | null;
 };
 type LinearPerson = { name: string; avatarUrl: string | null };
+export type LinearMember = LinearPerson & { id: string };
+export type LinearLabel = { id: string; name: string; color: string };
+/** Fields of an issue to change; absent ones stay as they are, `null` clears. */
+export type LinearIssuePatch = {
+  title?: string;
+  description?: string;
+  priority?: number;
+  stateId?: string;
+  assigneeId?: string | null;
+  labelIds?: string[];
+  projectId?: string | null;
+};
 export type LinearProject = {
   id: string;
   name: string;
@@ -254,7 +266,7 @@ export type LinearCycle = {
 export type LinearIssueDetail = LinearIssue & {
   description: string | null;
   createdAt: string;
-  assignee: LinearPerson | null;
+  assignee: LinearMember | null;
   creator: LinearPerson | null;
   attachments: { nodes: { title: string; subtitle: string | null; url: string; sourceType: string | null }[] };
   comments: { nodes: { body: string; createdAt: string; user: LinearPerson | null; botActor: LinearPerson | null }[] };
@@ -489,6 +501,13 @@ export type RebaseStep = { hash: string; action: RebaseAction; message: string |
 /** `target`: the branch its pull request goes into when not the checked-out one (a failing PR's, for a CI fix). */
 export type Worktree = { path: string; branch: string; target?: string };
 export type WorktreeStatus = { changed: number; ahead: number };
+/** A file an agent changed in the user's checkout during a run; null counts for binary files. */
+export type EditedFile = {
+  path: string;
+  status: "added" | "deleted" | "modified";
+  additions: number | null;
+  deletions: number | null;
+};
 
 /** A Claude Code custom command or skill, typed after `/` in a message. */
 export type SlashCommand = {

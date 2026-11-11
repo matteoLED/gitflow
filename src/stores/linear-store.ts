@@ -4,7 +4,7 @@ import { persist } from "zustand/middleware";
 /** Shows every connected workspace at once. */
 export const ALL_WORKSPACES = "all";
 
-export type LinearPage = "mine" | "cycle" | "projects";
+export type LinearPage = "mine" | "all" | "cycle" | "projects";
 
 type LinearUi = {
   /** Linear organization shown, ALL_WORKSPACES for all of them; null means the first connected one. */
@@ -12,7 +12,7 @@ type LinearUi = {
   issue: string | null;
   /** Organization of the open issue (they differ per issue in the all-workspaces view). */
   issueOrg: string | null;
-  /** Page of the Linear view: the user's issues, the current cycle, or the projects (one when `project` is set). */
+  /** Page of the Linear view: the user's issues, everyone's, the current cycle, or the projects (one when `project` is set). */
   page: LinearPage;
   /** Project shown on the board instead of the user's issues. */
   project: string | null;

@@ -49,5 +49,5 @@ export function useMoveIssue() {
   };
 }
 
-const isIssueList = (key: readonly unknown[], orgId: string) =>
-  key[0] === "linear" && (key[1] === "issues" || key[1] === "project-issues") && key[2] === orgId;
+export const isIssueList = (key: readonly unknown[], orgId: string) =>
+  key[0] === "linear" && ["issues", "project-issues", "all-issues"].includes(String(key[1])) && key[2] === orgId;

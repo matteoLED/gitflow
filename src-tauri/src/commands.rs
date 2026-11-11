@@ -10,7 +10,9 @@ use crate::git::github::{GithubUser, PullRequest, PullRequestRange, ReviewEvent}
 use crate::git::identity::GitIdentity;
 use crate::git::model::*;
 use crate::git::read::{self, LogFilters, WorkingSide};
-use crate::git::{conflicts, files, github, identity, rewrite, validate, worktrees, write};
+use crate::git::{
+    agent_edits, conflicts, files, github, identity, rewrite, validate, worktrees, write,
+};
 use crate::linear;
 use crate::preview;
 use crate::preview_view;
@@ -225,6 +227,30 @@ pub async fn agent_worktree_status(
     path: String,
 ) -> GitResult<worktrees::WorktreeStatus> {
     blocking(move || worktrees::status(&repo(&repo_path)?, &path)).await
+}
+
+#[tauri::command]
+pub async fn snapshot_working_tree(repo_path: String) -> GitResult<String> {
+    blocking(move || agent_edits::snapshot(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn agent_edits(
+    repo_path: String,
+    before: String,
+    after: String,
+) -> GitResult<Vec<agent_edits::EditedFile>> {
+    blocking(move || agent_edits::edits(&repo(&repo_path)?, &before, &after)).await
+}
+
+#[tauri::command]
+pub async fn reject_agent_edit(
+    repo_path: String,
+    before: String,
+    after: String,
+    path: String,
+) -> GitResult<()> {
+    blocking(move || agent_edits::reject(&repo(&repo_path)?, &before, &after, &path)).await
 }
 
 #[tauri::command]
@@ -768,6 +794,11 @@ pub async fn linear_project_issues(
 }
 
 #[tauri::command]
+pub async fn linear_all_issues(org_id: String) -> GitResult<serde_json::Value> {
+    blocking(move || linear::all_issues(&org_id)).await
+}
+
+#[tauri::command]
 pub async fn linear_my_issues(org_id: String) -> GitResult<serde_json::Value> {
     blocking(move || linear::my_issues(&org_id)).await
 }
@@ -807,6 +838,25 @@ pub async fn linear_set_issue_state(
     state_id: String,
 ) -> GitResult<()> {
     blocking(move || linear::set_issue_state(&org_id, &issue_id, &state_id)).await
+}
+
+#[tauri::command]
+pub async fn linear_update_issue(
+    org_id: String,
+    issue_id: String,
+    patch: linear::IssuePatch,
+) -> GitResult<()> {
+    blocking(move || linear::update_issue(&org_id, &issue_id, &patch)).await
+}
+
+#[tauri::command]
+pub async fn linear_team_members(org_id: String, team_id: String) -> GitResult<serde_json::Value> {
+    blocking(move || linear::team_members(&org_id, &team_id)).await
+}
+
+#[tauri::command]
+pub async fn linear_labels(org_id: String, team_id: String) -> GitResult<serde_json::Value> {
+    blocking(move || linear::labels(&org_id, &team_id)).await
 }
 
 #[tauri::command]

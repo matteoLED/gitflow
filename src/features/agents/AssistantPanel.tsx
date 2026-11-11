@@ -32,17 +32,23 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 import { usePreviewTargets } from "@/features/preview/PreviewList";
 import { pickAgent } from "./AgentButton";
 import { LinearIcon } from "@/features/linear/LinearIcon";
-import { useOpenIssue } from "@/features/linear/linear-queries";
+import { useActiveAccount, useOpenIssue, useOpenProject, useTeamStates } from "@/features/linear/linear-queries";
 import { ContextMeter } from "./ContextMeter";
 import { RunSettingsBar } from "./RunSettingsBar";
 import { ClaudeIcon, CodexIcon } from "./agent-icons";
 import { ChatThread, CONTEXT_SEPARATOR } from "./ChatThread";
 import { startAgentRun, useInstalledAgents } from "./use-agents";
+import { AgentEdits, useRunEdits } from "./AgentEdits";
 
 /** Keeps prompts under the agents' 20,000-character limit. */
 const clipText = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…` : text);
 
-type Chip = { kind: "preview" | "pr" | "commit" | "issue" | "file"; icon: ReactNode; label: string; detail: string };
+type Chip = {
+  kind: "preview" | "pr" | "commit" | "issue" | "file" | "linear";
+  icon: ReactNode;
+  label: string;
+  detail: string;
+};
 
 /** What the user is looking at right now, as chips for them and as plain facts for the agent. */
 function useContextChips(repoPath: string): Chip[] {
@@ -58,6 +64,7 @@ function useContextChips(repoPath: string): Chip[] {
   const targets = usePreviewTargets(repoPath).data ?? [];
   const chips: Chip[] = [];
   const issue = useOpenIssue().data;
+  const linear = useLinearContext(view === "linear" && !issue);
   const file = useEditorStore((s) => editorOf(s, repoPath).active);
   // Same default as the preview panel: the first app when none was picked yet.
   const target = targets.find((x) => x.id === selected) ?? targets[0];
@@ -96,6 +103,7 @@ function useContextChips(repoPath: string): Chip[] {
       detail: `Selected commit ${selectedCommitHash} (\`git show ${selectedCommitHash}\`).`,
     });
   }
+  if (linear) chips.push(linear);
   if (view === "linear" && issue) {
     chips.push({
       kind: "issue",
@@ -139,11 +147,29 @@ function SelectionCard({ selection, onRemove }: { selection: CodeSelection; onRe
   );
 }
 
+/** On the Linear pages (no issue open): the workspace, the page or project, and its teams to file issues in. */
+function useLinearContext(enabled: boolean): Chip | null {
+  const account = useActiveAccount();
+  const open = useOpenProject();
+  const teams = useTeamStates(enabled ? account?.id : undefined).data ?? [];
+  if (!enabled || !account) return null;
+  const where = open?.project ? `the project "${open.project.name}"` : "its issues";
+  const teamList = teams.map((team) => `${team.key} (${team.name})`).join(", ");
+  return {
+    kind: "linear",
+    icon: <LinearIcon className="size-3" />,
+    label: open?.project?.name ?? account.name,
+    detail: `The user is in their Linear workspace ${account.name}, looking at ${where}.${teamList ? ` Teams: ${teamList}.` : ""}`,
+  };
+}
+
 /** Notion-AI-like starters for what's on screen; the last one always applies. */
 function useSuggestions(chips: Chip[]): { key: MessageKey; Icon: typeof Sparkles }[] {
   const view = useWorkspaceStore((s) => s.view);
   const kinds = new Set(chips.map((c) => c.kind));
   const list: { key: MessageKey; Icon: typeof Sparkles }[] = [];
+  if (kinds.has("linear"))
+    list.push({ key: "assistant.sugTickets", Icon: ListChecks }, { key: "assistant.sugTodos", Icon: FileText });
   if (kinds.has("issue"))
     list.push({ key: "assistant.sugSummarize", Icon: FileText }, { key: "assistant.sugPlan", Icon: ListChecks });
   if (kinds.has("pr")) list.push({ key: "assistant.sugReview", Icon: GitPullRequest });
@@ -406,13 +432,17 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
   const pastCodex = !!past?.startsWith("codex:");
   const pastSession = pastCodex ? (past?.slice(6) ?? null) : past;
   const agent = pastSession ? (pastCodex ? "codex" : "claude") : pickAgent(installed, preferredAgent);
-  const chips = useContextChips(repoPath);
+  // Context the user took off (×): keyed by what it points at, so another file or PR shows up again.
+  const [dropped, setDropped] = useState<string[]>([]);
+  const chipKey = (c: Chip) => `${c.kind}:${c.label}`;
+  const chips = useContextChips(repoPath).filter((c) => !dropped.includes(chipKey(c)));
   const askSelection = useUiStore((s) => s.askSelection);
   const suggestions = useSuggestions(chips);
   const repo = useWorkspaceStore((s) => s.repo);
   const view = useWorkspaceStore((s) => s.view);
   const [sending, setSending] = useState(false);
   const live = thread.find((r) => r.status === "running");
+  const reviewed = useRunEdits(repoPath, thread);
   const resume = [...thread].reverse().find((r) => r.sessionId)?.sessionId ?? pastSession ?? null;
   // A Claude Code session picked from the history: its past turns, then what was said here since.
   const sessionSteps = useQuery({
@@ -438,6 +468,8 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
       prompt = `${facts.join("\n")}${CONTEXT_SEPARATOR}${message}`;
     }
     if (askSelection) prompt = `${prompt}\n\n${selectionPrompt(askSelection)}`;
+    // Taken before the agent can touch anything: its edits in the checkout are then reviewed file by file.
+    const before = await gitBackend.snapshotWorkingTree(repoPath).catch(() => null);
     const id = await startAgentRun(
       repoPath,
       agent,
@@ -448,6 +480,9 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
     );
     // Kept when the run couldn't start (e.g. too long a prompt): the user can trim and resend.
     if (id && askSelection) useUiStore.getState().askAbout(null);
+    // A run in its own worktree is reviewed from the worktree bar instead.
+    const started = useAgentsStore.getState().runs.find((r) => r.id === id);
+    if (id && before && started && !started.worktree) useAgentsStore.getState().setEdits(id, { before });
     if (id && !assistantThread) setAssistantThread(id);
     setSending(false);
   };
@@ -487,7 +522,13 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
         </header>
         <ChatThread
           compact
-          placeholder={askSelection ? t("assistant.askCode") : assistantThread ? undefined : t("assistant.placeholder")}
+          placeholder={
+            askSelection
+              ? t("assistant.askCode")
+              : assistantThread
+                ? undefined
+                : t(view === "linear" ? "assistant.placeholderLinear" : "assistant.placeholder")
+          }
           steps={[
             ...(sessionSteps.data ?? []),
             ...unsavedFollowUps(sessionSteps.data ?? [], thread).flatMap((r) => r.steps),
@@ -530,6 +571,7 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
             </div>
           }
           focusKey={askSelection}
+          edits={reviewed && !live && <AgentEdits key={reviewed.id} repoPath={repoPath} run={reviewed} />}
           context={
             (askSelection || !assistantThread) && [
               askSelection && (
@@ -545,9 +587,23 @@ export function AssistantPanel({ repoPath }: { repoPath: string }) {
                 .map((chip) => (
                   <span
                     key={chip.label}
-                    className="flex items-center gap-1 rounded-md bg-white/[0.07] px-1.5 py-0.5 text-[11.5px] text-foreground/90"
+                    className="group/chip flex items-center gap-1 rounded-md bg-white/[0.07] px-1.5 py-0.5 text-[11.5px] text-foreground/90"
                   >
-                    {chip.icon}
+                    {/* The icon turns into × on hover: removing it doesn't shift the chips around. */}
+                    <button
+                      type="button"
+                      aria-label={t("assistant.removeContext", { name: chip.label })}
+                      onClick={() => setDropped((d) => [...d, chipKey(chip)])}
+                      className="grid size-3 place-items-center rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <span className="contents group-hover/chip:hidden group-focus-within/chip:hidden">
+                        {chip.icon}
+                      </span>
+                      <X
+                        aria-hidden
+                        className="hidden size-3 text-muted-foreground group-hover/chip:block group-focus-within/chip:block hover:text-foreground"
+                      />
+                    </button>
                     {chip.label}
                   </span>
                 )),

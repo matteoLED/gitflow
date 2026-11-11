@@ -1,6 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { useState } from "react";
-import { Box, Check, ChevronDown, CircleDashed, CircleUser, Layers, Plus } from "lucide-react";
+import { Box, Check, ChevronDown, CircleDashed, CircleUser, Layers, ListTodo, Plus } from "lucide-react";
 import { RowSkeleton, SkeletonList } from "@/components/skeletons";
 import {
   DropdownMenu,
@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useT } from "@/i18n";
+import { useT, type MessageKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { ALL_WORKSPACES, useLinearStore } from "@/stores/linear-store";
 import { useUiStore } from "@/stores/ui-store";
@@ -28,6 +28,14 @@ import {
   useWorkspaceIssues,
 } from "./linear-queries";
 import { ProjectIcon } from "./ProjectIcon";
+
+export const PRIORITIES: { value: number; label: MessageKey }[] = [
+  { value: 0, label: "linear.prio.none" },
+  { value: 1, label: "linear.prio.urgent" },
+  { value: 2, label: "linear.prio.high" },
+  { value: 3, label: "linear.prio.medium" },
+  { value: 4, label: "linear.prio.low" },
+];
 
 /** Linear's priority bars: urgent is a red mark, then 3/2/1 bars, none is a dash. */
 export function PriorityIcon({ priority }: { priority: number }) {
@@ -52,27 +60,58 @@ export function PriorityIcon({ priority }: { priority: number }) {
   );
 }
 
-export function StateDot({ state }: { state: Pick<LinearState, "type" | "color" | "name"> }) {
-  if (state.type === "completed" || state.type === "canceled")
-    return (
-      <span
-        title={state.name}
-        className="inline-grid size-3 shrink-0 place-items-center rounded-full text-[8px] leading-none font-bold text-background"
-        style={{ background: state.color }}
-      >
-        {state.type === "completed" ? "✓" : "✕"}
-      </span>
-    );
-  const half = state.type === "started";
+/** Linear's own status glyphs: dashed ring (backlog), ring (todo), filling pie (started), filled check / cross. */
+export function StateDot({ state: given }: { state: Pick<LinearState, "type" | "color" | "name"> }) {
+  // Linear also has "duplicate" (and may add types): drawn like Canceled, as Linear does.
+  const known = ["triage", "backlog", "unstarted", "started", "completed", "canceled"].includes(given.type);
+  const state = known ? given : { ...given, type: "canceled" as const };
+  const color = state.color;
   return (
-    <span
-      title={state.name}
-      className="inline-block size-3 shrink-0 rounded-full border-[1.5px]"
-      style={{
-        borderColor: state.color,
-        background: half ? `linear-gradient(90deg, ${state.color} 50%, transparent 50%)` : undefined,
-      }}
-    />
+    <svg viewBox="0 0 14 14" fill="none" role="img" aria-label={state.name} className="size-3 shrink-0">
+      <title>{state.name}</title>
+      {state.type === "backlog" && (
+        <circle cx="7" cy="7" r="6" stroke={color} strokeWidth="1.5" strokeDasharray="1.4 1.74" />
+      )}
+      {(state.type === "unstarted" || state.type === "started") && (
+        <circle cx="7" cy="7" r="6" stroke={color} strokeWidth="1.5" />
+      )}
+      {state.type === "started" && (
+        // A pie drawn as a thick stroke on a small circle: half full, as Linear shows In Progress.
+        <circle
+          cx="7"
+          cy="7"
+          r="2"
+          stroke={color}
+          strokeWidth="4"
+          strokeDasharray={`${Math.PI * 2} 100`}
+          transform="rotate(-90 7 7)"
+        />
+      )}
+      {(state.type === "completed" || state.type === "canceled" || state.type === "triage") && (
+        <circle cx="7" cy="7" r="7" fill={color} />
+      )}
+      {state.type === "completed" && (
+        <path
+          d="M4.3 7.3 6.1 9 9.7 5.2"
+          stroke="var(--background)"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
+      {state.type === "canceled" && (
+        <path d="M5 5l4 4M9 5l-4 4" stroke="var(--background)" strokeWidth="1.5" strokeLinecap="round" />
+      )}
+      {state.type === "triage" && (
+        <path
+          d="M4 5.5h5.5L8 4M10 8.5H4.5L6 10"
+          stroke="var(--background)"
+          strokeWidth="1.3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
+    </svg>
   );
 }
 
@@ -220,7 +259,9 @@ export function LinearList({ query }: { query: string }) {
     (n, c) => n + c.issues.filter((i) => i.state.type !== "completed" && i.state.type !== "canceled").length,
     0,
   );
-  const { page, project, setPage, setProject } = useLinearStore(useShallow((s) => ({ page: s.page, project: s.project, setPage: s.setPage, setProject: s.setProject })));
+  const { page, project, setPage, setProject } = useLinearStore(
+    useShallow((s) => ({ page: s.page, project: s.project, setPage: s.setPage, setProject: s.setProject })),
+  );
   const [showAll, setShowAll] = useState(false);
   if (accounts.data && accounts.data.length === 0) {
     return (
@@ -256,6 +297,12 @@ export function LinearList({ query }: { query: string }) {
           count={open}
           active={page === "mine"}
           onClick={() => setPage("mine")}
+        />
+        <NavItem
+          icon={<ListTodo aria-hidden className="size-4 text-muted-foreground" />}
+          label={t("linear.allIssues")}
+          active={page === "all"}
+          onClick={() => setPage("all")}
         />
         <NavItem
           icon={<CircleDashed aria-hidden className="size-4 text-muted-foreground" />}

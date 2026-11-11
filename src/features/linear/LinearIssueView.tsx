@@ -1,16 +1,6 @@
 import { lazy, Suspense, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
-import {
-  ChevronDown,
-  ChevronRight,
-  Copy,
-  Play,
-  ExternalLink,
-  GitBranchPlus,
-  ImageOff,
-  Link2,
-  Sparkles,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Play, ExternalLink, GitBranchPlus, Link2, Sparkles } from "lucide-react";
 import type { Components } from "react-markdown";
 import { GithubIcon } from "@/components/github-icon";
 import { AuthorAvatar } from "@/components/author-avatar";
@@ -36,19 +26,49 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { AgentKind, LinearIssueDetail } from "@/types/git";
 import { LinearIcon } from "./LinearIcon";
-import { PriorityIcon, StateDot } from "./LinearList";
-import { useLinearAccounts, useLinearImage, useOpenIssue } from "./linear-queries";
+import { IssueProperties, Meta } from "./IssueProperties";
+import { LinearImage } from "./LinearImage";
+import { editableDescription } from "./editable-description";
+import { useLinearAccounts, useOpenIssue } from "./linear-queries";
+import { useAutosave, useUpdateIssue } from "./use-update-issue";
 import { LinearBoard } from "./LinearBoard";
 import { LinearProjects } from "./LinearProjects";
 
 const Markdown = lazy(() => import("@/features/agents/Markdown"));
+const DescriptionEditor = lazy(() => import("./IssueDescriptionEditor"));
 
-function Meta({ label, children }: { label: string; children: ReactNode }) {
+/** The title, edited in place: saved on Enter, on blur and after a pause in typing. */
+function TitleInput({ title, onSave }: { title: string; onSave: (title: string) => void }) {
+  const t = useT();
+  const autosave = useAutosave(title, onSave);
+  const fit = (el: HTMLTextAreaElement | null) => {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  };
   return (
-    <div className="grid min-h-8 grid-cols-[96px_1fr] items-center gap-2 text-[13px]">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="flex min-w-0 flex-wrap items-center gap-1.5">{children}</span>
-    </div>
+    <textarea
+      ref={fit}
+      rows={1}
+      defaultValue={title}
+      aria-label={t("linear.title")}
+      onChange={(e) => {
+        fit(e.currentTarget);
+        const value = e.currentTarget.value.replace(/\s+/g, " ").trim();
+        if (value) autosave.schedule(value);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur();
+        }
+      }}
+      onBlur={(e) => {
+        if (!e.currentTarget.value.trim()) e.currentTarget.value = title;
+        autosave.flush();
+      }}
+      className="font-display block w-full resize-none overflow-hidden bg-transparent text-[26px] outline-none"
+    />
   );
 }
 
@@ -58,30 +78,6 @@ function SideSection({ title, children }: { title: string; children: ReactNode }
       <h2 className="mb-2 text-[12px] font-medium text-muted-foreground">{title}</h2>
       {children}
     </section>
-  );
-}
-
-/** Images of a description or comment: Linear uploads go through the backend (they need the key). */
-function LinearImage({ orgId, src, alt }: { orgId: string | undefined; src: string; alt: string }) {
-  const image = useLinearImage(orgId, src);
-  const local = src.startsWith("data:");
-  if (!local && !image.data) {
-    return (
-      <span className="my-2 flex h-24 w-full max-w-md items-center justify-center rounded-lg border border-dashed border-white/10 text-[12px] text-muted-foreground">
-        {image.isPending && image.fetchStatus !== "idle" ? (
-          <BrailleLoader />
-        ) : (
-          <ImageOff aria-hidden className="size-4" />
-        )}
-      </span>
-    );
-  }
-  return (
-    <img
-      src={local ? src : image.data}
-      alt={alt}
-      className="my-2 max-h-[480px] rounded-lg border border-white/[0.06]"
-    />
   );
 }
 
@@ -163,6 +159,7 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
   const org = useLinearAccounts().data?.find((a) => a.id === issue.orgId);
   const createBranch = useCreateBranch(repoPath);
   const notify = useNoticesStore((s) => s.notify);
+  const update = useUpdateIssue(issue.orgId, { id: id ?? "", identifier: issue.data?.identifier ?? "" });
 
   if (!id) return page === "projects" && !project ? <LinearProjects /> : <LinearBoard />;
   if (issue.isError)
@@ -178,6 +175,14 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
     img: ({ src, alt }) => <LinearImage orgId={issue.orgId} src={typeof src === "string" ? src : ""} alt={alt ?? ""} />,
   };
   const comments = [...data.comments.nodes].reverse();
+  const description = data.description ?? "";
+  const readOnly = description ? (
+    <Suspense fallback={<p className="whitespace-pre-wrap">{description}</p>}>
+      <Markdown text={description} components={markdown} />
+    </Suspense>
+  ) : (
+    <p className="text-muted-foreground">{t("linear.addDescription")}</p>
+  );
 
   return (
     <section aria-label={data.identifier} className="flex h-full flex-col">
@@ -228,14 +233,23 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-y-auto px-10 pb-16">
           <article className="mx-auto max-w-[760px] pt-10">
-            <h1 className="font-display text-[26px]">{data.title}</h1>
+            <TitleInput
+              key={data.id}
+              title={data.title}
+              onSave={(title) => update.mutate({ patch: { title }, shown: { title } })}
+            />
             <div className="mt-5 min-h-12 text-[14px]">
-              {data.description ? (
-                <Suspense fallback={<p className="whitespace-pre-wrap">{data.description}</p>}>
-                  <Markdown text={data.description} components={markdown} />
-                </Suspense>
+              {!editableDescription(description) ? (
+                readOnly
               ) : (
-                <p className="text-muted-foreground">{t("linear.noDescription")}</p>
+                <Suspense fallback={readOnly}>
+                  <DescriptionEditor
+                    key={data.id}
+                    orgId={issue.orgId}
+                    initial={description}
+                    onSave={(text) => update.mutate({ patch: { description: text }, shown: { description: text } })}
+                  />
+                </Suspense>
               )}
             </div>
             {data.attachments.nodes.length > 0 && (
@@ -301,43 +315,11 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
         </div>
         <aside className="hidden w-[300px] shrink-0 overflow-y-auto border-l border-white/[0.06] bg-white/[0.012] lg:block">
           <SideSection title={t("linear.properties")}>
-            <Meta label={t("linear.status")}>
-              <StateDot state={data.state} />
-              {data.state.name}
-            </Meta>
-            <Meta label={t("linear.priority")}>
-              <PriorityIcon priority={data.priority} />
-              {data.priorityLabel}
-            </Meta>
-            <Meta label={t("linear.assignee")}>
-              {data.assignee ? (
-                <>
-                  <AuthorAvatar name={data.assignee.name} src={data.assignee.avatarUrl} className="size-5" />
-                  {data.assignee.name}
-                </>
-              ) : (
-                <span className="text-muted-foreground">—</span>
-              )}
-            </Meta>
-            {data.project && <Meta label={t("linear.project")}>{data.project.name}</Meta>}
-            {data.cycle && <Meta label={t("linear.cycle")}>{`#${data.cycle.number}`}</Meta>}
-            <Meta label={t("linear.updated")}>{formatAge(data.updatedAt, undefined, t.locale)}</Meta>
+            <IssueProperties orgId={issue.orgId} issue={data}>
+              {data.cycle && <Meta label={t("linear.cycle")}>{`#${data.cycle.number}`}</Meta>}
+              <Meta label={t("linear.updated")}>{formatAge(data.updatedAt, undefined, t.locale)}</Meta>
+            </IssueProperties>
           </SideSection>
-          {data.labels.nodes.length > 0 && (
-            <SideSection title={t("linear.labels")}>
-              <div className="flex flex-wrap gap-1.5">
-                {data.labels.nodes.map((l) => (
-                  <span
-                    key={l.name}
-                    className="flex items-center gap-1.5 rounded-full border border-white/10 px-2 py-0.5 text-[12px]"
-                  >
-                    <span className="size-2 rounded-full" style={{ backgroundColor: l.color }} />
-                    {l.name}
-                  </span>
-                ))}
-              </div>
-            </SideSection>
-          )}
           <SideSection title={t("linear.branch")}>
             <button
               type="button"

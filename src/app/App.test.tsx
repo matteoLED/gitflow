@@ -116,7 +116,8 @@ describe("without a repository", () => {
   it("offers to open one", async () => {
     useWorkspaceStore.setState({ repo: null });
     renderApp();
-    expect(await screen.findByRole("button", { name: "Open repository…" })).toBeInTheDocument();
+    // The welcome screen is lazy-loaded: its first import can outlast findBy's 1 s while other files run.
+    expect(await screen.findByRole("button", { name: "Open repository…" }, { timeout: 5000 })).toBeInTheDocument();
   });
 });
 

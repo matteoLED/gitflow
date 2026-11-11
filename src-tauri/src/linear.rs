@@ -237,7 +237,7 @@ pub fn remove_account(org_id: &str) -> GitResult<()> {
 
 const ISSUE_FIELDS: &str = "id identifier title priority priorityLabel url branchName updatedAt
     state { id name type color position } team { id key name } project { id name icon color } cycle { number }
-    labels { nodes { name color } } assignee { name avatarUrl }";
+    labels { nodes { id name color } } assignee { id name avatarUrl }";
 
 /// Open issues, plus those closed in the last two weeks (the Done and Canceled columns).
 const OPEN_OR_RECENT: &str = "{ or: [
@@ -258,6 +258,16 @@ pub fn my_issues(org_id: &str) -> GitResult<Value> {
         .unwrap_or(json!([])))
 }
 
+/// Every issue of the workspace (anyone's), open or closed recently, most recently updated first.
+/// ponytail: capped at 250; paginate with `after:` if a workspace has more open issues than that.
+pub fn all_issues(org_id: &str) -> GitResult<Value> {
+    let query = format!(
+        "query {{ issues(first: 250, orderBy: updatedAt, filter: {OPEN_OR_RECENT}) {{ nodes {{ {ISSUE_FIELDS} }} }} }}"
+    );
+    let data = graphql(&key_of(org_id)?, &query, json!({}))?;
+    Ok(data.pointer("/issues/nodes").cloned().unwrap_or(json!([])))
+}
+
 /// One issue in full: description, people, links (pull requests…) and recent comments.
 pub fn issue(org_id: &str, id: &str) -> GitResult<Value> {
     let valid = !id.is_empty()
@@ -268,7 +278,7 @@ pub fn issue(org_id: &str, id: &str) -> GitResult<Value> {
     }
     let query = format!(
         "query($id: String!) {{ issue(id: $id) {{ {ISSUE_FIELDS} description createdAt
-           assignee {{ name avatarUrl }} creator {{ name avatarUrl }}
+           creator {{ name avatarUrl }}
            attachments {{ nodes {{ title subtitle url sourceType }} }}
            comments(first: 30) {{ nodes {{ body createdAt user {{ name avatarUrl }} botActor {{ name avatarUrl }} }} }} }} }}"
     );
@@ -359,14 +369,100 @@ fn valid_id(id: &str) -> bool {
 
 /// Moves an issue to another workflow state (drag and drop on the board).
 pub fn set_issue_state(org_id: &str, issue_id: &str, state_id: &str) -> GitResult<()> {
-    if !valid_id(issue_id) || !valid_id(state_id) {
-        return Err(GitError::invalid("Invalid issue or state id."));
+    let patch = IssuePatch {
+        state_id: Some(state_id.to_string()),
+        ..IssuePatch::default()
+    };
+    update_issue(org_id, issue_id, &patch)
+}
+
+const MAX_DESCRIPTION: usize = 200_000;
+
+/// The fields of an issue to change; absent ones are left as they are.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssuePatch {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    /// 0 none, 1 urgent … 4 low, as in Linear.
+    pub priority: Option<u8>,
+    pub state_id: Option<String>,
+    /// `null` unassigns.
+    #[serde(default, deserialize_with = "nullable")]
+    pub assignee_id: Option<Option<String>>,
+    pub label_ids: Option<Vec<String>>,
+    /// `null` removes the issue from its project.
+    #[serde(default, deserialize_with = "nullable")]
+    pub project_id: Option<Option<String>>,
+}
+
+/// Tells an explicit `null` (Some(None)) from a missing field (None).
+fn nullable<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(d).map(Some)
+}
+
+fn invalid_ids<'a>(mut ids: impl Iterator<Item = &'a String>) -> bool {
+    ids.any(|id| !valid_id(id))
+}
+
+/// The `IssueUpdateInput` of a patch, checked first: it goes to Linear as variables, never in the query.
+fn patch_input(patch: &IssuePatch) -> GitResult<Value> {
+    let title = patch.title.as_deref().map(str::trim);
+    if title.is_some_and(|t| t.is_empty() || t.chars().count() > 255) {
+        return Err(GitError::invalid(
+            "An issue needs a title (255 characters at most).",
+        ));
     }
-    let query = "mutation($id: String!, $state: String!) { issueUpdate(id: $id, input: { stateId: $state }) { success } }";
+    if patch
+        .description
+        .as_ref()
+        .is_some_and(|d| d.len() > MAX_DESCRIPTION)
+    {
+        return Err(GitError::invalid("This description is too long."));
+    }
+    let ids = patch
+        .state_id
+        .iter()
+        .chain(patch.assignee_id.iter().flatten())
+        .chain(patch.project_id.iter().flatten())
+        .chain(patch.label_ids.iter().flatten());
+    if invalid_ids(ids) || patch.priority.is_some_and(|p| p > 4) {
+        return Err(GitError::invalid(
+            "Invalid state, person, label, project or priority.",
+        ));
+    }
+    let mut input = json!({});
+    let fields = [
+        ("title", title.map(|t| json!(t))),
+        ("description", patch.description.as_ref().map(|d| json!(d))),
+        ("priority", patch.priority.map(|p| json!(p))),
+        ("stateId", patch.state_id.as_ref().map(|s| json!(s))),
+        ("assigneeId", patch.assignee_id.as_ref().map(|a| json!(a))),
+        ("labelIds", patch.label_ids.as_ref().map(|l| json!(l))),
+        ("projectId", patch.project_id.as_ref().map(|p| json!(p))),
+    ];
+    for (name, value) in fields {
+        if let Some(value) = value {
+            input[name] = value;
+        }
+    }
+    if input.as_object().is_some_and(serde_json::Map::is_empty) {
+        return Err(GitError::invalid("Nothing to change."));
+    }
+    Ok(input)
+}
+
+/// Changes some fields of an issue (title, description, properties).
+pub fn update_issue(org_id: &str, issue_id: &str, patch: &IssuePatch) -> GitResult<()> {
+    if !valid_id(issue_id) {
+        return Err(GitError::invalid("Invalid issue id."));
+    }
+    let input = patch_input(patch)?;
+    let query = "mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }";
     let data = graphql(
         &key_of(org_id)?,
         query,
-        json!({ "id": issue_id, "state": state_id }),
+        json!({ "id": issue_id, "input": input }),
     )?;
     if data
         .pointer("/issueUpdate/success")
@@ -377,6 +473,48 @@ pub fn set_issue_state(org_id: &str, issue_id: &str, state_id: &str) -> GitResul
     } else {
         Err(io("the issue wasn't updated"))
     }
+}
+
+/// Active members of a team, to assign an issue.
+pub fn team_members(org_id: &str, team_id: &str) -> GitResult<Value> {
+    if !valid_id(team_id) {
+        return Err(GitError::invalid("Invalid team id."));
+    }
+    let query = "query($id: String!) { team(id: $id) { members(first: 250) { nodes { id name avatarUrl active } } } }";
+    let data = graphql(&key_of(org_id)?, query, json!({ "id": team_id }))?;
+    let members = data
+        .pointer("/team/members/nodes")
+        .and_then(Value::as_array)
+        .map(|m| {
+            m.iter()
+                .filter(|u| u["active"] != json!(false))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Value::Array(members))
+}
+
+/// Labels an issue of the team can take: the team's own and the workspace's (groups excluded).
+pub fn labels(org_id: &str, team_id: &str) -> GitResult<Value> {
+    if !valid_id(team_id) {
+        return Err(GitError::invalid("Invalid team id."));
+    }
+    let query = "query($id: ID!) { issueLabels(first: 250, filter: {
+        or: [{ team: { id: { eq: $id } } }, { team: { null: true } }] }) { nodes { id name color isGroup } } }";
+    let data = graphql(&key_of(org_id)?, query, json!({ "id": team_id }))?;
+    Ok(assignable_labels(&data))
+}
+
+/// Group labels only gather others: an issue can't take them.
+fn assignable_labels(data: &Value) -> Value {
+    let nodes = data.pointer("/issueLabels/nodes").and_then(Value::as_array);
+    nodes
+        .into_iter()
+        .flatten()
+        .filter(|l| l["isGroup"] != json!(true))
+        .cloned()
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -522,6 +660,65 @@ mod tests {
     #[test]
     fn priorities_stop_at_low() {
         assert!(create_issue("org", &draft("Fix it", 5)).is_err());
+    }
+
+    fn patch(json: Value) -> IssuePatch {
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn a_patch_sends_only_its_fields() {
+        let input = patch_input(&patch(json!({ "title": " New ", "priority": 2 }))).unwrap();
+        assert_eq!(input, json!({ "title": "New", "priority": 2 }));
+    }
+
+    #[test]
+    fn null_unassigns_and_leaves_the_project() {
+        let input = patch_input(&patch(json!({ "assigneeId": null, "projectId": null }))).unwrap();
+        assert_eq!(input, json!({ "assigneeId": null, "projectId": null }));
+    }
+
+    #[test]
+    fn a_patch_keeps_an_empty_label_list() {
+        let input = patch_input(&patch(json!({ "labelIds": [] }))).unwrap();
+        assert_eq!(input, json!({ "labelIds": [] }));
+    }
+
+    #[test]
+    fn a_patch_cannot_blank_the_title() {
+        assert!(patch_input(&patch(json!({ "title": "  " }))).is_err());
+    }
+
+    #[test]
+    fn a_patch_refuses_odd_ids() {
+        assert!(patch_input(&patch(json!({ "labelIds": ["ok", "x\" } }"] }))).is_err());
+    }
+
+    #[test]
+    fn a_patch_refuses_unknown_priorities() {
+        assert!(patch_input(&patch(json!({ "priority": 5 }))).is_err());
+    }
+
+    #[test]
+    fn an_empty_patch_is_refused() {
+        assert!(patch_input(&IssuePatch::default()).is_err());
+    }
+
+    #[test]
+    fn group_labels_cannot_be_picked() {
+        let data = json!({ "issueLabels": { "nodes": [
+            { "id": "g", "isGroup": true }, { "id": "l", "isGroup": false }
+        ] } });
+        assert_eq!(
+            assignable_labels(&data),
+            json!([{ "id": "l", "isGroup": false }])
+        );
+    }
+
+    #[test]
+    fn descriptions_are_capped() {
+        let long = "a".repeat(MAX_DESCRIPTION + 1);
+        assert!(patch_input(&patch(json!({ "description": long }))).is_err());
     }
 
     #[test]

@@ -226,7 +226,7 @@ fn diff_at(repo: &Path, root: &Path, path: &str) -> GitResult<String> {
 
 /// The worktree as it is on disk, committed or not, written as a tree through a throwaway index: the agent's
 /// own index and files are left alone. Ignored files stay out, as they would from a commit.
-fn snapshot(dir: &Path) -> GitResult<String> {
+pub(crate) fn snapshot(dir: &Path) -> GitResult<String> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let index = std::env::temp_dir().join(format!("gitflow-index-{}-{n}", std::process::id()));

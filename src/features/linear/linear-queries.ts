@@ -74,6 +74,17 @@ export function useActiveCycles(orgId: string | undefined) {
   });
 }
 
+/** Every open (or recently closed) issue of the workspace, anyone's. */
+export function useAllIssues(orgId: string | undefined) {
+  return useQuery({
+    queryKey: ["linear", "all-issues", orgId],
+    queryFn: () => gitBackend.linearAllIssues(orgId ?? ""),
+    enabled: !!orgId,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+  });
+}
+
 /** The project picked in the list, if any (in the active workspace). */
 export function useOpenProject() {
   // Only on the Projects page: a project remembered from before doesn't leak into "My issues".
@@ -97,6 +108,13 @@ export function useBoardIssues() {
   });
   const page = useLinearStore((s) => s.page);
   const cycles = useActiveCycles(page === "cycle" ? account?.id : undefined);
+  const everyone = useAllIssues(page === "all" ? account?.id : undefined);
+  if (page === "all")
+    return {
+      data: everyone.data?.map((issue) => ({ ...issue, orgId: account?.id ?? "", orgName: account?.name ?? "" })),
+      error: everyone.error,
+      refetch: () => void everyone.refetch(),
+    };
   if (page === "cycle")
     return {
       data: cycles.data?.flatMap((c) =>
@@ -117,6 +135,24 @@ export function useTeamStates(orgId: string | undefined) {
   return useQuery({
     queryKey: ["linear", "states", orgId],
     queryFn: () => gitBackend.linearTeamStates(orgId ?? ""),
+    enabled: !!orgId,
+    staleTime: 10 * 60_000,
+  });
+}
+
+export function useTeamMembers(orgId: string | undefined, teamId: string) {
+  return useQuery({
+    queryKey: ["linear", "members", orgId, teamId],
+    queryFn: () => gitBackend.linearTeamMembers(orgId ?? "", teamId),
+    enabled: !!orgId,
+    staleTime: 10 * 60_000,
+  });
+}
+
+export function useLabels(orgId: string | undefined, teamId: string) {
+  return useQuery({
+    queryKey: ["linear", "labels", orgId, teamId],
+    queryFn: () => gitBackend.linearLabels(orgId ?? "", teamId),
     enabled: !!orgId,
     staleTime: 10 * 60_000,
   });

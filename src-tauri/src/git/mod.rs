@@ -1,3 +1,4 @@
+pub mod agent_edits;
 pub mod blame;
 pub mod conflicts;
 pub mod errors;

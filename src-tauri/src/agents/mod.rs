@@ -192,6 +192,11 @@ impl RunSettings {
     }
 }
 
+/// Told to free requests when Linear is connected: issues are proposed in the reply, the user creates them.
+const LINEAR_ISSUES: &str = "When the user asks for Linear issues (tickets), propose each one as a fenced code block \
+     with the language `linear-issue` holding one JSON object: {\"title\": string, \"description\": string \
+     (Markdown)}. The app shows it as a card the user creates in Linear in one click; don't call Linear yourself.";
+
 const READ_ONLY: &str = "Do not modify, create or delete any file; only read and report.";
 
 fn language(locale: &str) -> &'static str {
@@ -432,6 +437,10 @@ pub fn start(
         ));
     }
     let mut prompt = build_prompt(task, locale, settings.mode)?;
+    if matches!(task, AgentTask::Custom { .. }) && !crate::linear::accounts().is_empty() {
+        prompt.push_str("\n\n");
+        prompt.push_str(LINEAR_ISSUES);
+    }
     if matches!(task, AgentTask::SplitCommits) {
         prompt.push_str("\n\n");
         prompt.push_str(&crate::git::staging::change_summary(repo)?);

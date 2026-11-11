@@ -237,4 +237,68 @@
   .markdown hr {
     @apply border-white/10;
   }
+  /* Issue description editor (Tiptap): same look as the rendered Markdown. */
+  .tiptap a {
+    @apply cursor-text text-[color-mix(in_oklab,var(--primary)_55%,white)] underline decoration-current/40 underline-offset-[3px];
+  }
+  /* Placeholders: the empty description always, the empty line being typed on only while editing. */
+  .tiptap .is-empty::before {
+    @apply pointer-events-none float-left h-0 text-muted-foreground/70;
+    content: attr(data-placeholder);
+  }
+  .tiptap:not(:focus) .is-empty:not(.is-editor-empty)::before {
+    content: none;
+  }
+  .tiptap pre code {
+    @apply bg-transparent p-0 font-mono text-[12px];
+  }
+  .tiptap .hljs-comment,
+  .tiptap .hljs-quote {
+    @apply text-muted-foreground italic;
+  }
+  .tiptap .hljs-keyword,
+  .tiptap .hljs-selector-tag,
+  .tiptap .hljs-built_in,
+  .tiptap .hljs-meta {
+    @apply text-violet-300;
+  }
+  .tiptap .hljs-string,
+  .tiptap .hljs-addition,
+  .tiptap .hljs-attr,
+  .tiptap .hljs-template-variable {
+    @apply text-emerald-300;
+  }
+  .tiptap .hljs-number,
+  .tiptap .hljs-literal,
+  .tiptap .hljs-variable,
+  .tiptap .hljs-symbol {
+    @apply text-amber-300;
+  }
+  .tiptap .hljs-title,
+  .tiptap .hljs-section,
+  .tiptap .hljs-name,
+  .tiptap .hljs-type {
+    @apply text-sky-300;
+  }
+  .tiptap .hljs-deletion {
+    @apply text-rose-300;
+  }
+  .markdown ul[data-type="taskList"] {
+    @apply list-none pl-0.5;
+  }
+  .markdown ul[data-type="taskList"] li {
+    @apply flex items-start gap-2;
+  }
+  .markdown ul[data-type="taskList"] li > label {
+    @apply mt-[0.3em] flex shrink-0;
+  }
+  .markdown ul[data-type="taskList"] li > div {
+    @apply min-w-0 flex-1;
+  }
+  .markdown ul[data-type="taskList"] li[data-checked="true"] > div {
+    @apply text-muted-foreground line-through;
+  }
+  .markdown ul[data-type="taskList"] input[type="checkbox"] {
+    @apply size-3.5 accent-(--primary);
+  }
 }

@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useInstalledAgents } from "@/features/agents/use-agents";
-import { useT, type MessageKey } from "@/i18n";
+import { useT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
@@ -20,14 +20,7 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { AgentKind } from "@/types/git";
 import { useActiveAccount, useLinearAccounts, useOpenProject } from "./linear-queries";
 import { startIssueAgent } from "./issue-agent";
-
-const PRIORITIES: { value: number; label: MessageKey }[] = [
-  { value: 0, label: "linear.prio.none" },
-  { value: 1, label: "linear.prio.urgent" },
-  { value: 2, label: "linear.prio.high" },
-  { value: 3, label: "linear.prio.medium" },
-  { value: 4, label: "linear.prio.low" },
-];
+import { PRIORITIES } from "./LinearList";
 
 const DEFAULT_STATE = "default";
 type AfterCreate = "open" | AgentKind;

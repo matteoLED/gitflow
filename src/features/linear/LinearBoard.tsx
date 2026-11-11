@@ -22,6 +22,7 @@ import { useLinearStore } from "@/stores/linear-store";
 import type { LinearCycle, LinearProject } from "@/types/git";
 import { AuthorAvatar } from "@/components/author-avatar";
 import { boardColumns, type BoardColumn } from "./board-columns";
+import { AssistantToggle } from "@/features/agents/AssistantToggle";
 import { CreateIssueButton } from "./CreateIssue";
 import { ProjectIcon } from "./ProjectIcon";
 import { LinearIcon } from "./LinearIcon";
@@ -189,6 +190,8 @@ export function LinearBoard() {
   const account = useActiveAccount();
   const open = useOpenProject();
   const cycleView = useLinearStore((s) => s.page === "cycle");
+  // Everyone's issues of the workspace in view: like the cycle, one workspace and every assignee.
+  const allView = useLinearStore((s) => s.page === "all");
   const cycles = useActiveCycles(cycleView ? account?.id : undefined).data;
   const issues = useBoardIssues();
   const teams = useTeamStates(open?.orgId ?? account?.id).data;
@@ -198,7 +201,8 @@ export function LinearBoard() {
   const [dragged, setDragged] = useState<WorkspaceIssue | null>(null);
   // A small move starts a drag; a plain click still opens the issue.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
-  const showOrg = all && !open && !cycleView;
+  const showOrg = all && !open && !cycleView && !allView;
+  const showAssignee = !!open || cycleView || allView;
   const header = (
     <PanelHeader className="gap-1.5 text-[13px]">
       <LinearIcon className="size-3.5 text-muted-foreground" />
@@ -227,13 +231,14 @@ export function LinearBoard() {
           <span className="truncate">{open.project?.name ?? t("linear.project")}</span>
         </span>
       ) : (
-        <span className="font-medium">{t("linear.myIssues")}</span>
+        <span className="font-medium">{t(allView ? "linear.allIssues" : "linear.myIssues")}</span>
       )}
       {issues.data && <span className="text-muted-foreground">{issues.data.length}</span>}
       {open?.project && <ProjectMeta project={open.project} />}
       {cycleView && cycles?.map((c) => <CycleMeta key={c.id} cycle={c} showTeam={cycles.length > 1} />)}
       <span className="ml-auto" />
       <LayoutSwitch />
+      <AssistantToggle />
       <CreateIssueButton variant="header" />
     </PanelHeader>
   );
@@ -275,7 +280,7 @@ export function LinearBoard() {
     return (
       <section aria-label={t("linear.myIssues")} className="flex h-full flex-col">
         {header}
-        <IssueList columns={columns} showOrg={showOrg} showAssignee={!!open || cycleView} />
+        <IssueList columns={columns} showOrg={showOrg} showAssignee={showAssignee} />
       </section>
     );
   return (
@@ -293,11 +298,11 @@ export function LinearBoard() {
       >
         <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-3">
           {columns.map((column) => (
-            <Column key={column.key} column={column} showOrg={showOrg} showAssignee={!!open || cycleView} />
+            <Column key={column.key} column={column} showOrg={showOrg} showAssignee={showAssignee} />
           ))}
         </div>
         <DragOverlay dropAnimation={null}>
-          {dragged && <CardBody issue={dragged} showOrg={showOrg} showAssignee={!!open || cycleView} lifted />}
+          {dragged && <CardBody issue={dragged} showOrg={showOrg} showAssignee={showAssignee} lifted />}
         </DragOverlay>
       </DndContext>
     </section>
