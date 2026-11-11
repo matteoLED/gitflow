@@ -131,13 +131,14 @@ export function useBoardIssues() {
   };
 }
 
+export const teamStatesQuery = (orgId: string) => ({
+  queryKey: ["linear", "states", orgId],
+  queryFn: () => gitBackend.linearTeamStates(orgId),
+  staleTime: 10 * 60_000,
+});
+
 export function useTeamStates(orgId: string | undefined) {
-  return useQuery({
-    queryKey: ["linear", "states", orgId],
-    queryFn: () => gitBackend.linearTeamStates(orgId ?? ""),
-    enabled: !!orgId,
-    staleTime: 10 * 60_000,
-  });
+  return useQuery({ ...teamStatesQuery(orgId ?? ""), enabled: !!orgId });
 }
 
 export function useTeamMembers(orgId: string | undefined, teamId: string) {

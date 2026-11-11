@@ -3,6 +3,7 @@ import type { View } from "@/stores/workspace-store";
 /** One route per page; kept apart from the router so components can link without importing it. */
 export const VIEW_PATHS = {
   home: "/",
+  inbox: "/inbox",
   work: "/work",
   history: "/history",
   changes: "/changes",

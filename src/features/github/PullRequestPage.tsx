@@ -62,7 +62,7 @@ import { ChangedFilesPanel } from "@/features/changed-files/ChangedFilesPanel";
 import { DiffPanel } from "@/features/diff/DiffPanel";
 import { CommitList } from "@/features/history/CommitList";
 import { StateDot } from "@/features/linear/LinearList";
-import { useWorkspaceIssues } from "@/features/linear/linear-queries";
+import { useLinkedIssues } from "@/features/linear/use-pr-links";
 import { stackOf } from "./stacks";
 import { useOpenPullRequest } from "./PullRequestList";
 import { Columns } from "@/components/layout/Columns";
@@ -173,13 +173,6 @@ function StatusMenu({ repoPath, pr }: { repoPath: string; pr: PullRequestDetails
   );
 }
 
-/** The Linear issue a branch implements: Linear names branches after the issue identifier. */
-function useLinkedIssue(branch: string) {
-  const issues = useWorkspaceIssues().data ?? [];
-  const id = branch.match(/([a-z][a-z0-9]*-\d+)/i)?.[1]?.toUpperCase();
-  return { id, issue: issues.find((i) => i.branchName === branch || i.identifier === id) };
-}
-
 /** Copies, the way Linear's PR menu does; HTML too for "title as link", so it pastes as a real link. */
 async function copy(text: string, html?: string) {
   if (html && typeof ClipboardItem !== "undefined") {
@@ -217,7 +210,9 @@ function PullRequestMenu({ pr, data }: { pr: ActivePullRequest; data?: PullReque
   const t = useT();
   const repoName = useWorkspaceStore((s) => s.repo?.name ?? "");
   const branch = data?.headRefName;
-  const { id: issueId, issue } = useLinkedIssue(branch ?? "");
+  const linked = useLinkedIssues(branch ?? "", pr.title)[0];
+  const issueId = linked?.identifier;
+  const issue = linked?.issue;
   useCopyShortcuts(pr, branch);
   const item = "gap-2.5 px-2 py-1.5 text-[13px]";
   const hint = "ml-auto pl-4 text-[11.5px] text-muted-foreground";
@@ -286,23 +281,32 @@ function PullRequestMenu({ pr, data }: { pr: ActivePullRequest; data?: PullReque
   );
 }
 
-function Resolves({ branch }: { branch: string }) {
+/** The Linear issues the branch or the title names, each opening in the Linear view. */
+function Resolves({ branch, title }: { branch: string; title: string }) {
   const t = useT();
-  const { id, issue } = useLinkedIssue(branch);
-  if (!issue && !id) return <p className="text-muted-foreground">{t("common.none")}</p>;
-  if (!issue) return <p className="font-mono text-[12px] text-muted-foreground">{id}</p>;
+  const linked = useLinkedIssues(branch, title);
+  if (linked.length === 0) return <p className="text-muted-foreground">{t("common.none")}</p>;
   return (
-    <button
-      type="button"
-      onClick={() => {
-        useLinearStore.getState().setIssue(issue.id, issue.orgId);
-        useWorkspaceStore.getState().setView("linear");
-      }}
-      className="-mx-1.5 flex w-[calc(100%+12px)] items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-white/[0.05]"
-    >
-      <StateDot state={issue.state} />
-      <span className="min-w-0 flex-1 truncate">{issue.title}</span>
-    </button>
+    <ul className="space-y-0.5">
+      {linked.map(({ identifier, orgId, issue }) => (
+        <li key={identifier}>
+          <button
+            type="button"
+            disabled={!issue}
+            onClick={() => {
+              if (!issue) return;
+              useLinearStore.getState().setIssue(issue.id, orgId);
+              useWorkspaceStore.getState().setView("linear");
+            }}
+            className="-mx-1.5 flex w-[calc(100%+12px)] items-center gap-2 rounded-md px-1.5 py-1 text-left enabled:hover:bg-white/[0.05]"
+          >
+            {issue && <StateDot state={issue.state} />}
+            <span className="shrink-0 font-mono text-[12px] text-muted-foreground">{identifier}</span>
+            {issue && <span className="min-w-0 flex-1 truncate">{issue.title}</span>}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -907,7 +911,7 @@ function Overview({
           <StatusMenu repoPath={repoPath} pr={pr} />
         </Side>
         <Side title={t("pr.resolves")}>
-          <Resolves branch={pr.headRefName} />
+          <Resolves branch={pr.headRefName} title={pr.title} />
         </Side>
         <Side title={t("pr.reviewers")}>
           <Reviewers pr={pr} />

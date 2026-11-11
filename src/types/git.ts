@@ -597,3 +597,34 @@ export type UndoAction = {
   current: string;
   at: number;
 };
+
+/** A participating GitHub notification (`github_notifications`). */
+export type GithubNotification = {
+  id: string;
+  unread: boolean;
+  /** review_requested, mention, comment, author, ci_activity… */
+  reason: string;
+  updatedAt: string;
+  title: string;
+  /** PullRequest, Issue, CheckSuite… */
+  kind: string;
+  /** owner/name */
+  repo: string;
+  number: number | null;
+  url: string;
+};
+
+/** A Linear inbox notification about an issue (`linear_notifications`). */
+export type LinearNotification = {
+  id: string;
+  /** issueAssignedToYou, issueNewComment, issueMention, issueStatusChanged… */
+  kind: string;
+  updatedAt: string;
+  read: boolean;
+  actor: string | null;
+  issueId: string;
+  identifier: string;
+  title: string;
+  url: string;
+  comment: string | null;
+};

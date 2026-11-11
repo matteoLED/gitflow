@@ -33,6 +33,7 @@ import { useLinearAccounts, useOpenIssue } from "./linear-queries";
 import { useAutosave, useUpdateIssue } from "./use-update-issue";
 import { LinearBoard } from "./LinearBoard";
 import { LinearProjects } from "./LinearProjects";
+import { PullRequestLinkStatus } from "./PullRequestLinkStatus";
 
 const Markdown = lazy(() => import("@/features/agents/Markdown"));
 const DescriptionEditor = lazy(() => import("./IssueDescriptionEditor"));
@@ -269,6 +270,7 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
                           <Link2 aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
                         )}
                         <span className="min-w-0 flex-1 truncate">{a.title}</span>
+                        {a.url.includes("github.com") && <PullRequestLinkStatus repoPath={repoPath} url={a.url} />}
                         {a.subtitle && <span className="shrink-0 text-[12px] text-muted-foreground">{a.subtitle}</span>}
                       </button>
                     </li>

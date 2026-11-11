@@ -981,3 +981,151 @@ mod tests {
         assert!(super::node_id("x; rm").is_err() && super::node_id("").is_err());
     }
 }
+
+/// One participating GitHub notification, flattened for the inbox.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubNotification {
+    pub id: String,
+    pub unread: bool,
+    /// review_requested, mention, comment, author, ci_activity…
+    pub reason: String,
+    pub updated_at: String,
+    pub title: String,
+    /// PullRequest, Issue, CheckSuite, Release…
+    pub kind: String,
+    /// `owner/name`.
+    pub repo: String,
+    pub number: Option<u32>,
+    /// The web page of the subject (the repository's when the API has none, e.g. a check suite).
+    pub url: String,
+}
+
+/// The API link of a subject (`https://api.github.com/repos/o/r/pulls/12`) as its web page and number.
+fn subject_page(api_url: &str, repo_url: &str) -> (String, Option<u32>) {
+    let rest = api_url.strip_prefix("https://api.github.com/repos/");
+    let parts: Vec<&str> = rest.map(|r| r.split('/').collect()).unwrap_or_default();
+    match parts.as_slice() {
+        [owner, name, kind @ ("pulls" | "issues"), number] => match number.parse::<u32>() {
+            Ok(n) => {
+                let page = if *kind == "pulls" { "pull" } else { "issues" };
+                (
+                    format!("https://github.com/{owner}/{name}/{page}/{n}"),
+                    Some(n),
+                )
+            }
+            Err(_) => (repo_url.to_string(), None),
+        },
+        _ => (repo_url.to_string(), None),
+    }
+}
+
+/// Parses `GET /notifications`; entries missing their essentials are skipped.
+fn parse_notifications(json: &[u8]) -> GitResult<Vec<GithubNotification>> {
+    let list: Vec<serde_json::Value> = serde_json::from_slice(json)
+        .map_err(|err| GitError::new(ErrorKind::Io, format!("Unexpected answer from gh: {err}")))?;
+    let text =
+        |v: &serde_json::Value, p: &str| v.pointer(p).and_then(|s| s.as_str()).map(str::to_owned);
+    Ok(list
+        .iter()
+        .filter_map(|n| {
+            let repo_url = text(n, "/repository/html_url")?;
+            let api_url = text(n, "/subject/url").unwrap_or_default();
+            let (url, number) = subject_page(&api_url, &repo_url);
+            Some(GithubNotification {
+                id: text(n, "/id")?,
+                unread: n["unread"].as_bool().unwrap_or(false),
+                reason: text(n, "/reason").unwrap_or_default(),
+                updated_at: text(n, "/updated_at")?,
+                title: text(n, "/subject/title")?,
+                kind: text(n, "/subject/type").unwrap_or_default(),
+                repo: text(n, "/repository/full_name")?,
+                number,
+                url,
+            })
+        })
+        .collect())
+}
+
+/// The user's participating notifications (reviews asked, mentions, comments on their threads…), read ones too.
+pub fn notifications(repo: &Path) -> GitResult<Vec<GithubNotification>> {
+    let out = gh(
+        &require_gh()?,
+        repo,
+        &[
+            "api",
+            "notifications?participating=true&all=true&per_page=50",
+        ],
+    )?;
+    parse_notifications(&out)
+}
+
+/// Thread ids are numbers: anything else is refused before reaching gh.
+fn thread_id(id: &str) -> GitResult<&str> {
+    (!id.is_empty() && id.len() <= 32 && id.chars().all(|c| c.is_ascii_digit()))
+        .then_some(id)
+        .ok_or_else(|| GitError::invalid("Unknown notification."))
+}
+
+/// Marks a notification thread as read.
+pub fn mark_notification_read(repo: &Path, id: &str) -> GitResult<()> {
+    let endpoint = format!("notifications/threads/{}", thread_id(id)?);
+    gh(
+        &require_gh()?,
+        repo,
+        &["api", "--method", "PATCH", &endpoint],
+    )
+    .map(|_| ())
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+
+    const SAMPLE: &str = r#"[
+      { "id": "101", "unread": true, "reason": "review_requested", "updated_at": "2026-11-10T09:00:00Z",
+        "subject": { "title": "Add inbox", "url": "https://api.github.com/repos/acme/app/pulls/42", "type": "PullRequest" },
+        "repository": { "full_name": "acme/app", "html_url": "https://github.com/acme/app" } },
+      { "id": "102", "unread": false, "reason": "ci_activity", "updated_at": "2026-11-09T09:00:00Z",
+        "subject": { "title": "CI failed", "url": null, "type": "CheckSuite" },
+        "repository": { "full_name": "acme/app", "html_url": "https://github.com/acme/app" } },
+      { "id": "103", "unread": true, "reason": "mention", "updated_at": "2026-11-08T09:00:00Z",
+        "subject": { "title": "Bug", "url": "https://api.github.com/repos/acme/app/issues/7", "type": "Issue" },
+        "repository": { "full_name": "acme/app", "html_url": "https://github.com/acme/app" } },
+      { "id": "104", "subject": {} }
+    ]"#;
+
+    #[test]
+    fn pull_request_subjects_link_to_their_page() {
+        let list = parse_notifications(SAMPLE.as_bytes()).unwrap();
+        assert_eq!(
+            (list[0].url.as_str(), list[0].number),
+            ("https://github.com/acme/app/pull/42", Some(42))
+        );
+    }
+
+    #[test]
+    fn issue_subjects_link_to_their_page() {
+        let list = parse_notifications(SAMPLE.as_bytes()).unwrap();
+        assert_eq!(list[2].url, "https://github.com/acme/app/issues/7");
+    }
+
+    #[test]
+    fn subjects_without_a_link_fall_back_to_the_repository() {
+        let list = parse_notifications(SAMPLE.as_bytes()).unwrap();
+        assert_eq!(
+            (list[1].url.as_str(), list[1].number),
+            ("https://github.com/acme/app", None)
+        );
+    }
+
+    #[test]
+    fn incomplete_entries_are_skipped() {
+        assert_eq!(parse_notifications(SAMPLE.as_bytes()).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn thread_ids_are_numbers() {
+        assert!(thread_id("12/../x").is_err());
+    }
+}

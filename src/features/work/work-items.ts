@@ -51,8 +51,17 @@ function ciOf(runs: WorkflowRun[]): Map<string, CiState> {
   return states;
 }
 
-function statusOf(pr: PullRequest | null, local: LocalBranch | null, lastCommit: string, now: number): WorkStatus {
+function statusOf(
+  pr: PullRequest | null,
+  issue: LinearIssue | null,
+  local: LocalBranch | null,
+  lastCommit: string,
+  now: number,
+): WorkStatus {
   if (pr?.state === "MERGED" || pr?.state === "CLOSED") return "merged";
+  // No open pull request but its issue is done: merged some other way (squash, a PR the list no longer shows).
+  const finished = issue?.state.type === "completed" || issue?.state.type === "canceled";
+  if (finished && pr?.state !== "OPEN") return "merged";
   if (pr?.isDraft) return "draft";
   if (pr?.reviewDecision === "CHANGES_REQUESTED") return "changes";
   if (pr?.reviewDecision === "APPROVED") return "approved";
@@ -123,7 +132,7 @@ export function workItems({
         issueId: issue?.identifier ?? issueId,
         issue,
         ci: ci.get(name) ?? null,
-        status: statusOf(pr, local, lastCommit, now),
+        status: statusOf(pr, issue, local, lastCommit, now),
         current: name === head,
         updatedAt,
         title: pr?.title ?? issue?.title ?? local?.subject ?? name,

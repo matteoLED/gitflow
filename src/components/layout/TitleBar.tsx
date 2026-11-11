@@ -11,6 +11,7 @@ import {
   Globe,
   History,
   House,
+  Inbox,
   Layers,
   MonitorSmartphone,
   Network,
@@ -37,6 +38,7 @@ type IconType = ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
 
 export const VIEW_ICONS: Record<View, IconType> = {
   home: House,
+  inbox: Inbox,
   history: GitCommitVertical,
   changes: Layers,
   github: GithubIcon,
@@ -52,6 +54,7 @@ export const VIEW_ICONS: Record<View, IconType> = {
 
 export const VIEW_LABELS = {
   home: "view.home",
+  inbox: "view.inbox",
   history: "view.history",
   changes: "view.changes",
   github: "view.github",
@@ -200,7 +203,9 @@ function RecentMenu() {
 
 function Tabs() {
   const t = useT();
-  const { tabs, active, activate, close, open } = useTabsStore(useShallow((s) => ({ tabs: s.tabs, active: s.active, activate: s.activate, close: s.close, open: s.open })));
+  const { tabs, active, activate, close, open } = useTabsStore(
+    useShallow((s) => ({ tabs: s.tabs, active: s.active, activate: s.activate, close: s.close, open: s.open })),
+  );
   const activeRef = useRef<HTMLDivElement>(null);
   // Keeps the active tab in view when there are more tabs than room.
   useEffect(() => activeRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" }), [active, tabs.length]);

@@ -17,6 +17,7 @@ import { Route as CiRouteImport } from './routes/ci'
 import { Route as EditorRouteImport } from './routes/editor'
 import { Route as GraphRouteImport } from './routes/graph'
 import { Route as HistoryRouteImport } from './routes/history'
+import { Route as InboxRouteImport } from './routes/inbox'
 import { Route as LinearRouteImport } from './routes/linear'
 import { Route as PreviewRouteImport } from './routes/preview'
 import { Route as PullsRouteImport } from './routes/pulls'
@@ -62,6 +63,11 @@ const HistoryRoute = HistoryRouteImport.update({
   path: '/history',
   getParentRoute: () => rootRouteImport,
 } as any)
+const InboxRoute = InboxRouteImport.update({
+  id: '/inbox',
+  path: '/inbox',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LinearRoute = LinearRouteImport.update({
   id: '/linear',
   path: '/linear',
@@ -92,6 +98,7 @@ export interface FileRoutesByFullPath {
   '/editor': typeof EditorRoute
   '/graph': typeof GraphRoute
   '/history': typeof HistoryRoute
+  '/inbox': typeof InboxRoute
   '/linear': typeof LinearRoute
   '/preview': typeof PreviewRoute
   '/pulls': typeof PullsRoute
@@ -106,6 +113,7 @@ export interface FileRoutesByTo {
   '/editor': typeof EditorRoute
   '/graph': typeof GraphRoute
   '/history': typeof HistoryRoute
+  '/inbox': typeof InboxRoute
   '/linear': typeof LinearRoute
   '/preview': typeof PreviewRoute
   '/pulls': typeof PullsRoute
@@ -121,6 +129,7 @@ export interface FileRoutesById {
   '/editor': typeof EditorRoute
   '/graph': typeof GraphRoute
   '/history': typeof HistoryRoute
+  '/inbox': typeof InboxRoute
   '/linear': typeof LinearRoute
   '/preview': typeof PreviewRoute
   '/pulls': typeof PullsRoute
@@ -137,6 +146,7 @@ export interface FileRouteTypes {
     | '/editor'
     | '/graph'
     | '/history'
+    | '/inbox'
     | '/linear'
     | '/preview'
     | '/pulls'
@@ -151,6 +161,7 @@ export interface FileRouteTypes {
     | '/editor'
     | '/graph'
     | '/history'
+    | '/inbox'
     | '/linear'
     | '/preview'
     | '/pulls'
@@ -165,6 +176,7 @@ export interface FileRouteTypes {
     | '/editor'
     | '/graph'
     | '/history'
+    | '/inbox'
     | '/linear'
     | '/preview'
     | '/pulls'
@@ -180,6 +192,7 @@ export interface RootRouteChildren {
   EditorRoute: typeof EditorRoute
   GraphRoute: typeof GraphRoute
   HistoryRoute: typeof HistoryRoute
+  InboxRoute: typeof InboxRoute
   LinearRoute: typeof LinearRoute
   PreviewRoute: typeof PreviewRoute
   PullsRoute: typeof PullsRoute
@@ -244,6 +257,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HistoryRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/inbox': {
+      id: '/inbox'
+      path: '/inbox'
+      fullPath: '/inbox'
+      preLoaderRoute: typeof InboxRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/linear': {
       id: '/linear'
       path: '/linear'
@@ -284,6 +304,7 @@ const rootRouteChildren: RootRouteChildren = {
   EditorRoute: EditorRoute,
   GraphRoute: GraphRoute,
   HistoryRoute: HistoryRoute,
+  InboxRoute: InboxRoute,
   LinearRoute: LinearRoute,
   PreviewRoute: PreviewRoute,
   PullsRoute: PullsRoute,

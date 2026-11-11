@@ -1,6 +1,8 @@
 // Typed client for the Rust Git commands. The UI never builds command lines: it only calls these.
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  GithubNotification,
+  LinearNotification,
   EditedFile,
   StashEntry,
   StashOutcome,
@@ -138,6 +140,16 @@ export const gitBackend = {
   /** Opens a github.com page in the default browser (other URLs are refused by the backend). */
   openGithubUrl: (url: string) => invoke<null>("open_github_url", { url }),
   githubStatus: () => invoke<GithubStatus>("github_status"),
+  /** The user's participating GitHub notifications, read ones included. */
+  githubNotifications: (repoPath: string) => invoke<GithubNotification[]>("github_notifications", { repoPath }),
+  githubMarkNotificationRead: (repoPath: string, id: string) =>
+    invoke<null>("github_mark_notification_read", { repoPath, id }),
+  linearNotifications: (orgId: string) => invoke<LinearNotification[]>("linear_notifications", { orgId }),
+  /** `readAt` null marks the notification unread. */
+  linearSetNotificationRead: (orgId: string, id: string, readAt: string | null) =>
+    invoke<null>("linear_set_notification_read", { orgId, id, readAt }),
+  linearArchiveNotification: (orgId: string, id: string) =>
+    invoke<null>("linear_archive_notification", { orgId, id }),
   getFileContents: (repoPath: string, hash: string, path: string) =>
     invoke<string>("get_file_contents", { repoPath, hash, path }),
   listWorkflowRuns: (repoPath: string) => invoke<WorkflowRun[]>("list_workflow_runs", { repoPath }),
@@ -330,6 +342,9 @@ export const gitBackend = {
   linearMyIssues: (orgId: string) => invoke<LinearIssue[]>("linear_my_issues", { orgId }),
   /** Every open (or recently closed) issue of the workspace, anyone's. */
   linearAllIssues: (orgId: string) => invoke<LinearIssue[]>("linear_all_issues", { orgId }),
+  /** Linear's full-text search across the workspace, closed issues included. */
+  linearSearchIssues: (orgId: string, query: string) =>
+    invoke<LinearIssue[]>("linear_search_issues", { orgId, query }),
   linearIssue: (orgId: string, id: string) => invoke<LinearIssueDetail>("linear_issue", { orgId, id }),
   /** Every workspace of the user; may fail when Linear refuses it to API keys. */
   linearOrganizations: (orgId: string) => invoke<LinearOrganization[]>("linear_organizations", { orgId }),

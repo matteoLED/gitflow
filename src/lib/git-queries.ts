@@ -59,11 +59,13 @@ export function useAvatar(repoPath: string, hash: string, email: string) {
   });
 }
 
-export function usePullRequests(repoPath: string) {
+/** `poll`: refetch on a timer too (the Linear automation watches merges). */
+export function usePullRequests(repoPath: string, poll: number | false = false) {
   return useQuery({
     queryKey: [...repoKey(repoPath), "pull-requests"],
     queryFn: () => gitBackend.listPullRequests(repoPath),
     staleTime: 60_000,
+    refetchInterval: poll,
   });
 }
 

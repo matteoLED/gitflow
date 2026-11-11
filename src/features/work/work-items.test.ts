@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LocalBranch, PullRequest, WorkflowRun } from "@/types/git";
+import type { LinearIssue, LocalBranch, PullRequest, WorkflowRun } from "@/types/git";
 import { issueIdOf, workItems } from "./work-items";
 
 const NOW = new Date("2026-11-10T12:00:00Z").getTime();
@@ -72,6 +72,25 @@ describe("workItems", () => {
     expect(items({ branches: [branch("old")], pullRequests: [pr("old", { state: "MERGED" })] })[0].status).toBe(
       "merged",
     );
+  });
+
+  it("calls a branch merged once its Linear issue is done, even without its pull request", () => {
+    const issue = {
+      id: "1",
+      identifier: "MNT-820",
+      title: "Done",
+      priority: 0,
+      priorityLabel: "",
+      url: "",
+      branchName: "mat/mnt-820-x",
+      updatedAt: "",
+      state: { name: "Done", type: "completed", color: "" },
+      team: { id: "t", key: "MNT", name: "Mntal" },
+      project: null,
+      cycle: null,
+      labels: { nodes: [] },
+    } satisfies LinearIssue;
+    expect(items({ branches: [branch("mat/mnt-820-x")], issues: [issue] })[0].status).toBe("merged");
   });
 
   it("leaves the default branch out", () => {

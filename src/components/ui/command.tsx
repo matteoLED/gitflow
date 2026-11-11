@@ -20,9 +20,10 @@ function Command({ className, ...props }: React.ComponentProps<typeof CommandPri
 function CommandDialog({
   title,
   description,
+  shouldFilter,
   children,
   ...props
-}: React.ComponentProps<typeof Dialog> & { title: string; description: string }) {
+}: React.ComponentProps<typeof Dialog> & { title: string; description: string; shouldFilter?: boolean }) {
   return (
     <Dialog {...props}>
       <DialogContent
@@ -31,7 +32,7 @@ function CommandDialog({
       >
         <DialogTitle className="sr-only">{title}</DialogTitle>
         <DialogDescription className="sr-only">{description}</DialogDescription>
-        <Command loop>{children}</Command>
+        <Command loop shouldFilter={shouldFilter}>{children}</Command>
       </DialogContent>
     </Dialog>
   );

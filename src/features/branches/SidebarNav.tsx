@@ -7,6 +7,7 @@ import {
   GitCommitVertical,
   Globe,
   House,
+  Inbox,
   Layers,
   MonitorSmartphone,
   Network,
@@ -18,6 +19,7 @@ import type { ComponentType } from "react";
 import { GithubIcon } from "@/components/github-icon";
 import { LinearIcon } from "@/features/linear/LinearIcon";
 import { useWorkingTree } from "@/lib/git-queries";
+import { useInbox } from "@/features/inbox/use-inbox";
 import { useWorkspaceStore, type View } from "@/stores/workspace-store";
 import { useUiStore } from "@/stores/ui-store";
 import { useT } from "@/i18n";
@@ -28,9 +30,9 @@ type IconType = ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
 export const NAV_ITEM =
   "group/nav flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-left text-[13px] text-sidebar-foreground outline-none transition-colors hover:bg-white/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-[current=page]:bg-white/[0.08] aria-[current=page]:text-foreground aria-pressed:bg-white/[0.08] aria-pressed:text-foreground";
 
-type RowProps = { Icon: IconType; label: string; hint?: string | number; active: boolean };
+type RowProps = { Icon: IconType; label: string; hint?: string | number; active: boolean; badge?: number };
 
-function RowContent({ Icon, label, hint }: Omit<RowProps, "active">) {
+function RowContent({ Icon, label, hint, badge }: Omit<RowProps, "active">) {
   return (
     <>
       <Icon
@@ -38,6 +40,11 @@ function RowContent({ Icon, label, hint }: Omit<RowProps, "active">) {
         className="size-4 shrink-0 opacity-75 group-aria-[current=page]/nav:text-primary group-aria-[current=page]/nav:opacity-100"
       />
       <span className="truncate">{label}</span>
+      {!!badge && (
+        <span className="ml-auto shrink-0 rounded-full bg-primary/20 px-1.5 text-[11px] font-medium text-primary tabular-nums">
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
       {hint !== undefined &&
         hint !== "" &&
         hint !== 0 &&
@@ -77,6 +84,7 @@ export function SidebarNav({ repoPath }: { repoPath: string }) {
     useShallow((s) => ({ terminalOpen: s.terminalOpen, setTerminalOpen: s.setTerminalOpen })),
   );
   const changes = useWorkingTree(repoPath).data?.length ?? 0;
+  const unread = useInbox(repoPath).items?.filter((i) => i.unread).length ?? 0;
   const row = (target: View, Icon: IconType, label: string, hint?: string | number) => (
     <PageRow key={target} view={target} Icon={Icon} label={label} hint={hint} active={view === target} />
   );
@@ -84,6 +92,7 @@ export function SidebarNav({ repoPath }: { repoPath: string }) {
     <nav aria-label={t("view.tabs")} className="px-2">
       <ul className="space-y-px">
         {row("home", House, t("view.home"))}
+        <PageRow view="inbox" Icon={Inbox} label={t("view.inbox")} badge={unread} active={view === "inbox"} />
         {row("work", GitBranch, t("view.work"))}
         {row("history", GitCommitVertical, t("view.history"))}
         {row("changes", Layers, t("view.changes"), changes > 99 ? "99+" : changes)}

@@ -35,6 +35,7 @@ import { useStashStore } from "@/features/stash/stash-store";
 import { useRepoWatcher } from "@/features/repositories/use-repo-watcher";
 import { watchForUpdates } from "@/features/updates/updater";
 import { useDesktopNotifications } from "@/features/notifications/use-desktop-notifications";
+import { usePrLifecycle } from "@/features/linear/use-pr-links";
 
 // Opened on demand: kept out of the startup bundle.
 const AgentDetail = lazy(() => import("@/features/agents/AgentDetail").then((m) => ({ default: m.AgentDetail })));
@@ -42,6 +43,8 @@ const LinearIssueView = lazy(() => import("@/features/linear/LinearIssueView"));
 const Dashboard = lazy(() => import("@/features/dashboard/Dashboard"));
 const PullRequestPage = lazy(() => import("@/features/github/PullRequestPage"));
 const CiPage = lazy(() => import("@/features/ci/CiPage").then((m) => ({ default: m.CiPage })));
+const InboxList = lazy(() => import("@/features/inbox/InboxPage").then((m) => ({ default: m.InboxList })));
+const InboxDetail = lazy(() => import("@/features/inbox/InboxPage").then((m) => ({ default: m.InboxDetail })));
 const CiList = lazy(() => import("@/features/ci/CiPage").then((m) => ({ default: m.CiList })));
 const AssistantPanel = lazy(() => import("@/features/agents/AssistantPanel"));
 const CodeGraphPage = lazy(() => import("@/features/code-graph/CodeGraph").then((m) => ({ default: m.CodeGraphPage })));
@@ -199,6 +202,16 @@ function ChangesLayout({ repo }: { repo: RepositoryInfo }) {
 /** The list column of each tool page. */
 function PageList({ repo, view }: { repo: RepositoryInfo; view: View }) {
   const t = useT();
+  if (view === "inbox")
+    return (
+      <ListPanel title={t("view.inbox")} filterLabel={t("common.filter")}>
+        {(query) => (
+          <Suspense fallback={null}>
+            <InboxList repoPath={repo.path} query={query} />
+          </Suspense>
+        )}
+      </ListPanel>
+    );
   if (view === "github")
     return (
       <ListPanel title={t("view.github")} filterLabel={t("github.filter")}>
@@ -275,6 +288,7 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
     );
   }
   if (
+    view === "inbox" ||
     view === "github" ||
     view === "ci" ||
     view === "agents" ||
@@ -291,30 +305,34 @@ function Layout({ repo, view }: { repo: RepositoryInfo; view: View }) {
         repo={repo}
         page={view}
         listTitle={
-          view === "github"
-            ? t("view.github")
-            : view === "ci"
-              ? "CI"
-              : view === "linear"
-                ? "Linear"
-                : t(
-                    view === "agents"
-                      ? "view.agents"
-                      : view === "browser"
-                        ? "view.browser"
-                        : view === "graph"
-                          ? "view.graph"
-                          : view === "editor"
-                            ? "view.editor"
-                            : view === "work"
-                              ? "view.work"
-                              : "view.preview",
-                  )
+          view === "inbox"
+            ? t("view.inbox")
+            : view === "github"
+              ? t("view.github")
+              : view === "ci"
+                ? "CI"
+                : view === "linear"
+                  ? "Linear"
+                  : t(
+                      view === "agents"
+                        ? "view.agents"
+                        : view === "browser"
+                          ? "view.browser"
+                          : view === "graph"
+                            ? "view.graph"
+                            : view === "editor"
+                              ? "view.editor"
+                              : view === "work"
+                                ? "view.work"
+                                : "view.preview",
+                    )
         }
         list={<PageList repo={repo} view={view} />}
       >
         <Suspense fallback={<PanelLoading title="" />}>
-          {view === "github" ? (
+          {view === "inbox" ? (
+            <InboxDetail repoPath={repo.path} />
+          ) : view === "github" ? (
             pullRequest ? (
               <PullRequestPage key={pullRequest.number} repoPath={repo.path} pr={pullRequest} />
             ) : (
@@ -394,6 +412,7 @@ export function AppShell({ view }: { view: View }) {
 function Workspace({ repo, view }: { repo: RepositoryInfo; view: View }) {
   useRepoWatcher(repo.path);
   useDesktopNotifications(repo.path);
+  usePrLifecycle(repo.path);
   useAssistantShortcut();
   useUndoShortcut(repo.path);
   const assistantOpen = useUiStore((s) => s.assistantOpen);

@@ -268,6 +268,28 @@ pub fn all_issues(org_id: &str) -> GitResult<Value> {
     Ok(data.pointer("/issues/nodes").cloned().unwrap_or(json!([])))
 }
 
+/// A search term Linear accepts: some text, at most 200 characters.
+fn search_term(term: &str) -> GitResult<&str> {
+    let term = term.trim();
+    if term.is_empty() || term.chars().count() > 200 {
+        return Err(GitError::invalid("Invalid search."));
+    }
+    Ok(term)
+}
+
+/// Linear's full-text search over the whole workspace (closed issues included), best matches first.
+pub fn search_issues(org_id: &str, term: &str) -> GitResult<Value> {
+    let term = search_term(term)?;
+    let query = format!(
+        "query($term: String!) {{ searchIssues(term: $term, first: 10) {{ nodes {{ {ISSUE_FIELDS} }} }} }}"
+    );
+    let data = graphql(&key_of(org_id)?, &query, json!({ "term": term }))?;
+    Ok(data
+        .pointer("/searchIssues/nodes")
+        .cloned()
+        .unwrap_or(json!([])))
+}
+
 /// One issue in full: description, people, links (pull requests…) and recent comments.
 pub fn issue(org_id: &str, id: &str) -> GitResult<Value> {
     let valid = !id.is_empty()
@@ -653,6 +675,18 @@ mod tests {
     }
 
     #[test]
+    fn a_search_needs_text_of_at_most_200_characters() {
+        let long = "é".repeat(201);
+        assert!(
+            [search_term("  "), search_term(&long)]
+                .iter()
+                .all(Result::is_err)
+        );
+        assert_eq!(search_term(" fix login ").unwrap(), "fix login");
+        assert!(search_issues("org", "").is_err());
+    }
+
+    #[test]
     fn an_issue_needs_a_title() {
         assert!(create_issue("org", &draft("   ", 0)).is_err());
     }
@@ -753,5 +787,134 @@ mod tests {
                 json!({ "number": 4, "issues": [], "team": { "id": "b", "key": "B", "name": "B" } })
             ]
         );
+    }
+}
+
+/// One Linear inbox notification about an issue, flattened for the app's inbox.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinearNotification {
+    pub id: String,
+    /// issueAssignedToYou, issueNewComment, issueMention, issueStatusChanged…
+    pub kind: String,
+    pub updated_at: String,
+    pub read: bool,
+    pub actor: Option<String>,
+    pub issue_id: String,
+    pub identifier: String,
+    pub title: String,
+    pub url: String,
+    /// Start of the comment the notification is about, if any.
+    pub comment: Option<String>,
+}
+
+const NOTIFICATIONS: &str = "query { notifications(first: 50) { nodes {
+    id type updatedAt readAt actor { name }
+    ... on IssueNotification { issue { id identifier title url } comment { body } } } } }";
+
+/// Issue notifications of `notifications { nodes }`; project updates and the like are left out.
+fn parse_notifications(data: &Value) -> Vec<LinearNotification> {
+    let nodes = data
+        .pointer("/notifications/nodes")
+        .and_then(Value::as_array);
+    let text = |v: &Value, p: &str| v.pointer(p).and_then(Value::as_str).map(str::to_owned);
+    nodes
+        .into_iter()
+        .flatten()
+        .filter_map(|n| {
+            Some(LinearNotification {
+                id: text(n, "/id")?,
+                kind: text(n, "/type").unwrap_or_default(),
+                updated_at: text(n, "/updatedAt")?,
+                read: n.get("readAt").is_some_and(|r| !r.is_null()),
+                actor: text(n, "/actor/name"),
+                issue_id: text(n, "/issue/id")?,
+                identifier: text(n, "/issue/identifier")?,
+                title: text(n, "/issue/title")?,
+                url: text(n, "/issue/url").unwrap_or_default(),
+                comment: text(n, "/comment/body").map(|b| b.chars().take(200).collect()),
+            })
+        })
+        .collect()
+}
+
+/// The user's Linear inbox (not archived), newest first.
+pub fn notifications(org_id: &str) -> GitResult<Vec<LinearNotification>> {
+    let data = graphql(&key_of(org_id)?, NOTIFICATIONS, json!({}))?;
+    Ok(parse_notifications(&data))
+}
+
+/// `readAt` is an ISO timestamp from the app (marks read) or none (marks unread).
+fn valid_timestamp(at: &str) -> bool {
+    !at.is_empty()
+        && at.len() <= 40
+        && at
+            .chars()
+            .all(|c| c.is_ascii_digit() || "-:.TZ+".contains(c))
+}
+
+/// Marks a notification read at `read_at`, or unread when it's None.
+pub fn set_notification_read(org_id: &str, id: &str, read_at: Option<&str>) -> GitResult<()> {
+    if !valid_id(id) || read_at.is_some_and(|at| !valid_timestamp(at)) {
+        return Err(GitError::invalid("Invalid notification."));
+    }
+    let mutation = "mutation($id: String!, $readAt: DateTime) {
+        notificationUpdate(id: $id, input: { readAt: $readAt }) { success } }";
+    graphql(
+        &key_of(org_id)?,
+        mutation,
+        json!({ "id": id, "readAt": read_at }),
+    )
+    .map(|_| ())
+}
+
+/// Archives a notification: it leaves Linear's inbox, like Done in the app.
+pub fn archive_notification(org_id: &str, id: &str) -> GitResult<()> {
+    if !valid_id(id) {
+        return Err(GitError::invalid("Invalid notification."));
+    }
+    let mutation = "mutation($id: String!) { notificationArchive(id: $id) { success } }";
+    graphql(&key_of(org_id)?, mutation, json!({ "id": id })).map(|_| ())
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+
+    fn sample() -> Value {
+        json!({ "notifications": { "nodes": [
+            { "id": "n1", "type": "issueNewComment", "updatedAt": "2026-11-10T09:00:00Z", "readAt": null,
+              "actor": { "name": "Ada" },
+              "issue": { "id": "i1", "identifier": "ENG-1", "title": "Crash", "url": "https://linear.app/x/issue/ENG-1" },
+              "comment": { "body": "Looks good" } },
+            { "id": "n2", "type": "issueAssignedToYou", "updatedAt": "2026-11-09T09:00:00Z",
+              "readAt": "2026-11-09T10:00:00Z", "actor": null,
+              "issue": { "id": "i2", "identifier": "ENG-2", "title": "Inbox", "url": "https://linear.app/x/issue/ENG-2" } },
+            { "id": "n3", "type": "projectUpdateCreated", "updatedAt": "2026-11-08T09:00:00Z", "readAt": null }
+        ] } })
+    }
+
+    #[test]
+    fn notifications_without_an_issue_are_left_out() {
+        assert_eq!(parse_notifications(&sample()).len(), 2);
+    }
+
+    #[test]
+    fn a_null_read_at_is_unread() {
+        let list = parse_notifications(&sample());
+        assert_eq!((list[0].read, list[1].read), (false, true));
+    }
+
+    #[test]
+    fn comments_come_along() {
+        assert_eq!(
+            parse_notifications(&sample())[0].comment.as_deref(),
+            Some("Looks good")
+        );
+    }
+
+    #[test]
+    fn timestamps_cannot_carry_anything_else() {
+        assert!(!valid_timestamp("2026-11-10T09:00:00Z\"}"));
     }
 }

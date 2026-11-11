@@ -220,7 +220,7 @@ export function ChecksMenu({ repoPath, pr }: { repoPath: string; pr: PullRequest
   return (
     <div className="space-y-1">
       <Popover open={menuOpen} onOpenChange={setMenuOpen}>
-        <PopoverTrigger className="-mx-1 flex items-center gap-2 rounded-full bg-white/[0.06] px-2.5 py-1 text-[13px] tabular-nums outline-none transition-colors hover:bg-white/[0.09] focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-white/[0.1]">
+        <PopoverTrigger className="-mx-1 flex items-center gap-2 rounded-full px-2.5 py-1 text-[13px] tabular-nums outline-none transition-colors hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-white/[0.1]">
           {pending.length > 0 ? (
             <BrailleLoader className="text-primary" />
           ) : (

@@ -799,6 +799,11 @@ pub async fn linear_all_issues(org_id: String) -> GitResult<serde_json::Value> {
 }
 
 #[tauri::command]
+pub async fn linear_search_issues(org_id: String, query: String) -> GitResult<serde_json::Value> {
+    blocking(move || linear::search_issues(&org_id, &query)).await
+}
+
+#[tauri::command]
 pub async fn linear_my_issues(org_id: String) -> GitResult<serde_json::Value> {
     blocking(move || linear::my_issues(&org_id)).await
 }
@@ -1209,4 +1214,33 @@ pub async fn last_undo(repo_path: String) -> GitResult<Option<crate::git::undo::
 #[tauri::command]
 pub async fn undo_last(repo_path: String, action: crate::git::undo::UndoAction) -> GitResult<()> {
     blocking(move || crate::git::undo::undo(&repo(&repo_path)?, &action)).await
+}
+
+#[tauri::command]
+pub async fn github_notifications(repo_path: String) -> GitResult<Vec<github::GithubNotification>> {
+    blocking(move || github::notifications(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn github_mark_notification_read(repo_path: String, id: String) -> GitResult<()> {
+    blocking(move || github::mark_notification_read(&repo(&repo_path)?, &id)).await
+}
+
+#[tauri::command]
+pub async fn linear_notifications(org_id: String) -> GitResult<Vec<linear::LinearNotification>> {
+    blocking(move || linear::notifications(&org_id)).await
+}
+
+#[tauri::command]
+pub async fn linear_set_notification_read(
+    org_id: String,
+    id: String,
+    read_at: Option<String>,
+) -> GitResult<()> {
+    blocking(move || linear::set_notification_read(&org_id, &id, read_at.as_deref())).await
+}
+
+#[tauri::command]
+pub async fn linear_archive_notification(org_id: String, id: String) -> GitResult<()> {
+    blocking(move || linear::archive_notification(&org_id, &id)).await
 }
