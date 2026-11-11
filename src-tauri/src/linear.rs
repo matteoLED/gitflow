@@ -840,6 +840,62 @@ pub fn release_issues(org_id: &str, release_id: &str) -> GitResult<Value> {
         .unwrap_or(json!([])))
 }
 
+/// What a release says about itself: its notes (Linear's release-note documents) and attached documents,
+/// each as `{ title, url, content }` in Markdown.
+pub fn release_writing(org_id: &str, release_id: &str) -> GitResult<Value> {
+    if !valid_id(release_id) {
+        return Err(GitError::invalid("Invalid release id."));
+    }
+    let query = "query($id: String!) { release(id: $id) {
+        releaseNotes { title url documentContent { content } }
+        documents(first: 10) { nodes { title url content } } } }";
+    let data = graphql(&key_of(org_id)?, query, json!({ "id": release_id }))?;
+    Ok(writing_of(&data))
+}
+
+/// Notes first, then documents; empty ones left out.
+fn writing_of(data: &Value) -> Value {
+    let notes = data
+        .pointer("/release/releaseNotes")
+        .and_then(Value::as_array);
+    let docs = data
+        .pointer("/release/documents/nodes")
+        .and_then(Value::as_array);
+    let notes = notes.into_iter().flatten().map(|n| {
+        json!({ "title": n["title"], "url": n["url"], "content": n.pointer("/documentContent/content") })
+    });
+    let docs = docs
+        .into_iter()
+        .flatten()
+        .map(|d| json!({ "title": d["title"], "url": d["url"], "content": d["content"] }));
+    Value::Array(
+        notes
+            .chain(docs)
+            .filter(|w| w["content"].as_str().is_some_and(|c| !c.trim().is_empty()))
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod release_writing_tests {
+    use super::*;
+
+    #[test]
+    fn keeps_notes_then_documents_with_content() {
+        let data = json!({ "release": {
+            "releaseNotes": [{ "title": "v1", "url": "u", "documentContent": { "content": "## Notes" } }],
+            "documents": { "nodes": [{ "title": "Plan", "url": "d", "content": "" }, { "title": "QA", "url": "q", "content": "ok" }] }
+        }});
+        let titles: Vec<_> = writing_of(&data)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["title"].clone())
+            .collect();
+        assert_eq!(titles, [json!("v1"), json!("QA")]);
+    }
+}
+
 fn stage_variables(release_id: &str, stage_id: &str) -> GitResult<Value> {
     if !valid_id(release_id) || !valid_id(stage_id) {
         return Err(GitError::invalid("Invalid release or stage id."));

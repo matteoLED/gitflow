@@ -170,6 +170,7 @@ pub fn run() {
             commands::linear_set_issue_state,
             commands::linear_releases,
             commands::linear_release_issues,
+            commands::linear_release_writing,
             commands::linear_set_release_stage,
             commands::linear_update_issue,
             commands::linear_team_members,

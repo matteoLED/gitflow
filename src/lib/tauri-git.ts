@@ -152,8 +152,7 @@ export const gitBackend = {
   /** `readAt` null marks the notification unread. */
   linearSetNotificationRead: (orgId: string, id: string, readAt: string | null) =>
     invoke<null>("linear_set_notification_read", { orgId, id, readAt }),
-  linearArchiveNotification: (orgId: string, id: string) =>
-    invoke<null>("linear_archive_notification", { orgId, id }),
+  linearArchiveNotification: (orgId: string, id: string) => invoke<null>("linear_archive_notification", { orgId, id }),
   getFileContents: (repoPath: string, hash: string, path: string) =>
     invoke<string>("get_file_contents", { repoPath, hash, path }),
   listWorkflowRuns: (repoPath: string) => invoke<WorkflowRun[]>("list_workflow_runs", { repoPath }),
@@ -347,8 +346,7 @@ export const gitBackend = {
   /** Every open (or recently closed) issue of the workspace, anyone's. */
   linearAllIssues: (orgId: string) => invoke<LinearIssue[]>("linear_all_issues", { orgId }),
   /** Linear's full-text search across the workspace, closed issues included. */
-  linearSearchIssues: (orgId: string, query: string) =>
-    invoke<LinearIssue[]>("linear_search_issues", { orgId, query }),
+  linearSearchIssues: (orgId: string, query: string) => invoke<LinearIssue[]>("linear_search_issues", { orgId, query }),
   linearIssue: (orgId: string, id: string) => invoke<LinearIssueDetail>("linear_issue", { orgId, id }),
   /** Every workspace of the user; may fail when Linear refuses it to API keys. */
   linearOrganizations: (orgId: string) => invoke<LinearOrganization[]>("linear_organizations", { orgId }),
@@ -368,6 +366,9 @@ export const gitBackend = {
   linearProjectIssues: (orgId: string, projectId: string) =>
     invoke<LinearIssue[]>("linear_project_issues", { orgId, projectId }),
   linearReleases: (orgId: string) => invoke<LinearReleases>("linear_releases", { orgId }),
+  /** A release's notes and documents, in Markdown. */
+  linearReleaseWriting: (orgId: string, releaseId: string) =>
+    invoke<{ title: string | null; url: string; content: string }[]>("linear_release_writing", { orgId, releaseId }),
   linearReleaseIssues: (orgId: string, releaseId: string) =>
     invoke<LinearIssue[]>("linear_release_issues", { orgId, releaseId }),
   linearSetReleaseStage: (orgId: string, releaseId: string, stageId: string) =>

@@ -23,6 +23,14 @@ export const useLinearReleases = (orgId: string | undefined) =>
     staleTime: 60_000,
   });
 
+export const useLinearReleaseWriting = (orgId: string | undefined, releaseId: string) =>
+  useQuery({
+    queryKey: ["linear", "release-writing", orgId, releaseId],
+    queryFn: () => gitBackend.linearReleaseWriting(orgId ?? "", releaseId),
+    enabled: !!orgId,
+    staleTime: 60_000,
+  });
+
 export const useLinearReleaseIssues = (orgId: string | undefined, releaseId: string) =>
   useQuery({
     queryKey: ["linear", "release-issues", orgId, releaseId],

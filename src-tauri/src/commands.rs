@@ -842,6 +842,14 @@ pub async fn linear_releases(org_id: String) -> GitResult<serde_json::Value> {
 }
 
 #[tauri::command]
+pub async fn linear_release_writing(
+    org_id: String,
+    release_id: String,
+) -> GitResult<serde_json::Value> {
+    blocking(move || linear::release_writing(&org_id, &release_id)).await
+}
+
+#[tauri::command]
 pub async fn linear_release_issues(
     org_id: String,
     release_id: String,

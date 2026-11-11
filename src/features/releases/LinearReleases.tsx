@@ -19,7 +19,13 @@ import { useNoticesStore } from "@/stores/notices-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { LinearRelease, LinearReleaseStage, LinearState } from "@/types/git";
 import { matchLinearRelease } from "./linear-match";
-import { linearReleasesKey, useLinearReleaseIssues, useReleases, useTags } from "./release-queries";
+import {
+  linearReleasesKey,
+  useLinearReleaseIssues,
+  useLinearReleaseWriting,
+  useReleases,
+  useTags,
+} from "./release-queries";
 import { useReleasesStore } from "./releases-store";
 
 /** Linear draws release stages with its issue glyphs: planned is a ring, started a pie, then check / cross. */
@@ -109,6 +115,17 @@ function GithubMatchButton({ repoPath, release }: { repoPath: string; release: L
   );
 }
 
+/** The release notes and documents written for the release, as Linear shows them under it. */
+function ReleaseWriting({ orgId, releaseId }: { orgId: string; releaseId: string }) {
+  const writing = useLinearReleaseWriting(orgId, releaseId).data ?? [];
+  return writing.map((w, i) => (
+    <section key={`${w.url}:${i}`} className="mt-6 text-[13.5px]">
+      {w.title && <h3 className="mb-2 text-[11.5px] font-medium text-muted-foreground">{w.title}</h3>}
+      <LazyMarkdown text={w.content} />
+    </section>
+  ));
+}
+
 function ReleaseIssues({ orgId, releaseId }: { orgId: string; releaseId: string }) {
   const t = useT();
   const issues = useLinearReleaseIssues(orgId, releaseId);
@@ -187,6 +204,7 @@ export function LinearReleaseDetail({
               <LazyMarkdown text={release.description} />
             </div>
           )}
+          <ReleaseWriting orgId={orgId} releaseId={release.id} />
           <p className="mt-6 pb-1 text-[11.5px] font-medium text-muted-foreground">
             {t("linearReleases.issues", { count: release.issueCount })}
           </p>
