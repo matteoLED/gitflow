@@ -1,6 +1,15 @@
-import { Compartment, Prec, RangeSet, StateField, type EditorState, type Extension } from "@codemirror/state";
+import {
+  Compartment,
+  Prec,
+  RangeSet,
+  StateField,
+  type EditorState,
+  type Extension,
+  type Transaction,
+} from "@codemirror/state";
 import { Decoration, EditorView, gutter, GutterMarker, WidgetType } from "@codemirror/view";
 import type { BlameHunk } from "@/types/git";
+import { isUncommitted } from "./blame-model";
 
 /** Holds the shown file's blame gutter and current-line annotation; empty while blame is off. */
 export const blameSlot = new Compartment();
@@ -52,7 +61,13 @@ class GhostWidget extends WidgetType {
   eq(other: GhostWidget) {
     return other.hunk === this.hunk && other.text === this.text;
   }
+  /**
+   * A zero-width anchor holding the annotation out of the flow: the caret at the end of the line measures the
+   * anchor (the text's own height, right after the last character), never the annotation's margin or icon.
+   */
   toDOM() {
+    const anchor = document.createElement("span");
+    anchor.className = "cm-blame-anchor";
     const el = document.createElement("span");
     el.className = "cm-blame-ghost";
     el.innerHTML = BRANCH_ICON;
@@ -61,7 +76,8 @@ class GhostWidget extends WidgetType {
       event.preventDefault();
       this.open(this.hunk, el.getBoundingClientRect());
     };
-    return el;
+    anchor.append(el);
+    return anchor;
   }
 }
 
@@ -70,12 +86,15 @@ const theme = EditorView.theme({
   ".cm-blame-gutter .cm-gutterElement": { padding: "0 12px 0 10px", overflow: "hidden" },
   ".cm-blame-entry": { color: "#6b6e76", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   ".cm-blame-gutter .cm-gutterElement:hover .cm-blame-entry": { color: "#aeb0b5" },
+  ".cm-blame-anchor": { position: "relative" },
   ".cm-blame-ghost": {
+    position: "absolute",
+    left: "3.5em",
+    top: "50%",
+    transform: "translateY(-50%)",
     display: "inline-flex",
     alignItems: "center",
     gap: "6px",
-    verticalAlign: "top",
-    marginLeft: "3.5em",
     fontFamily: "var(--code-font)",
     fontSize: "11.5px",
     color: "#5d5f66",
@@ -101,6 +120,17 @@ function markersFor(state: EditorState, hunks: BlameHunk[], labels: BlameLabels)
   return RangeSet.of(ranges, true);
 }
 
+/** Lines an edit touched no longer belong to their old commit: they lose their entry until the blame reloads. */
+function withoutEdited(markers: RangeSet<BlameMarker>, tr: Transaction) {
+  let next = markers;
+  tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    const filterFrom = tr.state.doc.lineAt(fromB).from;
+    const filterTo = tr.state.doc.lineAt(toB).to;
+    next = next.update({ filter: () => false, filterFrom, filterTo });
+  });
+  return next;
+}
+
 /** The blame gutter (left of the line numbers, like Zed) and the cursor line's ghost annotation. */
 export function blameExtension(
   hunks: BlameHunk[],
@@ -110,7 +140,7 @@ export function blameExtension(
 ): Extension {
   const field = StateField.define<RangeSet<BlameMarker>>({
     create: (state) => markersFor(state, hunks, labels),
-    update: (markers, tr) => markers.map(tr.changes),
+    update: (markers, tr) => (tr.docChanged ? withoutEdited(markers.map(tr.changes), tr) : markers),
   });
   const hunkAt = (state: EditorState, pos: number) => {
     const found: BlameHunk[] = [];
@@ -120,7 +150,8 @@ export function blameExtension(
   const ghost = EditorView.decorations.compute(["selection", field], (state) => {
     const line = state.doc.lineAt(state.selection.main.head);
     const hunk = hunkAt(state, line.from);
-    if (!hunk) return Decoration.none;
+    // Nothing to tell on a line not committed yet (or edited since the blame was read): no annotation, as in Zed.
+    if (!hunk || isUncommitted(hunk.sha)) return Decoration.none;
     const widget = new GhostWidget(hunk, labels.inline(hunk), open);
     return Decoration.set([Decoration.widget({ widget, side: 1 }).range(line.to)]);
   });

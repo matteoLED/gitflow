@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { create } from "zustand";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { EditorState, type Text } from "@codemirror/state";
+import { ChangeSet, EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { openSearchPanel } from "@codemirror/search";
 import { Code2, FileWarning, Search, Sparkles, X } from "lucide-react";
 import { FileIcon } from "@/components/file-icon";
 import { EmptyState } from "@/components/states";
+import { useViewSettings } from "@/stores/view-settings-store";
 import { useT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { invalidateRepo, repoKey } from "@/lib/git-queries";
@@ -19,6 +21,7 @@ import { LIGHT_SYNTAX_THEMES, useAppearance } from "@/stores/appearance-store";
 import { useThemeKind } from "@/features/settings/use-apply-appearance";
 import {
   editorExtensions,
+  hasLongLine,
   languageFor,
   languageName,
   languageSlot,
@@ -28,6 +31,12 @@ import {
   syncSyntax,
 } from "./codemirror";
 import { loadEditorSyntaxTheme } from "./syntax-theme";
+import { inlineCompletion } from "./inline-completion";
+import { useCompletionStore } from "@/stores/completion-store";
+import { PredictionsMenu } from "./PredictionsMenu";
+import { codeActions, registerEditHost, type ActionMenu } from "./code-actions";
+import { toChanges } from "./code-actions-logic";
+import { CodeActionMenu } from "./CodeActionMenu";
 import { fileUri, lspClient, lspLanguageOf, registerDisplay } from "./lsp";
 import { selectionOf } from "./AskAgent";
 import { QuickOpen } from "./QuickOpen";
@@ -40,7 +49,7 @@ import type { WorkingTreeEntry } from "@/types/git";
  * One open file. Its EditorState (text, undo history, selection, folds) lives here while another tab is in
  * front, so switching tabs is instant and keeps everything; only one EditorView exists.
  */
-type Buffer = { state: EditorState; saved: Text; mtime: number };
+type Buffer = { state: EditorState; saved: Text; mtime: number; scroll?: ReturnType<EditorView["scrollSnapshot"]> };
 type Notice = "binary" | "tooLarge" | "error";
 
 const buffers = new Map<string, Buffer>();
@@ -51,12 +60,46 @@ const patchBuffer = (key: string, patch: Partial<Buffer>) => {
   if (buffer) buffers.set(key, { ...buffer, ...patch });
 };
 
+/** Files whose autosave failed: left to ⌘S, so a file changed on disk doesn't raise a notice every second. */
+const autosaveFailed = new Set<string>();
+let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
+/** "After delay": the chosen delay after the last keystroke. */
+function scheduleAutosave(run: () => void) {
+  clearTimeout(autosaveTimer);
+  const { autosave, autosaveDelay } = useViewSettings.getState();
+  if (autosave === "afterDelay") autosaveTimer = setTimeout(run, autosaveDelay);
+}
+
 export function useRepoFiles(repoPath: string) {
   return useQuery({
     queryKey: ["files", repoPath],
     queryFn: () => gitBackend.listFiles(repoPath),
     staleTime: 30_000,
   });
+}
+
+/**
+ * The caret's place, for the status bar: kept out of the page's state so a keystroke re-renders two spans, not
+ * the tabs, toolbar and menus.
+ */
+const useCursor = create(() => ({ line: 1, col: 1, selected: false }));
+function publishCursor(state: EditorState) {
+  const { head, empty } = state.selection.main;
+  const line = state.doc.lineAt(head);
+  useCursor.setState({ line: line.number, col: head - line.from + 1, selected: !empty });
+}
+
+function CursorPosition() {
+  const t = useT();
+  const line = useCursor((s) => s.line);
+  const col = useCursor((s) => s.col);
+  return <span className="tabular-nums">{t("editor.position", { line, col })}</span>;
+}
+
+function AskLabel() {
+  const t = useT();
+  const selected = useCursor((s) => s.selected);
+  return <>{selected ? t("editor.askSelection") : t("editor.askAgent")}</>;
 }
 
 const isDirty = (state: EditorState, saved: Text) => state.doc.length !== saved.length || !state.doc.eq(saved);
@@ -134,10 +177,9 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
           .map(([key]) => key.split("\0")[1]),
       ),
   );
-  const [cursor, setCursor] = useState({ line: 1, col: 1 });
   const [notice, setNotice] = useState<{ kind: Notice; message?: string } | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
-  const [selected, setSelected] = useState(false);
+  const [actionMenu, setActionMenu] = useState<ActionMenu | null>(null);
   const reveal = useEditorStore((s) => s.reveal);
   // ⌘L: the selection (or the current line) goes to the chat, as a card in its composer.
   const askRef = useRef(() => {});
@@ -163,9 +205,9 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
     });
   }, []);
 
+  // The blame reloads on its own after a save (its query is invalidated): only the change marks are asked here.
   const refreshGutter = useCallback(
     (path: string) => {
-      applyBlame();
       gitBackend
         .lineChanges(repoPath, path)
         .then((changes) => {
@@ -173,22 +215,29 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
         })
         .catch(() => undefined); // the gutter is a hint: no marks is a fine fallback
     },
-    [applyBlame, repoPath],
+    [repoPath],
   );
 
   // Read by CodeMirror's ⌘S binding and the "Overwrite" action, which outlive any one render.
-  const saveRef = useRef<(force?: boolean) => Promise<void>>(async () => undefined);
+  const saveRef = useRef<(force?: boolean, auto?: boolean, target?: string) => Promise<void>>(async () => undefined);
+  /** Saves `target` (the file in front by default), from the view when shown, else from its buffer. */
   const save = useCallback(
-    async (force = false) => {
-      const path = shownRef.current;
-      const view = viewRef.current;
+    async (force = false, auto = false, target?: string) => {
+      const path = target ?? shownRef.current;
       const buffer = path && buffers.get(keyOf(repoPath, path));
-      if (!path || !view || !buffer) return;
-      const doc = view.state.doc;
+      if (!path || !buffer) return;
+      const current = () =>
+        shownRef.current === path && viewRef.current
+          ? viewRef.current.state
+          : (buffers.get(keyOf(repoPath, path))?.state ?? buffer.state);
+      // Autosave never retries a file whose last save failed (changed on disk…): ⌘S settles it, once.
+      if (auto && (autosaveFailed.has(keyOf(repoPath, path)) || !isDirty(current(), buffer.saved))) return;
+      const doc = current().doc;
       try {
         const mtime = await gitBackend.writeFile(repoPath, path, doc.toString(), force ? null : buffer.mtime);
         patchBuffer(keyOf(repoPath, path), { mtime, saved: doc });
-        markDirty(path, isDirty(view.state, doc));
+        autosaveFailed.delete(keyOf(repoPath, path));
+        markDirty(path, isDirty(current(), doc));
         refreshGutter(path);
         void invalidateRepo(client, repoPath, ["working-tree", "working-diff", "blame"]);
         // A conflicted file saved without markers left: offer to mark it resolved (never done behind the user's back).
@@ -206,6 +255,7 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
           });
       } catch (error) {
         const e = toGitError(error);
+        if (auto) autosaveFailed.add(keyOf(repoPath, path));
         notify({
           tone: "error",
           title: e.kind === "changedOnDisk" ? t("editor.changedOnDisk") : t("editor.saveFailed"),
@@ -234,21 +284,28 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
             readOnly,
           ),
           blameSlot.of([]),
+          codeActions({ repo: repoPath, openMenu: setActionMenu }),
+          inlineCompletion({
+            path,
+            uri: fileUri(repoPath, path),
+            languageId: lspLanguageOf(path)?.languageId ?? (languageName(path) ?? "plaintext").toLowerCase(),
+            languageName: languageName(path) ?? "Plain text",
+          }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               const buffer = buffers.get(keyOf(repoPath, path));
               if (buffer) markDirty(path, isDirty(update.state, buffer.saved));
+              // This file, even if another tab is in front when the delay ends.
+              scheduleAutosave(() => void saveRef.current(false, true, path));
             }
-            if (update.docChanged || update.selectionSet) {
-              const head = update.state.selection.main.head;
-              const line = update.state.doc.lineAt(head);
-              setCursor({ line: line.number, col: head - line.from + 1 });
-              setSelected(!update.state.selection.main.empty);
-            }
+            // Leaving the file (another tab, another page, another app) saves it, as in Zed.
+            if (update.focusChanged && !update.view.hasFocus && useViewSettings.getState().autosave !== "off")
+              void saveRef.current(false, true, path);
+            if (update.docChanged || update.selectionSet) publishCursor(update.state);
           }),
         ],
       }),
-    [markDirty, repoPath],
+    [markDirty, repoPath, setActionMenu],
   );
 
   // The single view, created once and handed each tab's state in turn.
@@ -259,7 +316,7 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
     return () => {
       const shown = shownRef.current;
       const buffer = shown && buffers.get(keyOf(repoPath, shown));
-      if (buffer && shown) patchBuffer(keyOf(repoPath, shown), { state: view.state });
+      if (buffer && shown) patchBuffer(keyOf(repoPath, shown), { state: view.state, scroll: view.scrollSnapshot() });
       view.destroy();
       viewRef.current = null;
       shownRef.current = null;
@@ -308,6 +365,33 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
       }),
     [repoPath],
   );
+  // Code action edits: the file in front through its view, other tabs in memory (left unsaved), others on disk.
+  useEffect(
+    () =>
+      registerEditHost(repoPath, {
+        editFile: async (path, edits) => {
+          const view = viewRef.current;
+          if (view && shownRef.current === path) {
+            view.dispatch({ changes: toChanges(view.state.doc, edits), userEvent: "input.codeAction" });
+            return;
+          }
+          const key = keyOf(repoPath, path);
+          const buffer = buffers.get(key);
+          if (buffer) {
+            const state = buffer.state.update({ changes: toChanges(buffer.state.doc, edits) }).state;
+            patchBuffer(key, { state });
+            markDirty(path, isDirty(state, buffer.saved));
+            return;
+          }
+          const file = await gitBackend.readFile(repoPath, path);
+          if (file.content === null) throw new Error(t("codeActions.unreadable", { path }));
+          const doc = Text.of(file.content.split("\n"));
+          const next = ChangeSet.of(toChanges(doc, edits), doc.length).apply(doc).toString();
+          await gitBackend.writeFile(repoPath, path, next, file.mtime);
+        },
+      }),
+    [markDirty, repoPath, t],
+  );
   const settleDisplay = useCallback((path: string) => {
     const resolve = displayed.current.get(path);
     if (!resolve) return;
@@ -338,14 +422,19 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
     if (!view) return;
     const previous = shownRef.current;
     const previousBuffer = previous && buffers.get(keyOf(repoPath, previous));
-    if (previousBuffer && previous) patchBuffer(keyOf(repoPath, previous), { state: view.state });
+    if (previousBuffer && previous)
+      patchBuffer(keyOf(repoPath, previous), { state: view.state, scroll: view.scrollSnapshot() });
     shownRef.current = active;
     setNotice(null);
     if (!active) return;
     const cached = buffers.get(keyOf(repoPath, active));
     if (cached) {
       view.setState(cached.state);
+      // setState scrolls to the top: back to where the tab was left.
+      if (cached.scroll) view.dispatch({ effects: cached.scroll });
+      publishCursor(cached.state);
       syncSyntax(view);
+      applyBlame();
       refreshGutter(active);
       view.focus();
       applyReveal();
@@ -362,24 +451,28 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
           setNotice({ kind: file.tooLarge ? "tooLarge" : "binary" });
           return;
         }
-        const state = stateFor(active, file.content, false);
+        // The language goes into the stored state: a tab left before its parser loaded keeps its colors.
+        const plain = stateFor(active, file.content, false);
+        const language = hasLongLine(plain.doc) ? [] : await languageFor(active).catch(() => []);
+        if (cancelled) return;
+        const state = plain.update({ effects: languageSlot.reconfigure(language) }).state;
         buffers.set(keyOf(repoPath, active), { state, saved: state.doc, mtime: file.mtime });
         if (shownRef.current !== active) return;
         view.setState(state);
+        publishCursor(state);
         syncSyntax(view);
         view.focus();
+        applyBlame();
         refreshGutter(active);
         applyReveal();
         settleDisplay(active);
-        const language = await languageFor(active);
-        if (shownRef.current === active) view.dispatch({ effects: languageSlot.reconfigure(language) });
         await connectServer(active);
       })
       .catch((error) => !cancelled && setNotice({ kind: "error", message: toGitError(error).message }));
     return () => {
       cancelled = true;
     };
-  }, [active, applyReveal, connectServer, refreshGutter, repoPath, settleDisplay, stateFor]);
+  }, [active, applyBlame, applyReveal, connectServer, refreshGutter, repoPath, settleDisplay, stateFor]);
 
   // Files changed on disk (an agent, a checkout): clean tabs follow, edited ones keep the user's text.
   useEffect(() => {
@@ -406,6 +499,7 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
                   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: file.content } });
                   patchBuffer(key, { saved: view.state.doc });
                   markDirty(path, false);
+                  applyBlame();
                   refreshGutter(path);
                 } else buffers.delete(key); // reloaded from disk when brought forward
               })
@@ -419,7 +513,7 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
       disposed = true;
       unlisten?.();
     };
-  }, [client, markDirty, refreshGutter, repoPath]);
+  }, [applyBlame, client, markDirty, refreshGutter, repoPath]);
 
   const closeTab = async (path: string) => {
     const buffer = buffers.get(keyOf(repoPath, path));
@@ -442,7 +536,16 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
         e.preventDefault();
         setQuickOpen(true);
       }
-      if (e.metaKey && !e.shiftKey && e.key.toLowerCase() === "w" && shownRef.current) {
+      // ⌃⌘I: edit predictions everywhere; ⌃⌘E: in this file.
+      if (e.metaKey && e.ctrlKey && e.key.toLowerCase() === "i") {
+        e.preventDefault();
+        useCompletionStore.getState().toggleEnabled();
+      }
+      if (e.metaKey && e.ctrlKey && e.key.toLowerCase() === "e" && shownRef.current) {
+        e.preventDefault();
+        useCompletionStore.getState().toggleFile(fileUri(repoPath, shownRef.current));
+      }
+      if (e.metaKey && !e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "w" && shownRef.current) {
         e.preventDefault();
         void closeTab(shownRef.current);
       }
@@ -477,6 +580,13 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
                 <button type="button" onClick={() => open(repoPath, path)} className="flex items-center gap-1.5">
                   <FileIcon path={path} className="size-3.5" />
                   {path.split("/").pop()}
+                  {/* Not saved yet: a dot by the name, as in Zed; the close button stays where it is. */}
+                  {dirty.has(path) && (
+                    <span
+                      aria-label={t("editor.unsaved")}
+                      className="size-1.5 shrink-0 rounded-full bg-foreground/70"
+                    />
+                  )}
                 </button>
                 <button
                   type="button"
@@ -484,14 +594,7 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
                   onClick={() => void closeTab(path)}
                   className="grid size-5 place-items-center rounded text-muted-foreground hover:bg-white/[0.08] hover:text-foreground"
                 >
-                  {dirty.has(path) ? (
-                    <>
-                      <span className="size-2 rounded-full bg-foreground/70 group-hover:hidden" />
-                      <X aria-hidden className="hidden size-3.5 group-hover:block" />
-                    </>
-                  ) : (
-                    <X aria-hidden className={cn("size-3.5", !selected && "opacity-0 group-hover:opacity-100")} />
-                  )}
+                  <X aria-hidden className={cn("size-3.5", !selected && "opacity-0 group-hover:opacity-100")} />
                 </button>
               </div>
             );
@@ -537,14 +640,29 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
             className="ml-auto flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-white/[0.06] hover:text-foreground"
           >
             <Sparkles aria-hidden className="size-3" />
-            {selected ? t("editor.askSelection") : t("editor.askAgent")}
+            <AskLabel />
             <kbd className="font-sans">⌘L</kbd>
           </button>
-          <span className="tabular-nums">{t("editor.position", cursor)}</span>
+          <PredictionsMenu
+            uri={fileUri(repoPath, active)}
+            languageName={languageName(active) ?? "Plain text"}
+            languageLabel={languageName(active) ?? t("editor.plainText")}
+            view={viewRef}
+          />
+          <CursorPosition />
           <span>{languageName(active) ?? t("editor.plainText")}</span>
         </footer>
       )}
       {blameCard}
+      {actionMenu && (
+        <CodeActionMenu
+          menu={actionMenu}
+          onClose={() => {
+            setActionMenu(null);
+            viewRef.current?.focus();
+          }}
+        />
+      )}
       <QuickOpen repoPath={repoPath} open={quickOpen} onOpenChange={setQuickOpen} />
     </section>
   );

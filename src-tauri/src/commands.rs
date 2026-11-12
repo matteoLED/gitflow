@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use crate::agents;
 use crate::browser;
 use crate::code_graph;
+use crate::completion;
 use crate::git::errors::{ErrorKind, GitError, GitResult};
 use crate::git::github::{GithubUser, PullRequest, PullRequestRange, ReviewEvent};
 use crate::git::identity::GitIdentity;
@@ -149,6 +150,45 @@ pub fn lsp_send(id: String, message: String) -> GitResult<()> {
 #[tauri::command]
 pub fn lsp_stop(id: String) {
     crate::lsp::stop(&id)
+}
+
+#[tauri::command]
+pub async fn copilot_start(app: tauri::AppHandle) -> GitResult<String> {
+    blocking(move || crate::lsp::start_copilot(app)).await
+}
+
+#[tauri::command]
+pub async fn completion_has_key(provider: String) -> GitResult<bool> {
+    blocking(move || Ok(completion::has_key(completion::Provider::parse(&provider)?))).await
+}
+
+#[tauri::command]
+pub async fn completion_set_key(provider: String, key: String) -> GitResult<()> {
+    blocking(move || completion::set_key(completion::Provider::parse(&provider)?, &key)).await
+}
+
+#[tauri::command]
+pub async fn completion_remove_key(provider: String) -> GitResult<()> {
+    blocking(move || {
+        completion::remove_key(completion::Provider::parse(&provider)?);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn completion_test(provider: String, model: String) -> GitResult<()> {
+    blocking(move || completion::test(completion::Provider::parse(&provider)?, &model)).await
+}
+
+#[tauri::command]
+pub async fn completion_complete(
+    provider: String,
+    model: String,
+    prompt: String,
+) -> GitResult<String> {
+    blocking(move || completion::complete(completion::Provider::parse(&provider)?, &model, &prompt))
+        .await
 }
 
 #[tauri::command]

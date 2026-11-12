@@ -339,6 +339,15 @@ export const gitBackend = {
   terminalResize: (id: string, cols: number, rows: number) => invoke<null>("terminal_resize", { id, cols, rows }),
   terminalClose: (id: string) => invoke<null>("terminal_close", { id }),
   /** Checks a personal API key with Linear and keeps it in the macOS Keychain. */
+  /** AI completion keys (Keychain): the frontend can only ask whether one is saved, never read it back. */
+  completionHasKey: (provider: "claude" | "openai") => invoke<boolean>("completion_has_key", { provider }),
+  completionSetKey: (provider: "claude" | "openai", key: string) =>
+    invoke<null>("completion_set_key", { provider, key }),
+  completionRemoveKey: (provider: "claude" | "openai") => invoke<null>("completion_remove_key", { provider }),
+  completionTest: (provider: "claude" | "openai", model: string) =>
+    invoke<null>("completion_test", { provider, model }),
+  completionComplete: (provider: "claude" | "openai", model: string, prompt: string) =>
+    invoke<string>("completion_complete", { provider, model, prompt }),
   linearAddAccount: (apiKey: string) => invoke<LinearAccount>("linear_add_account", { apiKey }),
   linearAccounts: () => invoke<LinearAccount[]>("linear_accounts"),
   linearRemoveAccount: (orgId: string) => invoke<null>("linear_remove_account", { orgId }),

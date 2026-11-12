@@ -8,6 +8,8 @@ import {
   History,
   Palette,
   SplitSquareHorizontal,
+  Sparkles,
+  SquarePen,
   UserRound,
 } from "lucide-react";
 import { SidebarBar, TabsBar } from "@/components/layout/TitleBar";
@@ -20,6 +22,8 @@ import { DiffSection, HistorySection } from "./DiffSection";
 import { RepositoriesSection } from "./RepositoriesSection";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { ShortcutsSection } from "./ShortcutsSection";
+import { CompletionSection } from "./CompletionSection";
+import { EditorSection } from "./EditorSection";
 import { AboutSection } from "./AboutSection";
 import { Kbd } from "./settings-ui";
 
@@ -61,6 +65,20 @@ const NAV: { title?: MessageKey; pages: Page[] }[] = [
         description: "settings.historyDesc",
         Icon: History,
         render: () => <HistorySection />,
+      },
+      {
+        id: "editor",
+        title: "settings.editor",
+        description: "settings.editorDesc",
+        Icon: SquarePen,
+        render: () => <EditorSection />,
+      },
+      {
+        id: "completion",
+        title: "settings.completion",
+        description: "settings.completionDesc",
+        Icon: Sparkles,
+        render: () => <CompletionSection />,
       },
       {
         id: "shortcuts",

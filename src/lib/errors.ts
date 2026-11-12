@@ -8,5 +8,8 @@ function isGitError(value: unknown): value is GitErrorPayload {
 export function toGitError(error: unknown): GitErrorPayload {
   if (isGitError(error)) return error;
   if (error instanceof Error) return { kind: "io", message: error.message, detail: null };
+  // A JSON-RPC error from a language server (Copilot…): `{ code, message, data }`.
+  if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string")
+    return { kind: "io", message: error.message, detail: null };
   return { kind: "io", message: String(error), detail: null };
 }

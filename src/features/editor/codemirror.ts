@@ -2,7 +2,15 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { bracketMatching, foldGutter, foldKeymap, indentOnInput, LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { gotoLine, highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { Compartment, EditorState, RangeSet, StateEffect, StateField, type Extension } from "@codemirror/state";
+import {
+  Compartment,
+  EditorState,
+  RangeSet,
+  StateEffect,
+  StateField,
+  type Extension,
+  type Text,
+} from "@codemirror/state";
 import {
   crosshairCursor,
   drawSelection,
@@ -36,8 +44,9 @@ const theme = EditorView.theme(
   {
     "&": { height: "100%", backgroundColor: "transparent", fontSize: "var(--code-size, 12.5px)" },
     ".cm-scroller": { fontFamily: "var(--font-mono)", lineHeight: "1.65" },
-    ".cm-content": { caretColor: "var(--primary)", padding: "6px 0" },
-    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--primary)", borderLeftWidth: "2px" },
+    // The caret is drawn by drawSelection (the native one stays hidden): thin, as in Zed.
+    ".cm-content": { padding: "6px 0" },
+    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--primary)", borderLeftWidth: "1.5px" },
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {
       backgroundColor: "color-mix(in oklab, var(--primary) 30%, transparent) !important",
     },
@@ -66,9 +75,24 @@ const theme = EditorView.theme(
       overflow: "hidden",
     },
     ".cm-tooltip-hover": { maxWidth: "640px", maxHeight: "360px", overflow: "auto", fontSize: "12.5px" },
-    ".cm-lsp-documentation": { padding: "6px 10px", fontFamily: "var(--font-sans)" },
-    ".cm-lsp-documentation pre, .cm-lsp-documentation code": { fontFamily: "var(--font-mono)", fontSize: "12px" },
-    ".cm-tooltip-autocomplete > ul": { fontFamily: "var(--font-mono)", fontSize: "12.5px", maxHeight: "18em" },
+    // Zed's hover: everything in the code font, the signature set apart from the prose under it.
+    ".cm-lsp-documentation": {
+      padding: "8px 12px",
+      fontFamily: "var(--code-font)",
+      fontSize: "12.5px",
+      lineHeight: "1.6",
+      color: "var(--muted-foreground)",
+    },
+    ".cm-lsp-documentation pre, .cm-lsp-documentation code": { fontFamily: "var(--code-font)", fontSize: "12.5px" },
+    ".cm-lsp-documentation pre": { margin: "0 0 10px", color: "var(--foreground)", whiteSpace: "pre-wrap" },
+    ".cm-lsp-documentation p": { margin: "0 0 8px" },
+    ".cm-lsp-documentation > :last-child, .cm-lsp-documentation p:last-child": { marginBottom: "0" },
+    // Two classes, as CodeMirror's own `monospace` rule: one would lose to it.
+    ".cm-tooltip.cm-tooltip-autocomplete > ul": {
+      fontFamily: "var(--code-font)",
+      fontSize: "12.5px",
+      maxHeight: "18em",
+    },
     ".cm-tooltip-autocomplete > ul > li": { padding: "2px 8px !important", lineHeight: "1.6" },
     ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
       backgroundColor: "color-mix(in oklab, var(--primary) 28%, transparent)",
@@ -89,7 +113,18 @@ const theme = EditorView.theme(
       textDecoration: "underline wavy rgb(250 204 21 / 0.8)",
       textUnderlineOffset: "3px",
     },
+    // A small dot per severity, centered in its narrow gutter (CodeMirror's 1em circle overflowed it).
     ".cm-gutter-lint": { width: "10px" },
+    ".cm-gutter-lint .cm-gutterElement": {
+      padding: "0",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    ".cm-gutter-lint .cm-lint-marker": { content: "normal", width: "6px", height: "6px", borderRadius: "50%" },
+    ".cm-gutter-lint .cm-lint-marker-error": { backgroundColor: "var(--removed-foreground)" },
+    ".cm-gutter-lint .cm-lint-marker-warning": { backgroundColor: "rgb(250 204 21)" },
+    ".cm-gutter-lint .cm-lint-marker-info, .cm-gutter-lint .cm-lint-marker-hint": { backgroundColor: "#878991" },
     ".cm-git-gutter": { width: "3px", marginRight: "2px" },
     ".cm-git-added": { backgroundColor: "var(--added-foreground)", height: "100%" },
     ".cm-git-modified": { backgroundColor: "var(--primary)", height: "100%" },
@@ -167,6 +202,13 @@ export async function languageFor(path: string): Promise<Extension> {
   const description = LanguageDescription.matchFilename(languages, path.split("/").pop() ?? path);
   if (!description) return [];
   return description.support ?? (await description.load());
+}
+
+/** Past this, a file isn't highlighted (as VS Code): reparsing a minified bundle costs tens of ms a keystroke. */
+const MAX_HIGHLIGHTED_LINE = 10_000;
+export function hasLongLine(doc: Text): boolean {
+  for (let n = 1; n <= doc.lines; n++) if (doc.line(n).length > MAX_HIGHLIGHTED_LINE) return true;
+  return false;
 }
 
 export const languageName = (path: string) =>

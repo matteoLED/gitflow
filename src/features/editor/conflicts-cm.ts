@@ -1,10 +1,11 @@
-import { RangeSetBuilder, StateField, type EditorState, type Extension } from "@codemirror/state";
+import { RangeSetBuilder, StateField, type EditorState, type Extension, type Transaction } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import { getT } from "@/i18n";
 import { parseConflicts, resolution, type Choice, type Conflict } from "./conflicts";
 
 /** Past this size a file isn't scanned for markers on every keystroke. */
 const MAX_SCAN = 2_000_000;
+const MARKER = /^(<{7}|\|{7}|={7}|>{7})/;
 
 class ConflictActions extends WidgetType {
   constructor(readonly conflict: Conflict) {
@@ -63,7 +64,7 @@ function decorate(state: EditorState): DecorationSet {
     );
     let section: "ours" | "base" | "theirs" = "ours";
     for (let line = state.doc.lineAt(conflict.from); ; line = state.doc.line(line.number + 1)) {
-      const isMarker = /^(<{7}|\|{7}|={7}|>{7})/.test(line.text);
+      const isMarker = MARKER.test(line.text);
       if (line.text.startsWith("|||||||")) section = "base";
       if (line.text.startsWith("=======")) section = "theirs";
       builder.add(
@@ -77,9 +78,28 @@ function decorate(state: EditorState): DecorationSet {
   return builder.finish();
 }
 
+/** Whether an edit wrote on a line that starts with a conflict marker (the file may have gained a conflict). */
+export function touchesMarker(tr: Transaction): boolean {
+  let found = false;
+  tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    const doc = tr.state.doc;
+    for (let n = doc.lineAt(fromB).number, last = doc.lineAt(toB).number; !found && n <= last; n++)
+      found = MARKER.test(doc.line(n).text);
+  });
+  return found;
+}
+
+/**
+ * Rescanned (the whole text) only while the file has conflicts or when an edit touches a marker line: typing in
+ * an ordinary file, even a 1 MB one, costs nothing here.
+ */
 const conflictField = StateField.define<DecorationSet>({
   create: decorate,
-  update: (decorations, tr) => (tr.docChanged ? decorate(tr.state) : decorations),
+  update: (decorations, tr) => {
+    if (!tr.docChanged) return decorations;
+    if (decorations.size === 0 && !touchesMarker(tr)) return decorations;
+    return decorate(tr.state);
+  },
   provide: (field) => EditorView.decorations.from(field),
 });
 

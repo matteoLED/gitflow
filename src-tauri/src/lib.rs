@@ -4,6 +4,7 @@ mod attachments;
 mod browser;
 mod code_graph;
 mod commands;
+mod completion;
 mod git;
 mod github_status;
 mod linear;
@@ -74,6 +75,12 @@ pub fn run() {
             commands::lsp_start,
             commands::lsp_send,
             commands::lsp_stop,
+            commands::copilot_start,
+            commands::completion_has_key,
+            commands::completion_set_key,
+            commands::completion_remove_key,
+            commands::completion_test,
+            commands::completion_complete,
             commands::list_commits,
             commands::list_submodules,
             commands::update_submodules,

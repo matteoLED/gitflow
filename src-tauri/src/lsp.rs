@@ -102,19 +102,69 @@ fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<String>> {
 /// Starts the language server for `language` in `repo`, or reuses the running one. Returns its id.
 pub fn start(app: AppHandle, repo: &Path, language: &str) -> GitResult<String> {
     let id = format!("{language}:{}", repo.display());
+    spawn(app, id, repo, || command_for(repo, language))
+}
+
+/// GitHub Copilot's language server, one for the whole app (it serves files of any repository): the
+/// installed `copilot-language-server`, else the npm package through `npx`. Fixed programs and arguments.
+pub fn start_copilot(app: AppHandle) -> GitResult<String> {
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+    spawn(app, COPILOT.to_string(), &home, copilot_command)
+}
+
+const COPILOT: &str = "copilot";
+
+fn copilot_command() -> GitResult<(PathBuf, Vec<&'static str>)> {
+    if let Some(path) = find("copilot-language-server") {
+        return Ok((path, vec!["--stdio"]));
+    }
+    find("npx")
+        .map(|npx| {
+            (
+                npx,
+                vec!["--yes", "@github/copilot-language-server", "--stdio"],
+            )
+        })
+        .ok_or_else(|| {
+            GitError::new(
+                ErrorKind::Io,
+                "GitHub Copilot needs Node.js (npx). Install it from nodejs.org or with: brew install node",
+            )
+        })
+}
+
+/// Runs a server under `id` unless it already runs; `command` is only resolved when a process is needed.
+fn spawn(
+    app: AppHandle,
+    id: String,
+    cwd: &Path,
+    command: impl FnOnce() -> GitResult<(PathBuf, Vec<&'static str>)>,
+) -> GitResult<String> {
     let mut all = servers()
         .lock()
         .map_err(|_| GitError::invalid("Language servers are busy."))?;
-    if let Some(server) = all.get_mut(&id) {
-        if matches!(server.child.try_wait(), Ok(None)) {
-            return Ok(id);
+    // Each client initializes its server once: a page reloaded (⌘R, dev reload) starts a fresh process
+    // instead of reusing one that already answered `initialize`, which servers refuse twice.
+    let prefix = format!("{id}#");
+    let stale: Vec<String> = all
+        .keys()
+        .filter(|k| k.starts_with(&prefix))
+        .cloned()
+        .collect();
+    for key in stale {
+        if let Some(mut old) = all.remove(&key) {
+            let _ = old.child.kill();
         }
-        all.remove(&id);
     }
-    let (program, args) = command_for(repo, language)?;
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = format!(
+        "{prefix}{}",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let (program, args) = command()?;
     let mut child = Command::new(&program)
         .args(&args)
-        .current_dir(repo)
+        .current_dir(cwd)
         .env("PATH", search_path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

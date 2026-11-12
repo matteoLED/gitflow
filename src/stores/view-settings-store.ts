@@ -4,6 +4,8 @@ import { persist } from "zustand/middleware";
 export type DiffLayout = "unified" | "split";
 export type FileListMode = "tree" | "list";
 export type FileGrouping = "none" | "status";
+/** Zed's choices: never, a second after the last keystroke (and on leaving the file), or only on leaving it. */
+export type Autosave = "off" | "afterDelay" | "onFocusChange";
 
 export type ViewSettings = {
   layout: DiffLayout;
@@ -15,6 +17,9 @@ export type ViewSettings = {
   hideGenerated: boolean;
   firstParentOnly: boolean;
   hideMerges: boolean;
+  autosave: Autosave;
+  /** Milliseconds after the last keystroke, for "afterDelay". */
+  autosaveDelay: number;
 };
 
 const DEFAULTS: ViewSettings = {
@@ -27,6 +32,8 @@ const DEFAULTS: ViewSettings = {
   hideGenerated: false,
   firstParentOnly: false,
   hideMerges: false,
+  autosave: "afterDelay",
+  autosaveDelay: 1000,
 };
 
 type ViewSettingsState = ViewSettings & {

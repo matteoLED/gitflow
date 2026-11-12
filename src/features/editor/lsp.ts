@@ -15,6 +15,8 @@ import type { EditorView } from "@codemirror/view";
 import { getT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
 import { useNoticesStore } from "@/stores/notices-store";
+import { codeActionClientExtension, handleApplyEdit } from "./code-actions";
+import { fileUri, repoPathOf } from "./code-actions-logic";
 
 /** The server family a file belongs to, and the LSP language id it's opened with. */
 export function lspLanguageOf(path: string): { server: string; languageId: string } | null {
@@ -36,13 +38,7 @@ export function lspLanguageOf(path: string): { server: string; languageId: strin
   return found ? { server: found[0], languageId: found[1] } : null;
 }
 
-export const fileUri = (repo: string, path: string) =>
-  `file://${`${repo}/${path}`.split("/").map(encodeURIComponent).join("/")}`;
-
-const pathOf = (repo: string, uri: string) => {
-  const prefix = `${fileUri(repo, "")}`;
-  return uri.startsWith(prefix) ? decodeURIComponent(uri.slice(prefix.length)) : null;
-};
+export { fileUri };
 
 /** Opens a file of the repository in the editor and resolves with the view once it shows it. */
 export type DisplayFile = (path: string) => Promise<EditorView | null>;
@@ -107,22 +103,44 @@ class EditorWorkspace extends Workspace {
     this.client.didClose(uri);
   }
   async displayFile(uri: string): Promise<EditorView | null> {
-    const path = pathOf(this.repo, uri);
+    const path = repoPathOf(this.repo, uri);
     const display = path && displayers.get(this.repo);
     return display ? display(path) : null;
   }
 }
 
+/** Answers a request the server sends us; undefined when not handled (the LSP client then refuses it). */
+export type ServerRequests = (method: string, params: unknown) => Promise<unknown> | undefined;
+
 /** Tauri events in, `lsp_send` out: the JSON-RPC stream of one server process. */
-async function tauriTransport(id: string): Promise<Transport> {
+export async function tauriTransport(
+  id: string,
+  onExit = () => void clients.delete(id),
+  onRequest?: ServerRequests,
+): Promise<Transport> {
   let handlers: ((message: string) => void)[] = [];
+  const send = (message: string) => void invoke("lsp_send", { id, message }).catch(() => undefined);
+  /** Server-to-client requests we answer ourselves (the CodeMirror client answers every one "not found"). */
+  const answered = (raw: string) => {
+    if (!onRequest || !raw.includes('"method"')) return false;
+    const message = JSON.parse(raw) as { id?: number | string; method?: string; params?: unknown };
+    const reply = message.id !== undefined && message.method ? onRequest(message.method, message.params) : undefined;
+    if (!reply) return false;
+    void reply.then(
+      (result) => send(JSON.stringify({ jsonrpc: "2.0", id: message.id, result })),
+      (error: unknown) =>
+        send(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: String(error) } })),
+    );
+    return true;
+  };
   await listen<{ type: "message" | "exited"; id: string; message?: string }>("lsp", ({ payload }) => {
     if (payload.id !== id) return;
-    if (payload.type === "message" && payload.message) for (const h of handlers) h(payload.message);
-    if (payload.type === "exited") clients.delete(id);
+    if (payload.type === "message" && payload.message && !answered(payload.message))
+      for (const h of handlers) h(payload.message);
+    if (payload.type === "exited") onExit();
   });
   return {
-    send: (message) => void invoke("lsp_send", { id, message }).catch(() => undefined),
+    send,
     subscribe: (handler) => void handlers.push(handler),
     unsubscribe: (handler) => void (handlers = handlers.filter((h) => h !== handler)),
   };
@@ -141,11 +159,13 @@ export function lspClient(repo: string, server: string): Promise<LSPClient | nul
   if (known) return known;
   const started = invoke<string>("lsp_start", { repoPath: repo, language: server })
     .then(async (id) => {
-      const transport = await tauriTransport(id);
+      const transport = await tauriTransport(id, undefined, (method, params) =>
+        method === "workspace/applyEdit" ? handleApplyEdit(repo, params) : undefined,
+      );
       return new LSPClient({
         rootUri: fileUri(repo, "").replace(/\/$/, ""),
         workspace: (client) => new EditorWorkspace(client, repo),
-        extensions: languageServerExtensions(),
+        extensions: [codeActionClientExtension, ...languageServerExtensions()],
         timeout: 10_000,
       }).connect(transport);
     })
