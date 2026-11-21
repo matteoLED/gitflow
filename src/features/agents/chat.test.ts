@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentStep } from "@/types/git";
-import { countByCategory, shorten, toChat } from "./steps-model";
+import { categoryOf, countByCategory, shorten, toChat, toolLabel } from "./steps-model";
 
 const step = (kind: AgentStep["kind"], title: string, detail: string | null = null): AgentStep => ({
   kind,
@@ -33,5 +33,15 @@ describe("toChat", () => {
 describe("shorten", () => {
   it("makes paths relative to the repository and drops a leading cd", () => {
     expect(shorten("cd /r/repo && git show /r/repo/a.ts", "/r/repo")).toBe("git show a.ts");
+  });
+});
+
+describe("MCP tools", () => {
+  it("names a code graph search by its server and tool", () => {
+    expect(toolLabel("mcp__codebase-memory-mcp__search_graph")).toBe("codebase-memory · search_graph");
+  });
+
+  it("counts a code graph search as a search, not a web call", () => {
+    expect(categoryOf("mcp__codebase-memory-mcp__search_code")).toBe("search");
   });
 });

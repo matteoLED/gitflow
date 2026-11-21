@@ -4,7 +4,6 @@ import { shallow } from "zustand/shallow";
 import { useComposerMenu } from "./ComposerMenu";
 import {
   ArrowUp,
-  Brain,
   ChevronRight,
   CircleCheck,
   CircleX,
@@ -19,6 +18,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
+import { CopyButton } from "@/components/copy-button";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { AttachButton, AttachmentStrip, SentImages, splitImages, useAttachments } from "./attachments";
 import { countByCategory, toChat, type ChatItem, type ToolCall, type ToolCategory } from "./steps-model";
@@ -76,7 +76,9 @@ const CallRow = memo(
             aria-hidden
             className={cn("size-3.5 shrink-0", call.failed ? "text-removed-foreground" : CATEGORY_TONE[call.category])}
           />
-          <span className="w-12 shrink-0 text-muted-foreground">{call.tool}</span>
+          <span className="min-w-12 max-w-[45%] shrink-0 truncate whitespace-nowrap text-muted-foreground">
+            {call.tool}
+          </span>
           <span
             className={cn(
               "min-w-0 flex-1 truncate font-mono text-[12px] text-foreground/85",
@@ -186,20 +188,38 @@ const Prompt = memo(function Prompt({ text }: { text: string }) {
   );
 });
 
-const Thinking = memo(function Thinking({ step }: { step: AgentStep }) {
+/** Like Claude's apps: "Thinking…" shimmers while the agent reasons, then folds into "Thought", opened on click. */
+const Thinking = memo(function Thinking({ step, live }: { step: AgentStep; live: boolean }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
+  const text = step.detail ?? step.title;
   return (
-    <div>
+    <div className="px-2 py-1">
       <button
         type="button"
-        disabled={!step.detail}
+        aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 px-2 py-1 text-left text-[12.5px] text-muted-foreground italic hover:enabled:text-foreground"
+        className="group flex max-w-full items-center gap-1.5 rounded text-left text-[12.5px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <Brain aria-hidden className="size-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate">{step.title}</span>
+        {live ? <span className="text-shimmer">{t("agents.thinking")}</span> : <span>{t("agents.thought")}</span>}
+        {!open && <span className="min-w-0 truncate font-normal text-muted-foreground/70">{step.title}</span>}
+        <ChevronRight
+          aria-hidden
+          className={cn("size-3 shrink-0 transition-transform duration-200", open && "rotate-90")}
+        />
       </button>
-      {open && step.detail && <Detail text={step.detail} />}
+      <div
+        className={cn(
+          "grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <p className="mt-1.5 max-h-72 overflow-y-auto border-l border-white/10 pl-3 text-[12.5px] leading-relaxed whitespace-pre-wrap text-muted-foreground select-text">
+            {text}
+          </p>
+        </div>
+      </div>
     </div>
   );
 });
@@ -229,14 +249,15 @@ const Entry = memo(
         return <Prompt text={item.text} />;
       case "message":
         return (
-          <div className="px-2 py-1.5 text-[14px]">
+          <div className="group/message px-2 py-1.5 text-[14px]">
             <Suspense fallback={<p className="whitespace-pre-wrap">{item.text}</p>}>
               <AgentMessage text={item.text} />
             </Suspense>
+            {!live && <MessageActions text={item.text} />}
           </div>
         );
       case "thinking":
-        return <Thinking step={item.step} />;
+        return <Thinking step={item.step} live={live} />;
       case "tools":
         return <ToolGroup calls={item.calls} live={live} />;
       case "result":
@@ -268,6 +289,16 @@ const Entry = memo(
   },
   (a, b) => a.live === b.live && sameItem(a.item, b.item),
 );
+
+/** Under a reply, shown on hover (or keyboard focus): copy it as Markdown. */
+function MessageActions({ text }: { text: string }) {
+  const t = useT();
+  return (
+    <div className="mt-1 -ml-1 flex h-5 opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100">
+      <CopyButton text={text} label={t("agents.copyReply")} />
+    </div>
+  );
+}
 
 /** What the user typed, without the context and instructions the app added around it. */
 export const CONTEXT_SEPARATOR = "\n\n---\n";
@@ -358,9 +389,9 @@ export function ChatThread({
 
   // Built apart from the transcript so a new step doesn't re-render the loader.
   const working = (
-    <p className="flex items-center gap-2 px-2 py-2 text-[12.5px] text-muted-foreground">
+    <p className="flex items-center gap-2 px-2 py-2 text-[12.5px] font-medium">
       <BrailleLoader className="text-primary" />
-      {t("agents.working")}
+      <span className="text-shimmer">{t("agents.working")}</span>
     </p>
   );
 
@@ -509,9 +540,11 @@ function Composer({
       )}
       <div
         ref={composerRef}
-        onDragOver={(e) => e.preventDefault()}
+        onDragOver={attachments.onDragOver}
+        onDragLeave={attachments.onDragLeave}
+        data-dragging={attachments.dragging || undefined}
         onDrop={attachments.onDrop}
-        className="relative mx-auto max-w-[780px] rounded-xl border border-white/[0.07] bg-[color-mix(in_oklab,var(--foreground)_5%,var(--background))] transition-colors focus-within:border-white/[0.14]"
+        className="relative mx-auto max-w-[780px] rounded-xl border border-white/[0.07] bg-[color-mix(in_oklab,var(--foreground)_5%,var(--background))] transition-colors focus-within:border-white/[0.14] data-[dragging]:border-primary/60 data-[dragging]:bg-primary/[0.06]"
       >
         {completion}
         {edits}

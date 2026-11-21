@@ -38,7 +38,16 @@ export function parseTool(title: string): { tool: string; arg: string } {
 }
 
 export function categoryOf(tool: string): ToolCategory {
-  return CATEGORIES[tool] ?? (tool.startsWith("mcp__") ? "web" : "other");
+  if (CATEGORIES[tool]) return CATEGORIES[tool];
+  if (!tool.startsWith("mcp__")) return "other";
+  // MCP servers: code indexes (codebase-memory, code-review-graph) search the code; the rest reach out.
+  return /graph|search|query|trace|snippet|symbol|code/i.test(tool) ? "search" : "web";
+}
+
+/** "mcp__codebase-memory-mcp__search_graph" → "codebase-memory · search_graph"; other tools as they are. */
+export function toolLabel(tool: string): string {
+  const match = /^mcp__(.+?)__(.+)$/.exec(tool);
+  return match ? `${match[1].replace(/-mcp$/, "")} · ${match[2]}` : tool;
 }
 
 export function shorten(arg: string, root: string | null): string {
@@ -80,7 +89,7 @@ export function toChat(steps: AgentStep[], root: string | null): ChatItem[] {
         const { tool, arg } = parseTool(step.title);
         const call: ToolCall = {
           key,
-          tool,
+          tool: toolLabel(tool),
           category: categoryOf(tool),
           target: shorten(arg, root),
           detail: step.detail,

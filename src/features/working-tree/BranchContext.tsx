@@ -43,7 +43,7 @@ export function BranchStatus({ repoPath }: { repoPath: string }) {
   const ahead = branch?.ahead ?? 0;
   const behind = branch?.behind ?? 0;
   return (
-    <div className="mx-3 mt-3 rounded-lg border border-white/[0.07] bg-card px-3 py-2.5">
+    <div className="surface mx-3 mt-3 px-3 py-2.5">
       <p className="flex min-w-0 items-center gap-2 text-[13px]">
         <BranchStateIcon pr={pr} />
         <span className="min-w-0 truncate font-mono text-[12.5px]">{refs.head.branch ?? t("changes.detached")}</span>
@@ -58,7 +58,15 @@ export function BranchStatus({ repoPath }: { repoPath: string }) {
           ) : ahead === 0 && behind === 0 ? (
             <>
               <Check aria-hidden className="size-3.5 text-added-foreground" />
-              <span className="min-w-0 flex-1 truncate">{t("branch.inSync", { upstream: branch.upstream ?? "" })}</span>
+              {/* "origin" alone when the remote branch has the same name: the full name is already above. */}
+              <span className="min-w-0 flex-1 truncate" title={branch.upstream ?? undefined}>
+                {t("branch.inSync", {
+                  upstream:
+                    branch.upstream === `${branch.upstream?.split("/")[0]}/${branch.name}`
+                      ? (branch.upstream?.split("/")[0] ?? "")
+                      : (branch.upstream ?? ""),
+                })}
+              </span>
             </>
           ) : (
             <span className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -101,9 +109,9 @@ export function BranchStatus({ repoPath }: { repoPath: string }) {
         <button
           type="button"
           onClick={() => void openPr.open(pr)}
-          className="mt-2 flex w-full min-w-0 items-center gap-2 rounded-md text-left text-[12px] text-muted-foreground hover:text-foreground"
+          className="mt-2 flex w-full min-w-0 items-center gap-2 rounded-md border-t border-white/[0.06] pt-2 text-left text-[12px] text-muted-foreground hover:text-foreground"
         >
-          <span className="shrink-0 font-mono">#{pr.number}</span>
+          <span className="shrink-0 tabular-nums">#{pr.number}</span>
           <span className="min-w-0 flex-1 truncate">{pr.title}</span>
           {openPr.loading === pr.number && <BrailleLoader />}
         </button>
@@ -151,7 +159,7 @@ function CommitItem({ repoPath, commit, local }: { repoPath: string; commit: Com
           {tags.slice(0, 1).map((tag) => (
             <span
               key={tag.name}
-              className="flex max-w-24 shrink-0 items-center gap-1 rounded border border-white/10 px-1 text-[10.5px] text-muted-foreground"
+              className="flex max-w-24 shrink-0 items-center gap-1 text-[11px] text-muted-foreground"
             >
               <Tag aria-hidden className="size-2.5 shrink-0" />
               <span className="truncate">{tag.name}</span>

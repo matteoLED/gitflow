@@ -1,12 +1,14 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { CopyButton } from "@/components/copy-button";
 import { useQuery } from "@tanstack/react-query";
-import { Check, CircleDashed, Copy, GitBranch, GitPullRequest, Repeat, UserRound, X } from "lucide-react";
+import { Check, CircleDashed, GitBranch, GitPullRequest, Repeat, UserRound, X } from "lucide-react";
 import { AuthorAvatar } from "@/components/author-avatar";
+import { AgentBadge, coAgentOf } from "@/components/agent-badge";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { useT } from "@/i18n";
 import { splitSubject } from "@/lib/commit-subject";
 import { formatAge } from "@/lib/format-date";
-import { useAvatar, useCommitPullRequest, usePullRequests } from "@/lib/git-queries";
+import { useAvatar, useCommitFiles, useCommitPullRequest, usePullRequests } from "@/lib/git-queries";
 import { gitBackend } from "@/lib/tauri-git";
 import { cn } from "@/lib/utils";
 import { checkOutcome } from "@/features/github/ChecksMenu";
@@ -143,27 +145,22 @@ export function PullRequestHoverCard({
 
 function CopyHash({ hash }: { hash: string }) {
   const t = useT();
-  const [copied, setCopied] = useState(false);
-  const copy = () =>
-    void navigator.clipboard.writeText(hash).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    });
-  return (
-    <button
-      type="button"
-      onClick={copy}
-      aria-label={copied ? t("status.copied") : t("refs.copyHash")}
-      title={t("refs.copyHash")}
-      className="grid size-5 place-items-center rounded text-muted-foreground outline-none hover:bg-white/[0.08] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      {copied ? <Check aria-hidden className="size-3 text-check-passed" /> : <Copy aria-hidden className="size-3" />}
-    </button>
-  );
+  return <CopyButton text={hash} label={t("refs.copyHash")} />;
 }
 
 /** What a commit card shows: a history row, a file history entry. */
-type CommitPreview = Pick<CommitSummary, "hash" | "subject" | "author" | "authorEmail" | "authoredAt">;
+type CommitPreview = Pick<CommitSummary, "hash" | "subject" | "author" | "authorEmail" | "authoredAt"> &
+  Partial<Pick<CommitSummary, "coAuthors" | "refs">>;
+
+/** A label and its value on one line, like a spec sheet. */
+function Fact({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <p className="flex items-baseline justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-right tabular-nums">{children}</span>
+    </p>
+  );
+}
 
 function CommitBody({ repoPath, commit }: { repoPath: string; commit: CommitPreview }) {
   const t = useT();
@@ -171,14 +168,31 @@ function CommitBody({ repoPath, commit }: { repoPath: string; commit: CommitPrev
   const { title, pr: suffix } = splitSubject(commit.subject);
   const found = useCommitPullRequest(repoPath, suffix ? null : commit.hash).data;
   const pr = found ?? (suffix ? { number: Number(suffix), title: null } : null);
+  const files = useCommitFiles(repoPath, commit.hash).data;
+  const added = files?.reduce((sum, f) => sum + (f.additions ?? 0), 0) ?? 0;
+  const removed = files?.reduce((sum, f) => sum + (f.deletions ?? 0), 0) ?? 0;
+  const branches = (commit.refs ?? []).filter((r) => r.kind === "branch").map((r) => r.name);
+  const coAuthors = commit.coAuthors ?? [];
   return (
     <>
-      <div className="flex items-center gap-2 text-muted-foreground">
-        <AuthorAvatar name={commit.author} src={avatar} className="size-5" />
-        <span className="min-w-0 truncate text-foreground/90">{commit.author}</span>
-        <time dateTime={commit.authoredAt} className="ml-auto shrink-0 tabular-nums">
-          {formatAge(commit.authoredAt, undefined, t.locale)}
-        </time>
+      <div className="flex items-center gap-2.5">
+        <span className="relative shrink-0">
+          <AuthorAvatar name={commit.author} src={avatar} className="size-8" />
+          {coAgentOf(coAuthors) && (
+            <AgentBadge
+              agent={coAgentOf(coAuthors) ?? "claude"}
+              className="absolute -right-1 -bottom-1 size-4 ring-popover"
+            />
+          )}
+        </span>
+        <span className="min-w-0">
+          <span className="block truncate text-foreground">{commit.author}</span>
+          {coAuthors.length > 0 && (
+            <span className="block truncate text-[12px] text-muted-foreground">
+              {t("refs.coAuthoredWith", { names: coAuthors.join(", ") })}
+            </span>
+          )}
+        </span>
       </div>
       <p className="text-[13px] leading-snug font-medium text-foreground">{title}</p>
       {pr && (
@@ -186,11 +200,23 @@ function CommitBody({ repoPath, commit }: { repoPath: string; commit: CommitPrev
           {pr.title ? t("blame.pullRequest", { number: pr.number, title: pr.title }) : `#${pr.number}`}
         </Row>
       )}
-      <div className="flex items-center gap-1.5 border-t border-white/[0.06] pt-2">
-        <code className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted-foreground select-all">
-          {commit.hash}
-        </code>
-        <CopyHash hash={commit.hash} />
+      <div className="flex flex-col gap-1.5 border-t border-white/[0.06] pt-2.5 text-[12.5px]">
+        <Fact label={t("refs.commit")}>
+          <span className="inline-flex items-center gap-1 font-mono text-[11.5px]">
+            {commit.hash.slice(0, 7)}
+            <CopyHash hash={commit.hash} />
+          </span>
+        </Fact>
+        {files && (
+          <Fact label={t("refs.changed")}>
+            {t.plural("refs.files", files.length)} <span className="text-added-foreground">+{added}</span>{" "}
+            <span className="text-removed-foreground">−{removed}</span>
+          </Fact>
+        )}
+        <Fact label={t("refs.committed")}>
+          <time dateTime={commit.authoredAt}>{formatAge(commit.authoredAt, undefined, t.locale)}</time>
+        </Fact>
+        {branches.length > 0 && <Fact label={t("refs.branch")}>{branches.join(", ")}</Fact>}
       </div>
     </>
   );

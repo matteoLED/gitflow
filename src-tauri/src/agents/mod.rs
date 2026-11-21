@@ -123,6 +123,15 @@ pub enum AgentTask {
         base: String,
         head: String,
     },
+    /// A guided tour of a pull request, as strict JSON: overview, ratings, steps with code snippets and how
+    /// they connect. `detail` and `technical` (0-2) set the tone, from brief and plain to detailed and technical.
+    TourPullRequest {
+        number: u32,
+        base: String,
+        head: String,
+        detail: u8,
+        technical: u8,
+    },
     ExplainCommit {
         hash: String,
     },
@@ -194,8 +203,43 @@ impl RunSettings {
 
 /// Told to free requests when Linear is connected: issues are proposed in the reply, the user creates them.
 const LINEAR_ISSUES: &str = "When the user asks for Linear issues (tickets), propose each one as a fenced code block \
-     with the language `linear-issue` holding one JSON object: {\"title\": string, \"description\": string \
-     (Markdown)}. The app shows it as a card the user creates in Linear in one click; don't call Linear yourself.";
+     with the language `linear-issue` holding one valid JSON object (newlines escaped as \\n): {\"title\": string, \
+     \"description\": string (Markdown)}. The app shows it as a card the user creates in Linear in one click; don't \
+     call Linear yourself. The ticket states the problem as the user describes it, in their words and language, \
+     with what they showed (their messages earlier in this conversation, attached screenshots): keep their terms \
+     even when the code names things differently (say so in the ticket), and add what you found in the code as \
+     context, not as a replacement. One ticket per problem the user asks about, unless they ask for more.";
+
+const LEGACY_LINEAR_ISSUES: &str = "When the user asks for Linear issues (tickets), propose each one as a fenced \
+     code block with the language `linear-issue` holding one JSON object: {\"title\": string, \"description\": \
+     string (Markdown)}. The app shows it as a card the user creates in Linear in one click; don't call Linear yourself.";
+
+/// Instructions the app adds after the user's message, marked so the chat can show the message alone.
+const CONTEXT_MARK: &str = "\n\n<gitflow-context>\n";
+
+/// What the user wrote, without the instructions the app adds to it: shown in the chat, live or reopened.
+pub(crate) fn shown_prompt(text: &str) -> String {
+    let text = text.split(CONTEXT_MARK).next().unwrap_or(text);
+    // Conversations from before the mark had the Linear instructions inline, in their first wording.
+    text.replacen(&format!("\n\n{LEGACY_LINEAR_ISSUES}"), "", 1)
+}
+
+/// The app's context for a free request: Linear tickets, and the code index to search (an isolated worktree
+/// searches its repository's index: same code, the worktree only adds the agent's edits).
+fn app_context(repo: &Path) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !crate::linear::accounts().is_empty() {
+        lines.push(LINEAR_ISSUES.to_string());
+    }
+    if crate::code_graph::has_memory() {
+        lines.push(format!(
+            "The codebase-memory code graph indexes this repository as project `{}`: pass that project name to its \
+             tools (search_graph, search_code, trace_path…).",
+            crate::code_graph::memory_project(repo)
+        ));
+    }
+    lines
+}
 
 const READ_ONLY: &str = "Do not modify, create or delete any file; only read and report.";
 
@@ -235,6 +279,45 @@ fn build_prompt(task: &AgentTask, locale: &str, mode: Mode) -> GitResult<String>
                  line shown in that diff: its number in the new file with side RIGHT (added or unchanged lines), \
                  or in the old file with side LEFT (removed lines). `body` is Markdown with a concrete fix. \
                  At most 30 comments. {READ_ONLY} {lang}"
+            )
+        }
+        AgentTask::TourPullRequest {
+            number,
+            base,
+            head,
+            detail,
+            technical,
+        } => {
+            let (base, head) = (validate::object_id(base)?, validate::object_id(head)?);
+            let length = [
+                "Keep each explanation to 1-2 sentences",
+                "Explain each step in a short paragraph",
+                "Explain each step in depth, with the reasoning behind it",
+            ][usize::from((*detail).min(2))];
+            let register = [
+                "for a reader who doesn't know the code: plain words, no jargon",
+                "for a developer of the team",
+                "for an expert: precise technical terms, name the functions and types",
+            ][usize::from((*technical).min(2))];
+            format!(
+                "Write a guided tour of pull request #{number} of this repository, to help a reviewer read it in \
+                 the right order. Its full diff is `git diff {base}...{head}`; read the changed files for context \
+                 when needed. Group the changes into 3 to 8 steps, in the order they are best read (cause before \
+                 effect, implementation before tests). {length}, {register}.\n\
+                 Output ONLY one JSON object, no prose and no code fence, with exactly this shape:\n\
+                 {{\"overview\": string, \"risk\": \"low\" | \"medium\" | \"high\", \"impact\": \"low\" | \"medium\" | \"high\", \
+                 \"attention\": \"low\" | \"medium\" | \"high\", \"reasons\": {{\"risk\": string, \"impact\": string, \
+                 \"attention\": string}}, \"steps\": [{{\"label\": string, \"title\": string, \
+                 \"explanation\": string, \"snippets\": [{{\"path\": string, \"start\": integer, \"end\": integer}}]}}], \
+                 \"links\": [{{\"from\": integer, \"to\": integer, \"label\": string}}]}}\n\
+                 `overview` is 2-4 sentences of Markdown. `risk` is how likely the change breaks something, \
+                 `impact` how much of the product it affects, `attention` how carefully it must be reviewed; \
+                 `reasons` gives the why of each rating in 1-2 sentences, naming the code that drives it. \
+                 `label` is 2-5 words naming the step; `title` one sentence; `explanation` Markdown with `code` in \
+                 backticks. Each snippet is a range of lines changed by the diff, numbered in the new file \
+                 (`path` relative to the repository root, at most 40 lines). `links` connect steps by their \
+                 index from 0 (`from` before `to`), labelled in 2-4 words (\"verified by\", \"calls\", \"state \
+                 consumed by\"). {READ_ONLY} {lang}"
             )
         }
         AgentTask::ExplainCommit { hash } => {
@@ -437,10 +520,6 @@ pub fn start(
         ));
     }
     let mut prompt = build_prompt(task, locale, settings.mode)?;
-    if matches!(task, AgentTask::Custom { .. }) && !crate::linear::accounts().is_empty() {
-        prompt.push_str("\n\n");
-        prompt.push_str(LINEAR_ISSUES);
-    }
     if matches!(task, AgentTask::SplitCommits) {
         prompt.push_str("\n\n");
         prompt.push_str(&crate::git::staging::change_summary(repo)?);
@@ -450,6 +529,14 @@ pub fn start(
         prompt.push_str("\n\nImages attached by the user (look at them first):");
         for image in &settings.images {
             prompt.push_str(&format!("\n- {image}"));
+        }
+    }
+    if matches!(task, AgentTask::Custom { .. }) {
+        let context = app_context(repo);
+        if !context.is_empty() {
+            prompt.push_str(CONTEXT_MARK);
+            prompt.push_str(&context.join("\n\n"));
+            prompt.push_str("\n</gitflow-context>");
         }
     }
     let program = find(kind).ok_or_else(|| {
@@ -471,6 +558,11 @@ pub fn start(
         Some(path) => crate::git::worktrees::checked_path(repo, path)?,
         None => repo.to_path_buf(),
     };
+    if let Some(id) = resume
+        && matches!(kind, AgentKind::Claude)
+    {
+        sessions::bring_session(&cwd, id);
+    }
     let mut cmd = command(kind, &program, &cwd, settings, resume);
     let mut child = cmd
         .stdin(Stdio::piped())
@@ -493,14 +585,15 @@ pub fn start(
     if let Ok(mut map) = running().lock() {
         map.insert(run_id.clone(), Arc::clone(&child));
     }
+    let shown = shown_prompt(&prompt);
     emit(
         &app,
         RunEvent::Step {
             run_id: run_id.clone(),
             step: step(
                 StepKind::Prompt,
-                prompt.lines().next().unwrap_or_default(),
-                Some(prompt.clone()),
+                shown.lines().next().unwrap_or_default(),
+                Some(shown.clone()),
             ),
         },
     );
@@ -641,6 +734,24 @@ mod tests {
         let prompt = build_prompt(&task, "en", Mode::Plan).unwrap();
         assert!(
             prompt.contains("...") && prompt.contains("\"severity\"") && prompt.contains(READ_ONLY)
+        );
+    }
+
+    #[test]
+    fn tours_ask_for_steps_snippets_and_links_in_the_requested_tone() {
+        let task = AgentTask::TourPullRequest {
+            number: 7,
+            base: "a".repeat(40),
+            head: "b".repeat(40),
+            detail: 0,
+            technical: 2,
+        };
+        let prompt = build_prompt(&task, "en", Mode::Plan).unwrap();
+        assert!(
+            prompt.contains("\"links\"")
+                && prompt.contains("1-2 sentences")
+                && prompt.contains("for an expert")
+                && prompt.contains(READ_ONLY)
         );
     }
 

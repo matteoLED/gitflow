@@ -128,6 +128,39 @@ pub fn revert(repo: &Path, hash: &str) -> GitResult<Outcome> {
 }
 
 /// The commits from `from` up to HEAD, oldest first, with their full messages.
+/// The current branch's commits that `onto` doesn't have, oldest first: what a rebase onto it would replay.
+pub fn rebase_candidates(repo: &Path, onto: &str) -> GitResult<Vec<(String, String)>> {
+    let onto = validate::revision(onto)?;
+    let out = git_text(
+        repo,
+        &[
+            "log",
+            "--reverse",
+            "--format=%H%x00%s",
+            "--end-of-options",
+            &format!("{onto}..HEAD"),
+            "--",
+        ],
+    )?;
+    Ok(out
+        .lines()
+        .filter_map(|l| l.split_once('\0'))
+        .map(|(h, s)| (h.to_string(), s.to_string()))
+        .collect())
+}
+
+/// Moves the current branch onto `onto`, replaying only the commits after `after` when given
+/// (`git rebase --onto <onto> <after>`): commits that already landed another way (a squash merge) are left
+/// behind. Conflicts stop the rebase like any other, for the user to resolve, continue or abort.
+pub fn rebase_onto(repo: &Path, onto: &str, after: Option<&str>) -> GitResult<()> {
+    let onto = validate::revision(onto)?;
+    let args = match after.map(validate::revision).transpose()? {
+        Some(after) => vec!["rebase", "--onto", onto, after],
+        None => vec!["rebase", onto],
+    };
+    git_long(repo, &args).map(drop)
+}
+
 pub fn rebase_plan(repo: &Path, from: &str) -> GitResult<Vec<RebaseCommit>> {
     let from = full_hash(repo, from)?;
     if !is_ancestor(repo, &from, "HEAD") {
@@ -390,7 +423,7 @@ pub fn fixup(repo: &Path, hash: &str) -> GitResult<Outcome> {
     if git(repo, &["diff", "--cached", "--quiet"]).is_ok() {
         return Err(GitError::invalid("Stage the changes to fold in first."));
     }
-    git(repo, &["commit", "--quiet", &format!("--fixup={sha}")])?;
+    git_long(repo, &["commit", "--quiet", &format!("--fixup={sha}")])?;
     let parent = parent_of(repo, &sha);
     let mut args = vec!["rebase", "--interactive", "--autosquash", "--autostash"];
     match &parent {
@@ -451,6 +484,27 @@ fn run_rebase(
 mod tests {
     use super::*;
     use crate::git::test_repo::TestRepo;
+
+    #[test]
+    fn rebasing_onto_keeps_only_the_commits_after_the_given_one() {
+        let repo = TestRepo::new();
+        repo.write("init.txt", "init\n");
+        repo.commit_all("init");
+        repo.git(&["branch", "-M", "main"]);
+        repo.git(&["switch", "-q", "-c", "old"]);
+        repo.write("old.txt", "old\n");
+        repo.commit_all("old work");
+        repo.git(&["switch", "-q", "-c", "new"]);
+        repo.write("new.txt", "new\n");
+        repo.commit_all("new work");
+        assert_eq!(rebase_candidates(repo.path(), "main").unwrap().len(), 2);
+        rebase_onto(repo.path(), "main", Some("old")).unwrap();
+        let left = rebase_candidates(repo.path(), "main").unwrap();
+        assert_eq!(
+            left.iter().map(|(_, s)| s.as_str()).collect::<Vec<_>>(),
+            ["new work"]
+        );
+    }
 
     /// Commits a, b, c on top of "init", each adding its own file.
     fn three() -> (TestRepo, Vec<String>) {

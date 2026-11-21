@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Brain, ChevronDown, Cpu, GitBranchPlus, Lock, ShieldAlert, ShieldCheck, Sparkles } from "lucide-react";
+import { ChevronDown, Cpu, GitBranchPlus, Lock, ShieldAlert, ShieldCheck, Sparkles } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import {
   DropdownMenu,
@@ -41,6 +41,22 @@ const MODELS: Record<AgentKind, { value: string | null; label: string }[]> = {
 };
 
 const EFFORTS = [null, "low", "medium", "high", "xhigh", "max"] as const;
+
+/** How hard the model thinks, as rising bars: one per level up to the chosen one (none for the default). */
+function EffortBars({ effort }: { effort: string | null }) {
+  const level = (EFFORTS as readonly (string | null)[]).indexOf(effort);
+  return (
+    <span aria-hidden className="flex h-3 items-end gap-[2px]">
+      {EFFORTS.slice(1).map((_, i) => (
+        <span
+          key={i}
+          style={{ height: `${4 + i * 2}px` }}
+          className={cn("w-[2px] rounded-full", i < level ? "bg-primary" : "bg-white/20")}
+        />
+      ))}
+    </span>
+  );
+}
 
 function Menu({ trigger, title, children }: { trigger: ReactNode; title: string; children: ReactNode }) {
   return (
@@ -115,9 +131,9 @@ export function RunSettingsBar({ agent, canIsolate = false }: { agent: AgentKind
       <Menu
         title={t("run.effortTitle")}
         trigger={
-          <span className="flex items-center gap-1">
-            <Brain aria-hidden className="size-3.5" />
-            {runSettings.effort}
+          <span className="flex items-center gap-1.5">
+            <EffortBars effort={runSettings.effort} />
+            {runSettings.effort ?? t("run.default")}
           </span>
         }
       >
@@ -125,8 +141,9 @@ export function RunSettingsBar({ agent, canIsolate = false }: { agent: AgentKind
           <DropdownMenuItem
             key={e ?? "default"}
             onSelect={() => setRunSettings({ effort: e })}
-            className="px-2 py-1.5 text-[12.5px]"
+            className="gap-2 px-2 py-1.5 text-[12.5px]"
           >
+            <EffortBars effort={e} />
             {e ?? t("run.default")}
           </DropdownMenuItem>
         ))}

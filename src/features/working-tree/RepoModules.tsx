@@ -167,7 +167,8 @@ export function LfsSection({ repoPath }: { repoPath: string }) {
     success: t("lfs.pulled"),
     failure: t("lfs.pullFailed"),
   });
-  if (!status) return null;
+  // Nothing tracked: no section to look at (LFS is rare; `git lfs track` once makes it appear).
+  if (!status || status.patterns.length === 0) return null;
   return (
     <section aria-label={t("lfs.title")} className="mb-3">
       <SectionHeader icon={<HardDrive aria-hidden />} title={t("lfs.title")}>
@@ -179,15 +180,15 @@ export function LfsSection({ repoPath }: { repoPath: string }) {
         )}
         <TrackPattern repoPath={repoPath} />
       </SectionHeader>
-      <p className="flex flex-wrap gap-1 px-2 text-[11.5px] text-muted-foreground">
-        {status.patterns.length === 0
-          ? t("lfs.noPatterns")
-          : status.patterns.map((p) => (
-              <span key={p} className="rounded border border-white/10 px-1.5 font-mono text-foreground/85">
-                {p}
-              </span>
-            ))}
-      </p>
+      {status.patterns.length > 0 && (
+        <p className="flex flex-wrap gap-1 px-2 text-[11.5px] text-muted-foreground">
+          {status.patterns.map((p) => (
+            <span key={p} className="rounded border border-white/10 px-1.5 font-mono text-foreground/85">
+              {p}
+            </span>
+          ))}
+        </p>
+      )}
     </section>
   );
 }

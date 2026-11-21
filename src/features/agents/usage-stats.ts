@@ -61,6 +61,27 @@ export function summarize(stats: UsageStats, days: number, project: string | nul
     sessions: sessions.length,
     /** Share of prompt tokens served from the cache. */
     cacheHit: prompt ? tokens.cacheRead / prompt : null,
+    /** Tokens by kind: what was sent fresh, written back, read from the cache. */
+    tokenSplit: {
+      input: tokens.input,
+      output: tokens.output,
+      cacheRead: tokens.cacheRead,
+      cacheWrite: tokens.cacheWrite5m + tokens.cacheWrite1h,
+    },
     unpriced,
   };
+}
+
+/**
+ * This month so far (UTC days), and where it ends at the current pace: spent per day cumulated, the daily average,
+ * and the projected total on the month's last day.
+ */
+export function monthProjection(stats: UsageStats, project: string | null, today = new Date()) {
+  const day = today.getUTCDate();
+  const length = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0)).getUTCDate();
+  const daily = summarize(stats, day, project, today).daily;
+  let running = 0;
+  const cumulative = daily.map((d) => (running += d.cost));
+  const average = running / day;
+  return { cumulative, spent: running, average, projected: average * length, length };
 }

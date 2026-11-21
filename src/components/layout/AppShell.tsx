@@ -10,7 +10,7 @@ import { Group, Panel, useDefaultLayout } from "react-resizable-panels";
 import { GitPullRequest, PanelLeftOpen } from "lucide-react";
 import { useLayoutStore } from "@/stores/layout-store";
 import { ListCollapseContext } from "@/components/layout/ListPanel";
-import { BranchesList, BranchSidebar } from "@/features/branches/BranchSidebar";
+import { BranchSidebar } from "@/features/branches/BranchSidebar";
 import { GutterHandle, ResizeHandle } from "@/components/layout/ResizeHandle";
 import { ListPanel } from "@/components/layout/ListPanel";
 import { SidebarBar, TabSync, TabsBar } from "@/components/layout/TitleBar";
@@ -23,7 +23,7 @@ import { CreateIssueButton } from "@/features/linear/CreateIssue";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { CommitList } from "@/features/history/CommitList";
-import { ChangedFilesPanel } from "@/features/changed-files/ChangedFilesPanel";
+import { CommitDetail } from "@/features/history/CommitDetail";
 import { ChangesPanel } from "@/features/working-tree/ChangesPanel";
 import { WelcomeScreen } from "@/features/repositories/WelcomeScreen";
 import { PanelLoading } from "@/components/layout/panel";
@@ -89,6 +89,7 @@ function Frame({
   list,
   listTitle = "",
   page: pageId = "",
+  focusable = false,
   children,
 }: {
   repo: RepositoryInfo;
@@ -96,9 +97,12 @@ function Frame({
   listTitle?: string;
   /** Key under which the list's folded state is remembered. */
   page?: string;
+  /** Focus mode applies: the sidebar and the list column step aside. */
+  focusable?: boolean;
   children: ReactNode;
 }) {
-  const sidebarOpen = useUiStore((s) => s.sidebarOpen);
+  const focused = useLayoutStore((s) => focusable && s.focus);
+  const sidebarOpen = useUiStore((s) => s.sidebarOpen) && !focused;
   const collapsed = useLayoutStore((s) => !!s.collapsedLists[pageId]);
   const toggleList = useLayoutStore((s) => s.toggleList);
   const layout = useDefaultLayout({ id: "frame", storage: localStorage });
@@ -106,7 +110,9 @@ function Frame({
     <div className={cn("flex h-full flex-col pr-1.5 pb-1.5", !sidebarOpen && "pl-1.5")}>
       <TabsBar />
       <div className="min-h-0 flex-1 overflow-hidden rounded-[10px] border border-white/[0.06] bg-background shadow-[0_1px_3px_rgb(0_0_0/0.35)]">
-        {list && collapsed ? (
+        {focused ? (
+          children
+        ) : list && collapsed ? (
           <div className="flex h-full">
             <ListRail title={listTitle} onExpand={() => toggleList(pageId)} />
             <div className="min-w-0 flex-1">{children}</div>
@@ -152,40 +158,45 @@ function Frame({
 }
 
 function HistoryLayout({ repo }: { repo: RepositoryInfo }) {
-  const t = useT();
+  const focus = useLayoutStore((s) => s.focus);
+  const diff = (
+    <Panel id="diff" defaultSize="68" minSize={320}>
+      <Suspense fallback={<PanelLoading title="" />}>
+        <DiffPanel repoPath={repo.path} />
+      </Suspense>
+    </Panel>
+  );
   return (
-    <Frame
-      repo={repo}
-      page="history"
-      listTitle={t("view.branches")}
-      list={
-        <ListPanel title={t("view.branches")} filterLabel={t("branches.filter")}>
-          {(query) => <BranchesList repo={repo} query={query} />}
-        </ListPanel>
-      }
-    >
-      <Columns id="history-main">
-        <Panel id="history" defaultSize="30" minSize={260}>
-          <CommitList repoPath={repo.path} />
-        </Panel>
-        <ResizeHandle />
-        <Panel id="files" defaultSize="20" minSize={180}>
-          <ChangedFilesPanel repoPath={repo.path} />
-        </Panel>
-        <ResizeHandle />
-        <Panel id="diff" defaultSize="50" minSize={320}>
-          <Suspense fallback={<PanelLoading title="" />}>
-            <DiffPanel repoPath={repo.path} />
-          </Suspense>
-        </Panel>
-      </Columns>
+    // One column of commits, like the reference: the branch is picked in its header, not in a list beside it.
+    <Frame repo={repo} page="history" focusable>
+      {focus ? (
+        // Focused: the commits and their diff, whose file headers stand in for the file column.
+        <Columns id="history-focus">
+          <Panel id="history" defaultSize="32" minSize={260}>
+            <CommitList repoPath={repo.path} />
+          </Panel>
+          <ResizeHandle />
+          {diff}
+        </Columns>
+      ) : (
+        // The commits get the width to read them; the picked one opens beside, its files above its diff.
+        <Columns id="history-main-v3">
+          <Panel id="history" defaultSize="50" minSize={360}>
+            <CommitList repoPath={repo.path} />
+          </Panel>
+          <ResizeHandle />
+          <Panel id="detail" defaultSize="50" minSize={360}>
+            <CommitDetail repoPath={repo.path} />
+          </Panel>
+        </Columns>
+      )}
     </Frame>
   );
 }
 
 function ChangesLayout({ repo }: { repo: RepositoryInfo }) {
   return (
-    <Frame repo={repo}>
+    <Frame repo={repo} focusable>
       <Columns id="changes-main">
         <Panel id="changes" defaultSize="34" minSize={260}>
           <ChangesPanel repoPath={repo.path} />
@@ -396,6 +407,21 @@ function LazyStashDialog({ repoPath }: { repoPath: string }) {
   );
 }
 
+/** ⌘\ enters or leaves focus mode on History and Changes. */
+function useFocusShortcut() {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.metaKey || event.shiftKey || event.altKey || event.key !== "\\") return;
+      const view = useWorkspaceStore.getState().view;
+      if (view !== "history" && view !== "changes") return;
+      event.preventDefault();
+      useLayoutStore.getState().toggleFocus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+}
+
 /** ⌘I opens or closes the assistant next to the current view. */
 function useAssistantShortcut() {
   useEffect(() => {
@@ -431,6 +457,7 @@ function Workspace({ repo, view }: { repo: RepositoryInfo; view: View }) {
   useDesktopNotifications(repo.path);
   usePrLifecycle(repo.path);
   useAssistantShortcut();
+  useFocusShortcut();
   useUndoShortcut(repo.path);
   const assistantOpen = useUiStore((s) => s.assistantOpen);
   return (

@@ -1,12 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitBackend } from "@/lib/tauri-git";
 import { useAgentsStore } from "@/stores/agents-store";
-import { startAgentRun } from "./use-agents";
+import { pushFinishedWork, startAgentRun } from "./use-agents";
 
 vi.mock("@/lib/tauri-git", () => ({
   gitBackend: {
     startAgentRun: vi.fn().mockResolvedValue("run-1"),
     createAgentWorktree: vi.fn().mockResolvedValue({ path: "/wt/1", branch: "agent/1" }),
+    agentWorktreeStatus: vi.fn().mockResolvedValue({ changed: 0, ahead: 0 }),
+    pushAgentWorktree: vi.fn().mockResolvedValue(null),
+    compareWithBase: vi.fn().mockResolvedValue({ base: "main", ahead: 0 }),
+    listRefs: vi.fn().mockResolvedValue({ branches: [] }),
+    reopenAgentWorktree: vi.fn().mockResolvedValue({ path: "/wt/2", branch: "agent/1" }),
   },
 }));
 const start = vi.mocked(gitBackend.startAgentRun);
@@ -47,5 +52,57 @@ describe("agent run settings", () => {
     useAgentsStore.setState({ runSettings: { mode: "auto", model: null, effort: null, isolated: false } });
     await startAgentRun("/r", "claude", { kind: "custom", prompt: "b" }, "b", { resume: "s", thread: "run-1" });
     expect(start.mock.calls[1][5]?.worktree).toBe("/wt/1");
+  });
+
+  it("continues in the repository once the worktree was merged (branch deleted)", async () => {
+    useAgentsStore.setState({ runSettings: { mode: "auto", model: null, effort: null, isolated: true } });
+    await startAgentRun("/r", "claude", { kind: "custom", prompt: "a" }, "a");
+    vi.mocked(gitBackend.agentWorktreeStatus).mockRejectedValueOnce(new Error("gone"));
+    await startAgentRun("/r", "claude", { kind: "custom", prompt: "b" }, "b", { resume: "s", thread: "run-1" });
+    expect(start.mock.calls[1][5]?.worktree).toBeNull();
+  });
+
+  it("continues on the pull request's branch in a fresh worktree once it was published", async () => {
+    useAgentsStore.setState({ runSettings: { mode: "auto", model: null, effort: null, isolated: true } });
+    await startAgentRun("/r", "claude", { kind: "custom", prompt: "a" }, "a");
+    vi.mocked(gitBackend.agentWorktreeStatus).mockRejectedValueOnce(new Error("gone"));
+    vi.mocked(gitBackend.listRefs).mockResolvedValueOnce({ branches: [{ name: "agent/1" }] } as never);
+    await startAgentRun("/r", "claude", { kind: "custom", prompt: "b" }, "b", { resume: "s", thread: "run-1" });
+    expect(vi.mocked(gitBackend.reopenAgentWorktree)).toHaveBeenCalledWith("/r", "agent/1");
+  });
+});
+
+describe("pushFinishedWork", () => {
+  const push = vi.mocked(gitBackend.pushAgentWorktree);
+  beforeEach(() => {
+    push.mockClear();
+    useAgentsStore.setState({ runs: [] });
+    useAgentsStore.getState().addRun({
+      id: "run-9",
+      repoPath: "/r",
+      agent: "claude",
+      task: { kind: "custom", prompt: "fix" },
+      title: "Fix it",
+      startedAt: "2026-01-01T00:00:00Z",
+      thread: "run-9",
+      worktree: { path: "/wt/9", branch: "eng-9" },
+    });
+  });
+
+  it("pushes the branch of an agent that committed its work", async () => {
+    vi.mocked(gitBackend.agentWorktreeStatus).mockResolvedValueOnce({ changed: 0, ahead: 1 });
+    await pushFinishedWork("run-9");
+    expect(push).toHaveBeenCalledWith("/r", "/wt/9", "Fix it");
+  });
+
+  it("doesn't commit what the agent left uncommitted", async () => {
+    vi.mocked(gitBackend.agentWorktreeStatus).mockResolvedValueOnce({ changed: 2, ahead: 1 });
+    await pushFinishedWork("run-9");
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("leaves an agent that changed nothing alone", async () => {
+    await pushFinishedWork("run-9");
+    expect(push).not.toHaveBeenCalled();
   });
 });

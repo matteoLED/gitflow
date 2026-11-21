@@ -109,7 +109,14 @@ function Toast({ notice, index, offset, expanded, paused, frontHeight, onHeight 
           <div className="min-w-0 flex-1">
             <p className="text-[13px] leading-5 break-words">{notice.title}</p>
             {notice.detail && (
-              <details className="mt-1 text-xs text-muted-foreground">
+              <details
+                className="mt-1 text-xs text-muted-foreground"
+                // The end says what failed (a hook's error comes after its progress lines): open on it.
+                onToggle={(e) => {
+                  const pre = e.currentTarget.querySelector("pre");
+                  if (pre && e.currentTarget.open) pre.scrollTop = pre.scrollHeight;
+                }}
+              >
                 <summary className="cursor-default">{t("common.gitOutput")}</summary>
                 <pre className="mt-1 max-h-40 overflow-auto font-mono text-[12px] whitespace-pre-wrap select-text">
                   {notice.detail}

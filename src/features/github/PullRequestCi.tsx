@@ -18,6 +18,8 @@ import { parseAnsi, stripAnsi } from "./ansi";
 import { checkOutcome, resolveWithAgent } from "./ChecksMenu";
 import { fixCiWithAgent } from "./ci-fix";
 import { JobLogView } from "./JobLog";
+import { RunOverview } from "@/features/ci/RunOverview";
+import { useCiStore } from "@/stores/ci-store";
 
 export const jobIdOf = (job: WorkflowJob) => Number(job.url.match(/\/job\/(\d+)/)?.[1] ?? 0) || null;
 
@@ -82,11 +84,13 @@ export function AnsiLine({ line }: { line: string }) {
   ));
 }
 
+const jobAnchor = (job: WorkflowJob) => `job-${jobIdOf(job) ?? job.name}`;
+
 function Job({ repoPath, job }: { repoPath: string; job: WorkflowJob }) {
   const [open, setOpen] = useState(job.conclusion === "failure");
   const time = job.completedAt ? duration(job.startedAt, job.completedAt) : null;
   return (
-    <section className="surface overflow-hidden">
+    <section id={jobAnchor(job)} className="surface scroll-mt-4 overflow-hidden">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -201,6 +205,12 @@ export function RunDetail({ repoPath, pr, id }: { repoPath: string; pr?: PullReq
             <ExternalLink aria-hidden className="size-3.5" />
           </Button>
         </div>
+        <RunOverview
+          repoPath={repoPath}
+          run={data}
+          onJob={(job) => document.getElementById(jobAnchor(job))?.scrollIntoView({ behavior: "smooth" })}
+          onOpenRun={pr ? undefined : (other) => useCiStore.getState().openRun(other)}
+        />
         <div className="mt-5 space-y-3">
           {(data.jobs ?? []).map((job) => (
             <Job key={job.url || job.name} repoPath={repoPath} job={job} />

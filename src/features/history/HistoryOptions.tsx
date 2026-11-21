@@ -39,7 +39,7 @@ export function HistoryOptions() {
               variant="ghost"
               size="icon-sm"
               aria-label={t("history.options")}
-              className="ml-auto rounded-full text-muted-foreground"
+              className="rounded-full text-muted-foreground"
             >
               <Settings2 />
             </Button>

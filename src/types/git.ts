@@ -49,6 +49,9 @@ export type CommitSummary = {
   refs: CommitRef[];
 };
 
+/** One commit of the activity charts: author date in Unix seconds, and who. */
+export type CommitStamp = { at: number; author: string };
+
 export type FileStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "unmerged" | "untracked";
 
 export type ChangedFile = {
@@ -120,7 +123,15 @@ export type RunConclusion =
   "success" | "failure" | "cancelled" | "skipped" | "neutral" | "timed_out" | "action_required" | "";
 export type RunStatus = "queued" | "in_progress" | "completed" | "waiting" | "requested" | "pending";
 
-export type WorkflowStep = { name: string; number: number; status: RunStatus; conclusion: RunConclusion };
+export type WorkflowStep = {
+  name: string;
+  number: number;
+  status: RunStatus;
+  conclusion: RunConclusion;
+  /** From `gh run view --json jobs`; absent for steps that never ran. */
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
 
 export type WorkflowJob = {
   name: string;
@@ -331,6 +342,7 @@ export type AgentInfo = { kind: AgentKind; installed: boolean; version: string |
 export type AgentTask =
   | { kind: "review-pull-request"; number: number; base: string; head: string }
   | { kind: "ai-review-pull-request"; number: number; base: string; head: string }
+  | { kind: "tour-pull-request"; number: number; base: string; head: string; detail: number; technical: number }
   | { kind: "explain-commit"; hash: string }
   | { kind: "commit-message" }
   | { kind: "split-commits" }
@@ -449,6 +461,18 @@ export type CodeHotspot = {
   callers: number;
   coverage: string;
   security: number;
+};
+/** A count by name (a language, a kind of symbol or link, a coverage state). */
+type Tally = { name: string; count: number };
+export type CodeGraphOverview = {
+  languages: Tally[];
+  kinds: Tally[];
+  links: Tally[];
+  coverage: Tally[];
+  /** Symbols by risk band, 0 (lowest) to 4. */
+  risk: { band: number; count: number }[];
+  mostCalled: { name: string; file: string; line: number; callers: number }[];
+  largestFiles: { file: string; symbols: number }[];
 };
 export type CodeFileMap = {
   files: { path: string; symbols: number; test: number }[];

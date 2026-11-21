@@ -11,6 +11,8 @@ type GitAction<TArgs> = {
   failure: string;
   /** Shown with a spinner while it runs (long network operations), then turned into the outcome. */
   pending?: string;
+  /** A way out offered on the failure notice, when this error has one (a rejected push: force it safely). */
+  recover?: (message: string) => { label: string; run: () => void } | undefined;
 };
 
 /** Runs a write operation, then refreshes everything about the repository and reports the outcome. */
@@ -32,6 +34,7 @@ export function useGitAction<TArgs = void>(repoPath: string, action: GitAction<T
         tone: "error",
         title: getT()("action.failed", { action: action.failure, message }),
         detail,
+        action: action.recover?.(`${message}\n${detail ?? ""}`),
       } as const;
       if (loading === undefined) notify(notice);
       else update(loading, notice);

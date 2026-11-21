@@ -49,6 +49,7 @@ const SECTIONS: Section[] = [
   {
     title: "shortcuts.review",
     items: [
+      { keys: ["⌘", "\\"], label: "shortcuts.focus" },
       { keys: ["⌘", "B"], label: "shortcuts.diffLayout" },
       { keys: ["⌥", "E"], label: "shortcuts.expandFile" },
       { keys: ["⌘", "⇧", "."], label: "shortcuts.copyBranch" },

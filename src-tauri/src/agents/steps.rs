@@ -5,6 +5,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 const MAX_DETAIL: usize = 4_000;
+/// The agent's own words are the answer the app parses (a review, a tour as JSON): clipping them at
+/// `MAX_DETAIL` broke every answer past 4 000 characters. Tool output stays short; this only stops a runaway.
+const MAX_ANSWER: usize = 200_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -32,7 +35,13 @@ pub fn step(kind: StepKind, title: impl Into<String>, detail: Option<String>) ->
     AgentStep {
         kind,
         title: title.into(),
-        detail: detail.map(|d| clip(&d, MAX_DETAIL)),
+        detail: detail.map(|d| {
+            let max = match kind {
+                StepKind::Message | StepKind::Result => MAX_ANSWER,
+                _ => MAX_DETAIL,
+            };
+            clip(&d, max)
+        }),
         at: None,
     }
 }
@@ -114,11 +123,8 @@ pub fn from_claude(event: &Value) -> Vec<AgentStep> {
             )]
         }
         (Some("user"), Some(Value::String(text))) if !is_noise(text) => {
-            vec![step(
-                StepKind::Prompt,
-                first_line(text, 200),
-                Some(text.clone()),
-            )]
+            let text = super::shown_prompt(text);
+            vec![step(StepKind::Prompt, first_line(&text, 200), Some(text))]
         }
         (Some("user"), Some(Value::Array(items))) => {
             items.iter().filter_map(claude_user_item).collect()
@@ -141,11 +147,8 @@ fn claude_user_item(item: &Value) -> Option<AgentStep> {
         "text" => {
             let text = str_at(item, "text")?;
             (!is_noise(text)).then(|| {
-                step(
-                    StepKind::Prompt,
-                    first_line(text, 200),
-                    Some(text.to_string()),
-                )
+                let text = super::shown_prompt(text);
+                step(StepKind::Prompt, first_line(&text, 200), Some(text))
             })
         }
         "tool_result" => {
@@ -338,7 +341,7 @@ pub fn from_codex_rollout(event: &Value) -> Vec<AgentStep> {
         str_at(item, "role"),
     ) {
         ("message", Some("user")) => {
-            let text = codex_text(&item["content"]);
+            let text = super::shown_prompt(&codex_text(&item["content"]));
             (!text.trim().is_empty() && !is_codex_preamble(&text))
                 .then(|| step(StepKind::Prompt, first_line(&text, 200), Some(text)))
         }
@@ -508,6 +511,19 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_is_kept_whole_while_tool_output_is_clipped() {
+        let long = "x".repeat(10_000);
+        let answer = step(StepKind::Result, "", Some(long.clone()));
+        let output = step(StepKind::ToolResult, "", Some(long.clone()));
+        assert_eq!(answer.detail.as_deref(), Some(long.as_str()));
+        assert!(
+            output
+                .detail
+                .is_some_and(|d| d.chars().count() == MAX_DETAIL + 1)
+        );
+    }
+
+    #[test]
     fn codex_session_lines_skip_the_preamble_and_name_shell_calls() {
         let line = |v: serde_json::Value| from_codex_rollout(&v);
         let preamble = line(
@@ -528,5 +544,25 @@ mod tests {
             (StepKind::Prompt, "Fix the build")
         );
         assert_eq!(shell[0].title, "Shell · cargo test");
+    }
+
+    #[test]
+    fn prompts_hide_the_app_context() {
+        let text = format!(
+            "Why?{}Use project `x`.\n</gitflow-context>",
+            super::super::CONTEXT_MARK
+        );
+        let steps = from_claude(&serde_json::json!({"type": "user", "message": {"content": text}}));
+        assert_eq!(steps[0].detail.as_deref(), Some("Why?"));
+    }
+
+    #[test]
+    fn prompts_hide_the_linear_instructions() {
+        let text = format!(
+            "Is this code good?\n\n{}",
+            super::super::LEGACY_LINEAR_ISSUES
+        );
+        let steps = from_claude(&serde_json::json!({"type": "user", "message": {"content": text}}));
+        assert_eq!(steps[0].detail.as_deref(), Some("Is this code good?"));
     }
 }

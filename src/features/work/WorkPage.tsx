@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, Cloud, GitBranch } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, CircleCheck, CircleX, Cloud, GitBranch, LoaderCircle } from "lucide-react";
+import { AuthorAvatar } from "@/components/author-avatar";
 import { BrailleLoader } from "@/components/braille-loader";
 import { PanelHeader } from "@/components/layout/panel";
 import { RowSkeleton, SkeletonList } from "@/components/skeletons";
@@ -20,11 +21,58 @@ import { DeleteBranchesButton } from "./DeleteBranches";
 import { cleanable, deletable } from "./use-delete-branches";
 import { IssueHoverCard, PullRequestHoverCard } from "@/features/refs/RefPreview";
 
-const CI_DOT: Record<CiState, string> = {
-  success: "bg-added-foreground",
-  failure: "bg-removed-foreground",
-  running: "bg-renamed animate-pulse",
-};
+/** The branch's latest CI run, as a small status pill. */
+function CiPill({ state }: { state: CiState }) {
+  const t = useT();
+  const [Icon, tone] =
+    state === "success"
+      ? [CircleCheck, "text-check-passed bg-check-passed/10"]
+      : state === "failure"
+        ? [CircleX, "text-check-failed bg-check-failed/10"]
+        : [LoaderCircle, "text-renamed bg-renamed/10"];
+  return (
+    <span className={cn("flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px]", tone)}>
+      <Icon aria-hidden className={cn("size-3", state === "running" && "animate-spin")} />
+      {t(`work.ci.${state}`)}
+    </span>
+  );
+}
+
+/**
+ * Where all the work stands, at a glance: one tile per status with its count, over a bar split by the same
+ * shares. A tile jumps to its section (unfolding it).
+ */
+function Overview({ items, onPick }: { items: WorkItem[]; onPick: (status: WorkStatus) => void }) {
+  const t = useT();
+  const counts = WORK_STATUSES.map((status) => ({ status, count: items.filter((i) => i.status === status).length }));
+  const shown = counts.filter((c) => c.count > 0);
+  return (
+    <div className="border-b border-white/[0.05] px-5 py-4">
+      <div className="flex h-1.5 gap-[3px] overflow-hidden rounded-full">
+        {shown.map(({ status, count }) => (
+          <span key={status} className={STATUS[status].bar} style={{ flexGrow: count }} />
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {shown.map(({ status, count }) => {
+          const { icon: Icon, className, label } = STATUS[status];
+          return (
+            <button
+              key={status}
+              type="button"
+              onClick={() => onPick(status)}
+              className="flex items-center gap-2 rounded-lg border border-white/[0.07] bg-white/[0.02] px-2.5 py-1.5 text-[12.5px] outline-none hover:bg-white/[0.05] focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Icon aria-hidden className={cn("size-3.5", className)} />
+              <span className="text-muted-foreground">{t(label)}</span>
+              <span className="font-medium tabular-nums">{count}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 /** The buttons shown on a hovered row: one look for all of them. */
 const ROW_ACTION =
@@ -51,7 +99,7 @@ function WorkRow({ item, repoPath }: { item: WorkItem; repoPath: string }) {
       <button
         type="button"
         onClick={open}
-        className="grid h-11 w-full grid-cols-[16px_64px_minmax(0,1fr)_auto] items-center gap-3 border-b border-white/[0.04] pr-5 pl-5 text-left text-[13px] outline-none hover:bg-white/[0.035] focus-visible:bg-white/[0.05]"
+        className="grid h-11 w-full grid-cols-[16px_76px_minmax(0,1fr)_auto] items-center gap-3 border-b border-white/[0.04] pr-5 pl-5 text-left text-[13px] outline-none hover:bg-white/[0.035] focus-visible:bg-white/[0.05]"
       >
         {loading === item.pr?.number ? (
           <BrailleLoader className="text-primary" />
@@ -59,7 +107,14 @@ function WorkRow({ item, repoPath }: { item: WorkItem; repoPath: string }) {
           <Icon aria-label={t(STATUS[item.status].label)} className={cn("size-4", className)} />
         )}
         <IssueHoverCard id={item.issueId} issue={item.issue}>
-          <span className="truncate font-mono text-[11.5px] text-muted-foreground">{item.issueId ?? ""}</span>
+          <span
+            className={cn(
+              "w-fit max-w-full truncate font-mono text-[11px] text-muted-foreground",
+              item.issueId && "rounded-md border border-white/[0.08] px-1.5 py-px",
+            )}
+          >
+            {item.issueId ?? ""}
+          </span>
         </IssueHoverCard>
         <span className="flex min-w-0 items-baseline gap-2">
           <PullRequestHoverCard repoPath={repoPath} number={item.pr?.number}>
@@ -81,7 +136,7 @@ function WorkRow({ item, repoPath }: { item: WorkItem; repoPath: string }) {
           )}
         </span>
         <span className="flex items-center gap-3 text-[12px] text-muted-foreground tabular-nums group-hover/row:invisible">
-          {item.ci && <span title={t(`work.ci.${item.ci}`)} className={cn("size-2 rounded-full", CI_DOT[item.ci])} />}
+          {item.ci && <CiPill state={item.ci} />}
           {item.local && (item.local.ahead > 0 || item.local.behind > 0) && (
             <span className="flex items-center gap-1">
               {item.local.ahead > 0 && (
@@ -98,8 +153,14 @@ function WorkRow({ item, repoPath }: { item: WorkItem; repoPath: string }) {
               )}
             </span>
           )}
-          {item.pr && <span>#{item.pr.number}</span>}
-          {item.pr && !item.local && <span className="max-w-24 truncate">{item.pr.author.login}</span>}
+          {item.pr && <span className="rounded-md bg-white/[0.05] px-1.5 py-px text-[11.5px]">#{item.pr.number}</span>}
+          {item.pr && (
+            <AuthorAvatar
+              name={item.pr.author.login}
+              src={`https://avatars.githubusercontent.com/${encodeURIComponent(item.pr.author.login)}?s=32`}
+              className="size-5"
+            />
+          )}
           <span className="w-14 text-right whitespace-nowrap">
             {item.updatedAt && formatAge(item.updatedAt, undefined, t.locale)}
           </span>
@@ -147,13 +208,23 @@ function WorkRow({ item, repoPath }: { item: WorkItem; repoPath: string }) {
   );
 }
 
-function Section({ status, items, repoPath }: { status: WorkStatus; items: WorkItem[]; repoPath: string }) {
+function Section({
+  status,
+  items,
+  repoPath,
+  open,
+  setOpen,
+}: {
+  status: WorkStatus;
+  items: WorkItem[];
+  repoPath: string;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
   const t = useT();
-  // Finished work is folded by default, as Linear folds its Done column.
-  const [open, setOpen] = useState(status !== "merged" && status !== "stale");
   const { icon: Icon, className, label } = STATUS[status];
   return (
-    <li>
+    <li id={`work-${status}`} className="scroll-mt-0">
       <button
         type="button"
         aria-expanded={open}
@@ -166,7 +237,9 @@ function Section({ status, items, repoPath }: { status: WorkStatus; items: WorkI
         />
         <Icon aria-hidden className={cn("size-3.5", className)} />
         {t(label)}
-        <span className="text-muted-foreground">{items.length}</span>
+        <span className="rounded-full bg-white/[0.06] px-1.5 text-[11px] text-muted-foreground tabular-nums">
+          {items.length}
+        </span>
       </button>
       {open && (
         <ul>
@@ -186,6 +259,21 @@ export function WorkPage({ repoPath }: { repoPath: string }) {
   const setFilter = useWorkStore((s) => s.setFilter);
   const selected = useWorkStore((s) => s.selected);
   const work = useWorkItems(repoPath);
+  // Finished work is folded by default, as Linear folds its Done column.
+  const [unfolded, setUnfolded] = useState<Set<WorkStatus>>(
+    () => new Set(WORK_STATUSES.filter((s) => s !== "merged" && s !== "stale")),
+  );
+  const setOpen = (status: WorkStatus, open: boolean) =>
+    setUnfolded((current) => {
+      const next = new Set(current);
+      if (open) next.add(status);
+      else next.delete(status);
+      return next;
+    });
+  const pick = (status: WorkStatus) => {
+    setOpen(status, true);
+    requestAnimationFrame(() => document.getElementById(`work-${status}`)?.scrollIntoView({ behavior: "smooth" }));
+  };
   const item = selected ? work.data?.find((i) => i.branch === selected) : undefined;
   if (item) return <WorkDetail repoPath={repoPath} item={item} />;
   const header = (
@@ -228,12 +316,26 @@ export function WorkPage({ repoPath }: { repoPath: string }) {
           action={filter !== "all" ? { label: t("work.showAll"), onClick: () => setFilter("all") } : undefined}
         />
       ) : (
-        <ul className="min-h-0 flex-1 overflow-y-auto">
-          {WORK_STATUSES.map((status) => {
-            const group = items.filter((i) => i.status === status);
-            return group.length > 0 && <Section key={status} status={status} items={group} repoPath={repoPath} />;
-          })}
-        </ul>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Overview items={items} onPick={pick} />
+          <ul>
+            {WORK_STATUSES.map((status) => {
+              const group = items.filter((i) => i.status === status);
+              return (
+                group.length > 0 && (
+                  <Section
+                    key={status}
+                    status={status}
+                    items={group}
+                    repoPath={repoPath}
+                    open={unfolded.has(status)}
+                    setOpen={(open) => setOpen(status, open)}
+                  />
+                )
+              );
+            })}
+          </ul>
+        </div>
       )}
     </section>
   );

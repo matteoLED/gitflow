@@ -65,14 +65,26 @@ export function useAttachments() {
       void add(files);
     }
   };
+  // Files dragged over the composer (from Finder, a browser, a screenshot thumbnail): it lights up.
+  const [dragging, setDragging] = useState(false);
+  const onDragOver = (event: DragEvent) => {
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setDragging(true);
+  };
+  const onDragLeave = (event: DragEvent) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+  };
   const onDrop = (event: DragEvent) => {
+    setDragging(false);
     const files = [...event.dataTransfer.files];
     if (files.length) {
       event.preventDefault();
       void add(files);
     }
   };
-  return { items, saving: saving > 0, add, remove, clear, onPaste, onDrop };
+  return { items, saving: saving > 0, add, remove, clear, onPaste, onDrop, onDragOver, onDragLeave, dragging };
 }
 
 export type Attachments = ReturnType<typeof useAttachments>;

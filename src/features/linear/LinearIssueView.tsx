@@ -1,8 +1,21 @@
 import { lazy, Suspense, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Copy, Play, ExternalLink, GitBranchPlus, Link2, Sparkles } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Play,
+  ExternalLink,
+  GitBranch,
+  GitBranchPlus,
+  Link2,
+  Sparkles,
+  CornerDownRight,
+} from "lucide-react";
 import type { Components } from "react-markdown";
 import { GithubIcon } from "@/components/github-icon";
+import { AuthorAvatar } from "@/components/author-avatar";
+import { StateDot } from "./LinearList";
 import { BrailleLoader } from "@/components/braille-loader";
 import { PanelHeader, PanelLoading } from "@/components/layout/panel";
 import { DataUnavailable } from "@/components/states";
@@ -33,7 +46,9 @@ import { useLinearAccounts, useOpenIssue } from "./linear-queries";
 import { useAutosave, useUpdateIssue } from "./use-update-issue";
 import { LinearBoard } from "./LinearBoard";
 import { LinearProjects } from "./LinearProjects";
-import { PullRequestLinkStatus } from "./PullRequestLinkStatus";
+import { IssuePullRequest, PullRequestLinkCard } from "./PullRequestLinkStatus";
+import { useCheckout } from "@/features/branches/use-checkout";
+import { useRefs } from "@/lib/git-queries";
 
 const Markdown = lazy(() => import("@/features/agents/Markdown"));
 const DescriptionEditor = lazy(() => import("./IssueDescriptionEditor"));
@@ -159,6 +174,8 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
   const issue = useOpenIssue();
   const org = useLinearAccounts().data?.find((a) => a.id === issue.orgId);
   const createBranch = useCreateBranch(repoPath);
+  const checkout = useCheckout(repoPath);
+  const refs = useRefs(repoPath).data;
   const notify = useNoticesStore((s) => s.notify);
   const update = useUpdateIssue(issue.orgId, { id: id ?? "", identifier: issue.data?.identifier ?? "" });
 
@@ -167,6 +184,10 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
     return <DataUnavailable title={t("linear.issueError")} error={issue.error} onRetry={() => void issue.refetch()} />;
   if (!issue.data) return <PanelLoading title={t("common.loading")} variant="grid-orbit" />;
   const data = issue.data;
+  const pullRequests = data.attachments.nodes.filter((a) => /github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(a.url));
+  const otherLinks = data.attachments.nodes.filter((a) => !pullRequests.includes(a));
+  const localBranch = !!refs?.branches.some((b) => b.name === data.branchName);
+  const branchExists = localBranch || !!refs?.remotes.some((r) => r.remote === "origin" && r.name === data.branchName);
   const copy = async (text: string) => {
     await navigator.clipboard.writeText(text);
     notify({ tone: "success", title: t("file.copied") });
@@ -238,6 +259,25 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
               title={data.title}
               onSave={(title) => update.mutate({ patch: { title }, shown: { title } })}
             />
+            {/* Where the issue stands and where it came from, like a pull request's header. */}
+            <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground">
+              <span className="flex items-center gap-1.5 rounded-full border border-white/[0.08] px-2 py-0.5 text-foreground/90">
+                <StateDot state={data.state} />
+                {data.state.name}
+              </span>
+              <span className="font-mono text-[11.5px]">{data.identifier}</span>
+              {data.creator && (
+                <>
+                  <span aria-hidden>·</span>
+                  <CornerDownRight aria-hidden className="size-3.5" />
+                  {t("linear.createdBy")}
+                  <AuthorAvatar name={data.creator.name} src={data.creator.avatarUrl} className="size-4" />
+                  <span className="text-foreground/90">{data.creator.name}</span>
+                </>
+              )}
+              <span aria-hidden>·</span>
+              <time dateTime={data.createdAt}>{formatAge(data.createdAt, undefined, t.locale)}</time>
+            </p>
             <div className="mt-5 min-h-12 text-[14px]">
               {!editableDescription(description) ? (
                 readOnly
@@ -255,27 +295,35 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
             </div>
             {data.attachments.nodes.length > 0 && (
               <section className="mt-10">
-                <h2 className="mb-2 text-[13px] font-medium">{t("linear.links")}</h2>
-                <ul className="divide-y divide-white/[0.05] rounded-lg border border-white/[0.07]">
-                  {data.attachments.nodes.map((a) => (
-                    <li key={a.url}>
-                      <button
-                        type="button"
-                        onClick={() => void gitBackend.openGithubUrl(a.url).catch(() => copy(a.url))}
-                        className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] transition-colors hover:bg-white/[0.04]"
-                      >
-                        {a.url.includes("github.com") ? (
-                          <GithubIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-                        ) : (
-                          <Link2 aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-                        )}
-                        <span className="min-w-0 flex-1 truncate">{a.title}</span>
-                        {a.url.includes("github.com") && <PullRequestLinkStatus repoPath={repoPath} url={a.url} />}
-                        {a.subtitle && <span className="shrink-0 text-[12px] text-muted-foreground">{a.subtitle}</span>}
-                      </button>
-                    </li>
+                <h2 className="mb-2.5 text-[13px] font-medium">{t("linear.links")}</h2>
+                <div className="flex flex-col gap-2.5">
+                  {pullRequests.map((a) => (
+                    <PullRequestLinkCard key={a.url} repoPath={repoPath} url={a.url} title={a.title} />
                   ))}
-                </ul>
+                  {otherLinks.length > 0 && (
+                    <ul className="surface divide-y divide-white/[0.05] overflow-hidden">
+                      {otherLinks.map((a) => (
+                        <li key={a.url}>
+                          <button
+                            type="button"
+                            onClick={() => void gitBackend.openGithubUrl(a.url).catch(() => copy(a.url))}
+                            className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-[13px] transition-colors hover:bg-white/[0.03]"
+                          >
+                            {a.url.includes("github.com") ? (
+                              <GithubIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                            ) : (
+                              <Link2 aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                            )}
+                            <span className="min-w-0 flex-1 truncate">{a.title}</span>
+                            {a.subtitle && (
+                              <span className="shrink-0 text-[12px] text-muted-foreground">{a.subtitle}</span>
+                            )}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </section>
             )}
             <IssueActivity orgId={issue.orgId} issue={data} markdown={markdown} />
@@ -288,6 +336,13 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
               <Meta label={t("linear.updated")}>{formatAge(data.updatedAt, undefined, t.locale)}</Meta>
             </IssueProperties>
           </SideSection>
+          {pullRequests.length > 0 && (
+            <SideSection title={t("linear.diffs")}>
+              {pullRequests.map((a) => (
+                <IssuePullRequest key={a.url} repoPath={repoPath} url={a.url} title={a.title} />
+              ))}
+            </SideSection>
+          )}
           <SideSection title={t("linear.branch")}>
             <button
               type="button"
@@ -298,15 +353,34 @@ export function LinearIssueView({ repoPath }: { repoPath: string }) {
               <span className="min-w-0 flex-1 truncate">{data.branchName}</span>
               <Copy aria-hidden className="size-3.5 shrink-0 opacity-60 group-hover/branch:opacity-100" />
             </button>
-            <Button
-              size="sm"
-              disabled={createBranch.isPending}
-              onClick={() => createBranch.mutate(data.branchName)}
-              className="mt-2 h-8 w-full gap-1.5 text-[13px]"
-            >
-              {createBranch.isPending ? <BrailleLoader /> : <GitBranchPlus aria-hidden className="size-3.5" />}
-              {t("linear.createBranch")}
-            </Button>
+            {/* Once the branch exists (here or on GitHub, with its PR), switching to it replaces creating it. */}
+            {branchExists ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={checkout.isPending || refs?.head.branch === data.branchName}
+                onClick={() =>
+                  checkout.mutate({
+                    kind: localBranch ? "local" : "remote",
+                    name: localBranch ? data.branchName : `origin/${data.branchName}`,
+                  })
+                }
+                className="mt-2 h-8 w-full gap-1.5 text-[13px]"
+              >
+                {checkout.isPending ? <BrailleLoader /> : <GitBranch aria-hidden className="size-3.5" />}
+                {refs?.head.branch === data.branchName ? t("linear.onBranch") : t("linear.switchToBranch")}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                disabled={createBranch.isPending}
+                onClick={() => createBranch.mutate(data.branchName)}
+                className="mt-2 h-8 w-full gap-1.5 text-[13px]"
+              >
+                {createBranch.isPending ? <BrailleLoader /> : <GitBranchPlus aria-hidden className="size-3.5" />}
+                {t("linear.createBranch")}
+              </Button>
+            )}
           </SideSection>
         </aside>
       </div>

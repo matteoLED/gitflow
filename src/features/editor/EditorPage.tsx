@@ -1,11 +1,46 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { ChangeSet, EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { openSearchPanel } from "@codemirror/search";
-import { Code2, FileWarning, Search, Sparkles, X } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Code2,
+  FileWarning,
+  FolderOpen,
+  Link,
+  ListTree,
+  Maximize2,
+  Minimize2,
+  Plus,
+  Search,
+  Sparkles,
+  SquareTerminal,
+  File,
+  X,
+} from "lucide-react";
+import { useLayoutStore } from "@/stores/layout-store";
+import { useAgentsStore } from "@/stores/agents-store";
+import { ClaudeIcon, CodexIcon } from "@/features/agents/agent-icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { FileIcon } from "@/components/file-icon";
 import { EmptyState } from "@/components/states";
 import { useViewSettings } from "@/stores/view-settings-store";
@@ -43,7 +78,7 @@ import { QuickOpen } from "./QuickOpen";
 import { BlameToggle, FileHistoryButton, useBlameLayer } from "./Blame";
 import { blameSlot } from "./blame-cm";
 import { parseConflicts } from "./conflicts";
-import type { WorkingTreeEntry } from "@/types/git";
+import type { AgentKind, WorkingTreeEntry } from "@/types/git";
 
 /**
  * One open file. Its EditorState (text, undo history, selection, folds) lives here while another tab is in
@@ -53,6 +88,21 @@ type Buffer = { state: EditorState; saved: Text; mtime: number; scroll?: ReturnT
 type Notice = "binary" | "tooLarge" | "error";
 
 const buffers = new Map<string, Buffer>();
+
+/** A place left by switching tabs, for ← and → (as Zed's Go Back / Go Forward). */
+type Place = { path: string; line: number; column: number };
+const histories = new Map<string, { back: Place[]; forward: Place[] }>();
+const historyOf = (repo: string) => {
+  let history = histories.get(repo);
+  if (!history) histories.set(repo, (history = { back: [], forward: [] }));
+  return history;
+};
+const placeOf = (path: string, state: EditorState): Place => {
+  const head = state.selection.main.head;
+  const line = state.doc.lineAt(head);
+  return { path, line: line.number, column: head - line.from + 1 };
+};
+
 const keyOf = (repo: string, path: string) => `${repo}\0${path}`;
 /** Buffers are replaced, never mutated: the React compiler can trust what it has seen. */
 const patchBuffer = (key: string, patch: Partial<Buffer>) => {
@@ -179,6 +229,8 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
   );
   const [notice, setNotice] = useState<{ kind: Notice; message?: string } | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
+  /** Set while ← or → switches tabs, so that switch isn't recorded as a new step. */
+  const travellingRef = useRef(false);
   const [actionMenu, setActionMenu] = useState<ActionMenu | null>(null);
   const reveal = useEditorStore((s) => s.reveal);
   // ⌘L: the selection (or the current line) goes to the chat, as a card in its composer.
@@ -424,6 +476,12 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
     const previousBuffer = previous && buffers.get(keyOf(repoPath, previous));
     if (previousBuffer && previous)
       patchBuffer(keyOf(repoPath, previous), { state: view.state, scroll: view.scrollSnapshot() });
+    if (previous && previous !== active && !travellingRef.current) {
+      const history = historyOf(repoPath);
+      history.back = [...history.back.slice(-49), placeOf(previous, view.state)];
+      history.forward = [];
+    }
+    travellingRef.current = false;
     shownRef.current = active;
     setNotice(null);
     if (!active) return;
@@ -529,6 +587,25 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
     markDirty(path, false);
     close(repoPath, path);
   };
+  /** ← / →: back to the place left by a tab switch, or forward again. */
+  const travel = (direction: "back" | "forward") => {
+    const history = historyOf(repoPath);
+    const from = direction === "back" ? history.back : history.forward;
+    const to = direction === "back" ? history.forward : history.back;
+    const place = from.pop();
+    const view = viewRef.current;
+    if (!place || !view) return;
+    if (shownRef.current) to.push(placeOf(shownRef.current, view.state));
+    travellingRef.current = place.path !== shownRef.current;
+    useEditorStore.getState().openAt(repoPath, place.path, place.line, place.column);
+  };
+  const toggleTree = useLayoutStore((s) => s.toggleList);
+  const treeHidden = useLayoutStore((s) => !!s.collapsedLists.editor);
+
+  /** Closes tabs one by one: each unsaved one still asks first, and a refusal keeps only that tab. */
+  const closeTabs = async (paths: string[]) => {
+    for (const path of paths) await closeTab(path);
+  };
   // ⌘P opens a file by name, as in Zed (the repository switcher steps aside on this page).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -545,6 +622,11 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
         e.preventDefault();
         useCompletionStore.getState().toggleFile(fileUri(repoPath, shownRef.current));
       }
+      // ⌃- / ⌃⇧-: go back / forward, as in Zed.
+      if (e.ctrlKey && !e.metaKey && (e.code === "Minus" || e.key === "-" || e.key === "_")) {
+        e.preventDefault();
+        travel(e.shiftKey ? "forward" : "back");
+      }
       if (e.metaKey && !e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "w" && shownRef.current) {
         e.preventDefault();
         void closeTab(shownRef.current);
@@ -557,48 +639,83 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
   return (
     <section aria-label={t("view.editor")} className="flex h-full min-h-0 flex-col">
       {tabs.length > 0 && (
-        <div role="tablist" className="flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-white/[0.06]">
-          {tabs.map((path) => {
-            const selected = path === active;
-            return (
-              <div
-                key={path}
-                role="tab"
-                aria-selected={selected}
-                title={path}
-                onMouseDown={(e) => {
-                  if (e.button === 1) {
-                    e.preventDefault();
-                    void closeTab(path);
-                  }
-                }}
-                className={cn(
-                  "group flex shrink-0 items-center gap-1.5 border-r border-white/[0.06] pr-1.5 pl-3 text-[12.5px]",
-                  selected ? "bg-white/[0.04] text-foreground" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <button type="button" onClick={() => open(repoPath, path)} className="flex items-center gap-1.5">
-                  <FileIcon path={path} className="size-3.5" />
-                  {path.split("/").pop()}
-                  {/* Not saved yet: a dot by the name, as in Zed; the close button stays where it is. */}
-                  {dirty.has(path) && (
-                    <span
-                      aria-label={t("editor.unsaved")}
-                      className="size-1.5 shrink-0 rounded-full bg-foreground/70"
-                    />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  aria-label={t("editor.closeTab")}
-                  onClick={() => void closeTab(path)}
-                  className="grid size-5 place-items-center rounded text-muted-foreground hover:bg-white/[0.08] hover:text-foreground"
-                >
-                  <X aria-hidden className={cn("size-3.5", !selected && "opacity-0 group-hover:opacity-100")} />
-                </button>
-              </div>
-            );
-          })}
+        <div className="flex h-9 shrink-0 items-stretch border-b border-white/[0.06]">
+          <div className="flex items-center gap-0.5 border-r border-white/[0.06] px-1.5">
+            <TabBarButton label={t("editor.goBack")} shortcut="⌃-" onClick={() => travel("back")}>
+              <ArrowLeft />
+            </TabBarButton>
+            <TabBarButton label={t("editor.goForward")} shortcut="⌃⇧-" onClick={() => travel("forward")}>
+              <ArrowRight />
+            </TabBarButton>
+          </div>
+          <div role="tablist" className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
+            {tabs.map((path) => {
+              const selected = path === active;
+              return (
+                <ContextMenu key={path}>
+                  <ContextMenuTrigger asChild>
+                    <div
+                      role="tab"
+                      aria-selected={selected}
+                      title={path}
+                      // A double-click opens the same menu as a right-click.
+                      onDoubleClick={(e) =>
+                        e.currentTarget.dispatchEvent(
+                          new MouseEvent("contextmenu", { bubbles: true, clientX: e.clientX, clientY: e.clientY }),
+                        )
+                      }
+                      onMouseDown={(e) => {
+                        if (e.button === 1) {
+                          e.preventDefault();
+                          void closeTab(path);
+                        }
+                      }}
+                      className={cn(
+                        "group flex shrink-0 items-center gap-1.5 border-r border-white/[0.06] pr-1.5 pl-3 text-[12.5px]",
+                        selected ? "bg-white/[0.04] text-foreground" : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <button type="button" onClick={() => open(repoPath, path)} className="flex items-center gap-1.5">
+                        <FileIcon path={path} className="size-3.5" />
+                        {path.split("/").pop()}
+                        {/* Not saved yet: a dot by the name, as in Zed; the close button stays where it is. */}
+                        {dirty.has(path) && (
+                          <span
+                            aria-label={t("editor.unsaved")}
+                            className="size-1.5 shrink-0 rounded-full bg-foreground/70"
+                          />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={t("editor.closeTab")}
+                        onClick={() => void closeTab(path)}
+                        className="grid size-5 place-items-center rounded text-muted-foreground hover:bg-white/[0.08] hover:text-foreground"
+                      >
+                        <X aria-hidden className={cn("size-3.5", !selected && "opacity-0 group-hover:opacity-100")} />
+                      </button>
+                    </div>
+                  </ContextMenuTrigger>
+                  <TabMenu
+                    repoPath={repoPath}
+                    path={path}
+                    tabs={tabs}
+                    dirty={dirty}
+                    onClose={(paths) => void closeTabs(paths)}
+                  />
+                </ContextMenu>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-0.5 border-l border-white/[0.06] px-1.5">
+            <NewMenu onQuickOpen={() => setQuickOpen(true)} />
+            <TabBarButton
+              label={t(treeHidden ? "editor.showTree" : "editor.hideTree")}
+              onClick={() => toggleTree("editor")}
+            >
+              {treeHidden ? <Minimize2 /> : <Maximize2 />}
+            </TabBarButton>
+          </div>
         </div>
       )}
       {active && <EditorToolbar repoPath={repoPath} path={active} view={viewRef} />}
@@ -665,5 +782,146 @@ export function EditorPage({ repoPath }: { repoPath: string }) {
       )}
       <QuickOpen repoPath={repoPath} open={quickOpen} onOpenChange={setQuickOpen} />
     </section>
+  );
+}
+
+/** A tab's right-click menu, as in Zed: close it or its neighbours, copy its path, find it. */
+function TabMenu({
+  repoPath,
+  path,
+  tabs,
+  dirty,
+  onClose,
+}: {
+  repoPath: string;
+  path: string;
+  tabs: string[];
+  dirty: ReadonlySet<string>;
+  onClose: (paths: string[]) => void;
+}) {
+  const t = useT();
+  const index = tabs.indexOf(path);
+  const reveal = () =>
+    gitBackend
+      .revealPath(repoPath, path)
+      .catch((error: unknown) =>
+        useNoticesStore
+          .getState()
+          .notify({ tone: "error", title: t("editor.fileOpFailed"), detail: toGitError(error).message }),
+      );
+  return (
+    <ContextMenuContent className="w-56">
+      <ContextMenuItem onSelect={() => onClose([path])}>{t("editor.closeTab")}</ContextMenuItem>
+      <ContextMenuItem disabled={tabs.length < 2} onSelect={() => onClose(tabs.filter((p) => p !== path))}>
+        {t("editor.closeOthers")}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem disabled={index === 0} onSelect={() => onClose(tabs.slice(0, index))}>
+        {t("editor.closeLeft")}
+      </ContextMenuItem>
+      <ContextMenuItem disabled={index === tabs.length - 1} onSelect={() => onClose(tabs.slice(index + 1))}>
+        {t("editor.closeRight")}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem onSelect={() => onClose(tabs.filter((p) => !dirty.has(p)))}>
+        {t("editor.closeClean")}
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => onClose(tabs)}>{t("editor.closeAll")}</ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem onSelect={() => void navigator.clipboard.writeText(`${repoPath}/${path}`)}>
+        <Link aria-hidden />
+        {t("editor.copyPath")}
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => void navigator.clipboard.writeText(path)}>
+        <Link aria-hidden />
+        {t("editor.copyRelativePath")}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem onSelect={() => void reveal()}>
+        <FolderOpen aria-hidden />
+        {t("editor.revealInFinder")}
+      </ContextMenuItem>
+      <ContextMenuItem
+        onSelect={() => {
+          // The tree opens the folders of the tab in front by itself.
+          useEditorStore.getState().open(repoPath, path);
+          useEditorStore.getState().setSidebar("files");
+        }}
+      >
+        <ListTree aria-hidden />
+        {t("editor.revealInTree")}
+      </ContextMenuItem>
+    </ContextMenuContent>
+  );
+}
+
+/** An icon button of the tab bar, with its name (and shortcut) as a tooltip. */
+function TabBarButton({
+  label,
+  shortcut,
+  onClick,
+  children,
+}: {
+  label: string;
+  shortcut?: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={shortcut ? `${label} (${shortcut})` : label}
+      onClick={onClick}
+      className="grid size-6 place-items-center rounded text-muted-foreground hover:bg-white/[0.08] hover:text-foreground [&_svg]:size-3.5"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** The tab bar's "+": a file, the terminal, or a new chat with an agent, as in Zed. */
+function NewMenu({ onQuickOpen }: { onQuickOpen: () => void }) {
+  const t = useT();
+  const chatWith = (agent: AgentKind) => {
+    const agents = useAgentsStore.getState();
+    agents.setPreferredAgent(agent);
+    agents.setAssistantThread(null);
+    useUiStore.getState().setAssistantOpen(true);
+  };
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={t("editor.new")}
+          title={t("editor.new")}
+          className="grid size-6 place-items-center rounded text-muted-foreground hover:bg-white/[0.08] hover:text-foreground data-[state=open]:bg-white/[0.08] data-[state=open]:text-foreground [&_svg]:size-3.5"
+        >
+          <Plus />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onSelect={onQuickOpen}>
+          <File aria-hidden />
+          {t("editor.quickOpen")}
+          <DropdownMenuShortcut>⌘P</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => useUiStore.getState().setTerminalOpen(true)}>
+          <SquareTerminal aria-hidden />
+          {t("terminal.title")}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>{t("editor.agents")}</DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => chatWith("claude")}>
+          <ClaudeIcon aria-hidden />
+          Claude
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => chatWith("codex")}>
+          <CodexIcon aria-hidden />
+          Codex
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

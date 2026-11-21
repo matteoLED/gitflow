@@ -25,7 +25,8 @@
           "y": 24
         },
         "theme": "Dark",
-        "backgroundColor": "#1B1C20"
+        "backgroundColor": "#1B1C20",
+        "dragDropEnabled": false
       }
     ],
     "security": {

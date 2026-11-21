@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { gitBackend } from "@/lib/tauri-git";
 import { parseRefHref, REF_SCHEME, rehypeRefs, type KnownRefs } from "@/features/refs/ref-links";
 import { RefLink } from "@/features/refs/RefPreview";
+import { CodeBlock } from "@/components/code-block";
 
 /**
  * GitHub's own rules: raw HTML in comments (bots post <details>, <picture>, tables…) is rendered, then
@@ -60,7 +61,7 @@ export function Markdown({ text, components, refs }: Props) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeRaw, [rehypeSanitize, schema], ...(refs ? [rehypeRefs(refs.known)] : [])]}
-        components={{ a: link, ...components }}
+        components={{ a: link, pre: CodeBlock, ...components }}
         // Ref links are added after sanitizing (a `gitflow-ref:` link written in the text is already gone).
         urlTransform={(url) => (refs && url.startsWith(REF_SCHEME) ? url : defaultUrlTransform(url))}
       >

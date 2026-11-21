@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight } from "lucide-react";
+import { Check, ChevronRight, X } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { StatusIcon, ghStatus } from "@/features/agents/status";
 import { useT } from "@/i18n";
@@ -124,7 +124,13 @@ export function JobLogView({ repoPath, job }: { repoPath: string; job: WorkflowJ
               )}
             >
               <span className="grid w-10 shrink-0 place-items-center">
-                {step && <StatusIcon status={ghStatus(step.status, step.conclusion)} />}
+                {step?.conclusion === "success" ? (
+                  <Check aria-hidden className="size-3.5 text-added-foreground" />
+                ) : step?.conclusion === "failure" ? (
+                  <X aria-hidden className="size-3.5 text-removed-foreground" />
+                ) : (
+                  step && <StatusIcon status={ghStatus(step.status, step.conclusion)} />
+                )}
               </span>
               <ChevronRight
                 aria-hidden

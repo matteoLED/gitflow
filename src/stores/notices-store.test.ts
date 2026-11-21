@@ -11,6 +11,12 @@ describe("notices store", () => {
     expect(store().notify({ tone: "info", title: "b" })).not.toBe(a);
   });
 
+  it("shows a repeated message once", () => {
+    store().notify({ tone: "error", title: "Tour failed" });
+    store().notify({ tone: "error", title: "Tour failed" });
+    expect(store().notices).toHaveLength(1);
+  });
+
   it("turns a loading notice into its outcome", () => {
     const id = store().notify({ tone: "loading", title: "Pushing…" });
     store().update(id, { tone: "success", title: "Pushed" });

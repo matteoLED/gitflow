@@ -247,6 +247,14 @@ pub async fn resolve_with_side(
 }
 
 #[tauri::command]
+pub async fn reopen_agent_worktree(
+    repo_path: String,
+    branch: String,
+) -> GitResult<worktrees::Worktree> {
+    blocking(move || worktrees::reopen(&repo(&repo_path)?, &branch)).await
+}
+
+#[tauri::command]
 pub async fn create_agent_worktree(
     repo_path: String,
     base: Option<String>,
@@ -254,6 +262,16 @@ pub async fn create_agent_worktree(
 ) -> GitResult<worktrees::Worktree> {
     blocking(move || worktrees::create(&repo(&repo_path)?, base.as_deref(), branch.as_deref()))
         .await
+}
+
+#[tauri::command]
+pub async fn push_agent_worktree(repo_path: String, path: String, title: String) -> GitResult<()> {
+    blocking(move || worktrees::push(&repo(&repo_path)?, &path, &title)).await
+}
+
+#[tauri::command]
+pub async fn release_agent_worktree(repo_path: String, path: String) -> GitResult<()> {
+    blocking(move || worktrees::release(&repo(&repo_path)?, &path)).await
 }
 
 #[tauri::command]
@@ -310,9 +328,17 @@ pub async fn publish_agent_worktree(
     title: String,
     body: String,
     target: Option<String>,
+    skip_hooks: Option<bool>,
 ) -> GitResult<String> {
     blocking(move || {
-        worktrees::publish(&repo(&repo_path)?, &path, &title, &body, target.as_deref())
+        worktrees::publish(
+            &repo(&repo_path)?,
+            &path,
+            &title,
+            &body,
+            target.as_deref(),
+            skip_hooks.unwrap_or(false),
+        )
     })
     .await
 }
@@ -322,8 +348,17 @@ pub async fn merge_agent_worktree(
     repo_path: String,
     path: String,
     message: String,
+    skip_hooks: Option<bool>,
 ) -> GitResult<()> {
-    blocking(move || worktrees::merge(&repo(&repo_path)?, &path, &message)).await
+    blocking(move || {
+        worktrees::merge(
+            &repo(&repo_path)?,
+            &path,
+            &message,
+            skip_hooks.unwrap_or(false),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -405,6 +440,20 @@ pub async fn get_working_diff(
         read::working_file_diff(&repo(&repo_path)?, &path, previous_path.as_deref(), side)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn commit_activity(
+    repo_path: String,
+    since: i64,
+    until: i64,
+) -> GitResult<Vec<CommitStamp>> {
+    blocking(move || read::commit_activity(&repo(&repo_path)?, since, until)).await
+}
+
+#[tauri::command]
+pub async fn first_commit_at(repo_path: String) -> GitResult<Option<i64>> {
+    blocking(move || read::first_commit_at(&repo(&repo_path)?)).await
 }
 
 #[tauri::command]
@@ -697,6 +746,11 @@ pub async fn code_graph_hotspots(repo_path: String) -> GitResult<Vec<serde_json:
 }
 
 #[tauri::command]
+pub async fn code_graph_overview(repo_path: String) -> GitResult<code_graph::Overview> {
+    blocking(move || code_graph::overview(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
 pub async fn code_graph_map(repo_path: String) -> GitResult<code_graph::FileMap> {
     blocking(move || code_graph::file_map(&repo(&repo_path)?)).await
 }
@@ -704,6 +758,13 @@ pub async fn code_graph_map(repo_path: String) -> GitResult<code_graph::FileMap>
 #[tauri::command]
 pub async fn code_graph_impact(repo_path: String, base: String) -> GitResult<serde_json::Value> {
     blocking(move || code_graph::impact(&repo(&repo_path)?, &base)).await
+}
+
+/// Keeps the code indexes agents search up to date; returns at once, the work runs in the background.
+#[tauri::command]
+pub fn refresh_code_indexes(repo_path: String) -> GitResult<()> {
+    crate::code_graph::refresh_in_background(repo(&repo_path)?);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1193,8 +1254,32 @@ pub async fn restore_branch(repo_path: String, name: String, tip: String) -> Git
 }
 
 #[tauri::command]
-pub async fn create_branch(repo_path: String, name: String, switch: bool) -> GitResult<()> {
-    blocking(move || write::create_branch(&repo(&repo_path)?, &name, switch)).await
+pub async fn create_branch(
+    repo_path: String,
+    name: String,
+    switch: bool,
+    from: Option<String>,
+) -> GitResult<()> {
+    blocking(move || write::create_branch(&repo(&repo_path)?, &name, switch, from.as_deref())).await
+}
+
+#[tauri::command]
+pub async fn push_force_with_lease(repo_path: String) -> GitResult<()> {
+    blocking(move || write::push_force_with_lease(&repo(&repo_path)?)).await
+}
+
+#[tauri::command]
+pub async fn rebase_candidates(
+    repo_path: String,
+    onto: String,
+) -> GitResult<Vec<(String, String)>> {
+    blocking(move || crate::git::rewrite::rebase_candidates(&repo(&repo_path)?, &onto)).await
+}
+
+#[tauri::command]
+pub async fn rebase_onto(repo_path: String, onto: String, after: Option<String>) -> GitResult<()> {
+    blocking(move || crate::git::rewrite::rebase_onto(&repo(&repo_path)?, &onto, after.as_deref()))
+        .await
 }
 
 #[tauri::command]

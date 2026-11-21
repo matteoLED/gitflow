@@ -38,7 +38,9 @@ export const useNoticesStore = create<NoticesState>()((set, get) => ({
   notices: [],
   notify: (notice) => {
     const id = nextId++;
-    set({ notices: [...get().notices, { ...notice, id }].slice(-MAX_NOTICES) });
+    // The same message again replaces the one on screen: a failure repeated isn't two failures to dismiss.
+    const same = (n: Notice) => n.tone === notice.tone && n.title === notice.title && n.detail === notice.detail;
+    set({ notices: [...get().notices.filter((n) => !same(n)), { ...notice, id }].slice(-MAX_NOTICES) });
     return id;
   },
   update: (id, patch) => set({ notices: get().notices.map((n) => (n.id === id ? { ...n, ...patch } : n)) }),

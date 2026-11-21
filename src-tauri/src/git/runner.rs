@@ -12,6 +12,8 @@ use super::errors::{ErrorKind, GitError, GitResult};
 
 pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
 pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(180);
+/// Commits, merges and pushes run the repository's hooks, which may lint, test or build (a minute or more).
+pub const HOOK_TIMEOUT: Duration = Duration::from_secs(900);
 const MAX_OUTPUT_BYTES: u64 = 32 * 1024 * 1024;
 
 pub struct RunOptions<'a> {
@@ -71,10 +73,11 @@ pub fn both<A: Send, B: Send>(
 }
 
 /// A long write (rebase, cherry-pick, revert: hooks and big trees) killed mid-way leaves a half-done state,
-/// so it gets the network timeout rather than the read one.
+/// so it gets the hook timeout rather than the read one.
 pub fn git_long(repo: &Path, args: &[&str]) -> GitResult<Vec<u8>> {
+    // Rebases, merges and commits run the repository's hooks, which may lint, test or build.
     let opts = RunOptions {
-        timeout: NETWORK_TIMEOUT,
+        timeout: HOOK_TIMEOUT,
         ..RunOptions::default()
     };
     git_with(repo, args, &opts)
@@ -155,7 +158,14 @@ fn execute(cmd: Command, args: &[&str], opts: &RunOptions) -> GitResult<Vec<u8>>
     if status.success() || opts.ok_codes.contains(&code) {
         return Ok(stdout);
     }
-    Err(command_failed(&stderr, code))
+    // Hooks (husky, lint-staged) report on stdout as much as stderr: both are kept, stderr first.
+    let stdout = String::from_utf8_lossy(&stdout);
+    let output = [stderr.trim_end(), stdout.trim_end()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Err(command_failed(&output, code))
 }
 
 fn git_command(repo: &Path, args: &[&str]) -> Command {
@@ -178,6 +188,8 @@ fn git_command(repo: &Path, args: &[&str]) -> Command {
 }
 
 fn spawn(mut cmd: Command, with_stdin: bool) -> GitResult<Child> {
+    // Its own process group: a timeout stops the hooks git started (lint-staged, a build) along with it.
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     cmd.stdin(if with_stdin {
         Stdio::piped()
     } else {
@@ -228,6 +240,10 @@ fn wait(
             return Ok((status, out));
         }
         if Instant::now() >= deadline {
+            // The whole group (git and its hooks), then git itself should it have left it.
+            let _ = Command::new("/bin/kill")
+                .args(["-TERM", &format!("-{}", child.id())])
+                .status();
             let _ = child.kill();
             let _ = child.wait();
             let name = args.first().copied().unwrap_or("git");
@@ -249,12 +265,19 @@ fn wait(
     }
 }
 
-/// First meaningful stderr line, without git's "fatal:"/"error:" prefix, as the user-facing message.
+/// The line that says what went wrong: a hook's failure (it comes last, after its progress lines), else the
+/// first meaningful line, without git's "fatal:"/"error:" prefix.
 fn command_failed(stderr: &str, code: i32) -> GitError {
-    let headline = stderr
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("hint:"))
+    let lines = || stderr.lines().map(str::trim).filter(|l| !l.is_empty());
+    let hook_failure = lines().rev().find(|l| {
+        let lower = l.to_lowercase();
+        l.starts_with('✖')
+            || lower.starts_with("husky -")
+            || lower.contains("command not found")
+            || (lower.contains("error") && !l.starts_with('['))
+    });
+    let headline = hook_failure
+        .or_else(|| lines().find(|line| !line.starts_with("hint:") && !line.starts_with('[')))
         .map(|line| {
             line.trim_start_matches("fatal: ")
                 .trim_start_matches("error: ")
@@ -266,6 +289,26 @@ fn command_failed(stderr: &str, code: i32) -> GitError {
 
 fn io_error(err: std::io::Error) -> GitError {
     GitError::new(ErrorKind::Io, err.to_string())
+}
+
+#[cfg(test)]
+mod hook_tests {
+    use super::*;
+
+    #[test]
+    fn a_failing_hook_is_summed_up_by_its_last_error() {
+        let output = "[STARTED] Backing up original state...\n[STARTED] oxlint --fix\n✖ oxlint --fix:\nsrc/a.ts error\nhusky - pre-commit script failed (code 1)";
+        assert_eq!(
+            command_failed(output, 1).message,
+            "husky - pre-commit script failed (code 1)"
+        );
+    }
+
+    #[test]
+    fn plain_git_errors_keep_their_first_line() {
+        let err = command_failed("fatal: not a git repository\nhint: run git init", 128);
+        assert_eq!(err.message, "not a git repository");
+    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
 import { useShallow } from "zustand/react/shallow";
+import { cn } from "@/lib/utils";
 import { DataUnavailable, EmptyState } from "@/components/states";
 import { DiffSkeleton } from "@/components/skeletons";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -109,7 +110,7 @@ function ReviewProgress({ pr, paths }: { pr: ActivePullRequest; paths: string[] 
   );
 }
 
-function CollapseAllButton({ allCollapsed, onClick }: { allCollapsed: boolean; onClick: () => void }) {
+export function CollapseAllButton({ allCollapsed, onClick }: { allCollapsed: boolean; onClick: () => void }) {
   const t = useT();
   const label = allCollapsed ? t("diff.expandAll") : t("diff.collapseAll");
   return (
@@ -124,7 +125,17 @@ function CollapseAllButton({ allCollapsed, onClick }: { allCollapsed: boolean; o
   );
 }
 
-function CommitDiffs({ repoPath, hash, base }: { repoPath: string; hash: string; base: string | null }) {
+function CommitDiffs({
+  repoPath,
+  hash,
+  base,
+  embedded,
+}: {
+  repoPath: string;
+  hash: string;
+  base: string | null;
+  embedded: boolean;
+}) {
   const t = useT();
   const {
     selectedFilePath,
@@ -160,11 +171,13 @@ function CommitDiffs({ repoPath, hash, base }: { repoPath: string; hash: string;
 
   return (
     <>
-      <PanelHeader className="justify-end gap-1">
+      {/* Under the commit's own header (CommitDetail), the tools sit in that header: no second bar here. */}
+      <PanelHeader className={cn("justify-end gap-1", embedded && "hidden")}>
         {pullRequest && <AiReviewButton repoPath={repoPath} pr={pullRequest} />}
         {pullRequest && <ReviewButton repoPath={repoPath} pr={pullRequest} />}
         {pullRequest && <ReviewProgress pr={pullRequest} paths={paths} />}
-        <AgentButton repoPath={repoPath} />
+        {/* On a pull request, "Review with AI" above covers it: one AI entry, not two. */}
+        {!pullRequest && <AgentButton repoPath={repoPath} />}
         <ViewOptions />
         <CollapseAllButton
           allCollapsed={allCollapsed}
@@ -176,7 +189,7 @@ function CommitDiffs({ repoPath, hash, base }: { repoPath: string; hash: string;
       ) : (
         <div
           data-scroll-container
-          className="min-h-0 flex-1 space-y-2.5 overflow-y-auto scroll-smooth px-2.5 pt-1 pb-3 motion-reduce:scroll-auto"
+          className="min-h-0 flex-1 space-y-2.5 overflow-y-auto scroll-smooth px-2.5 pb-3 motion-reduce:scroll-auto [&>:first-child]:mt-2.5"
         >
           {visible.map((file) => (
             <CommitDiffCard
@@ -222,7 +235,8 @@ function DiffPanelSkeleton() {
   );
 }
 
-export function DiffPanel({ repoPath }: { repoPath: string }) {
+/** `embedded`: below the commit and its files, with a slim tool bar. */
+export function DiffPanel({ repoPath, embedded = false }: { repoPath: string; embedded?: boolean }) {
   const t = useT();
   const { selectedCommitHash: hash, compareBase: base } = useWorkspaceStore(
     useShallow((s) => ({ selectedCommitHash: s.selectedCommitHash, compareBase: s.compareBase })),
@@ -230,7 +244,7 @@ export function DiffPanel({ repoPath }: { repoPath: string }) {
   return (
     <section aria-label={t("diff.panel")} className="flex h-full flex-col">
       {hash ? (
-        <CommitDiffs key={`${hash}:${base}`} repoPath={repoPath} hash={hash} base={base} />
+        <CommitDiffs key={`${hash}:${base}`} repoPath={repoPath} hash={hash} base={base} embedded={embedded} />
       ) : (
         <EmptyState icon={<FileDiffIcon />} title={t("diff.nothing")} hint={t("diff.nothingHint")} />
       )}

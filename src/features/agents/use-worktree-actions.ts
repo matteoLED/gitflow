@@ -2,10 +2,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useT } from "@/i18n";
 import { toGitError } from "@/lib/errors";
-import { invalidateRepo, useRefs } from "@/lib/git-queries";
+import { useOpenPullRequest } from "@/features/github/PullRequestList";
+import { invalidateRepo, repoKey, useRefs } from "@/lib/git-queries";
 import { gitBackend } from "@/lib/tauri-git";
 import { useNoticesStore } from "@/stores/notices-store";
 import type { Worktree } from "@/types/git";
+
+/** Git's report of a hook that refused the commit, merge or push (husky, a plain hook script). */
+export const isHookFailure = (text: string) => /husky - |hook (?:script )?failed|pre-(?:commit|push)/i.test(text);
 
 /**
  * An agent worktree's live status and the ways out of it: merge into the current branch, open a pull request,
@@ -16,6 +20,7 @@ export function useWorktreeActions(repoPath: string, worktree: Worktree, title: 
   const client = useQueryClient();
   const notify = useNoticesStore((s) => s.notify);
   const current = useRefs(repoPath).data?.head.branch ?? null;
+  const openPullRequest = useOpenPullRequest(repoPath).open;
   const status = useQuery({
     queryKey: ["agent-worktree", repoPath, worktree.path],
     queryFn: () => gitBackend.agentWorktreeStatus(repoPath, worktree.path),
@@ -23,33 +28,61 @@ export function useWorktreeActions(repoPath: string, worktree: Worktree, title: 
     retry: false,
   });
   const act = useMutation({
-    mutationFn: (action: () => Promise<unknown>) => action(),
+    mutationFn: (action: (skipHooks: boolean) => Promise<unknown>) => action(false),
     onSettled: () => {
       void invalidateRepo(client, repoPath);
       void client.invalidateQueries({ queryKey: ["agent-worktree", repoPath] });
       void client.invalidateQueries({ queryKey: ["agent-worktree-diff", repoPath] });
     },
-    onError: (error) => {
+    onError: (error, action) => {
       const { message, detail } = toGitError(error);
-      notify({ tone: "error", title: t("worktree.failed"), detail: detail ? `${message}\n${detail}` : message });
+      // A hook that fails on the worktree's environment rather than the change (a build, a type check) can be
+      // skipped, once, on the user's word: CI still runs every check on the pull request.
+      const hookFailed = isHookFailure(`${message}\n${detail ?? ""}`);
+      notify({
+        tone: "error",
+        title: t("action.failed", { action: t("worktree.failed"), message }),
+        detail,
+        action: hookFailed ? { label: t("worktree.skipHooks"), run: () => void retrySkippingHooks(action) } : undefined,
+      });
     },
   });
+  const retrySkippingHooks = async (action: (skipHooks: boolean) => Promise<unknown>) => {
+    const sure = await ask(t("worktree.skipHooksConfirm"), { kind: "warning", okLabel: t("worktree.skipHooks") });
+    if (!sure) return;
+    act.mutate(() => action(true));
+  };
   const merge = () =>
-    act.mutate(async () => {
-      await gitBackend.mergeAgentWorktree(repoPath, worktree.path, title);
+    act.mutate(async (skipHooks) => {
+      await gitBackend.mergeAgentWorktree(repoPath, worktree.path, title, skipHooks);
       notify({ tone: "success", title: t("worktree.merged", { branch: worktree.branch }) });
     });
   const publish = () =>
-    act.mutate(async () => {
+    act.mutate(async (skipHooks) => {
       const url = await gitBackend.publishAgentWorktree(
         repoPath,
         worktree.path,
         title,
         t("worktree.prBody"),
         worktree.target,
+        skipHooks,
       );
-      notify({ tone: "success", title: t("worktree.published", { branch: worktree.branch }), detail: url });
-      if (url) await gitBackend.openGithubUrl(url);
+      // The worktree is gone (see worktrees.rs publish): the pull request opens on its page in the app.
+      const prs = await client.fetchQuery({
+        queryKey: [...repoKey(repoPath), "pull-requests"],
+        queryFn: () => gitBackend.listPullRequests(repoPath),
+        staleTime: 0,
+      });
+      const pr = prs.find((p) => p.url === url) ?? prs.find((p) => p.headRefName === worktree.branch);
+      notify({
+        tone: "success",
+        title: t("worktree.published", { branch: worktree.branch }),
+        detail: url,
+        action: {
+          label: t("worktree.openPr"),
+          run: () => void (pr ? openPullRequest(pr) : url && gitBackend.openGithubUrl(url)),
+        },
+      });
     });
   const remove = async () => {
     const sure = await ask(t("worktree.removeConfirm", { branch: worktree.branch }), {

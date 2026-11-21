@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { GitBranch } from "lucide-react";
 import { useT } from "@/i18n";
 import { Group, Row } from "./settings-ui";
 
@@ -15,8 +14,9 @@ export function AboutSection() {
   return (
     <>
       <div className="flex items-center gap-4">
-        <span className="grid size-14 place-items-center rounded-2xl bg-primary/15 text-primary ring-1 ring-primary/30">
-          <GitBranch aria-hidden className="size-7" />
+        {/* The app icon: its white mark (the favicon) on the icon's black tile. */}
+        <span className="grid size-14 place-items-center rounded-[14px] bg-[#111] ring-1 ring-white/10">
+          <img src="/favicon.svg" alt="" className="size-8" />
         </span>
         <div>
           <p className="text-[17px] font-semibold">gitflow</p>

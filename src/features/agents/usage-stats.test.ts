@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { summarize } from "./usage-stats";
+import { monthProjection, summarize } from "./usage-stats";
 
 const tokens = { input: 1_000_000, output: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0 };
 const stats = {
@@ -31,5 +31,12 @@ describe("summarize", () => {
   });
   it("ranks models by cost", () => {
     expect(summarize(stats, 30, null, today).byModel[0].key).toBe("claude-opus-4-8");
+  });
+});
+
+describe("monthProjection", () => {
+  it("extends the month's daily average to its last day", () => {
+    // 13 dollars over the 9 first days of November (30 days).
+    expect(monthProjection(stats, null, today).projected).toBeCloseTo((13 / 9) * 30);
   });
 });

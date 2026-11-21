@@ -1,10 +1,12 @@
 import { useShallow } from "zustand/react/shallow";
+import { DiffStatBar, LineCounts } from "@/components/diffstat";
+import { AgentBadge, coAgentOf } from "@/components/agent-badge";
 import { useHistorySearchStore } from "@/features/history/history-search-store";
 import { DataUnavailable, EmptyState } from "@/components/states";
 import { RowSkeleton, SkeletonList } from "@/components/skeletons";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
-import { FolderOpen, GitCommitHorizontal, GitPullRequest, List, ListTree, SearchX, Triangle } from "lucide-react";
+import { ChevronRight, Folder, FolderOpen, GitCommitHorizontal, List, ListTree, SearchX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { FilterInput, PanelHeader, PanelToolbar } from "@/components/layout/panel";
@@ -60,21 +62,24 @@ function Row({ row, list, active, collapsed, onActivate }: RowProps) {
       aria-expanded={node.kind === "dir" ? !collapsed : undefined}
       onClick={onActivate}
       style={{ paddingLeft: `${depth * 14 + 10}px` }}
-      title={file?.previousPath ? `${file.previousPath} → ${node.path}` : node.path}
+      title={file ? (file.previousPath ? `${file.previousPath} → ${node.path}` : node.path) : undefined}
       className={cn(
-        "flex h-7 cursor-default items-center gap-2 rounded-md pr-2 text-[12px] hover:bg-white/[0.07]",
-        node.kind === "dir" ? "text-muted-foreground" : "text-foreground/90",
-        active && "bg-white/[0.06] text-foreground hover:bg-white/[0.09]",
+        "relative flex h-6 cursor-default items-center gap-2 rounded-md pr-2 text-[12.5px]",
+        node.kind === "dir"
+          ? "text-[12px] text-muted-foreground hover:text-foreground"
+          : "text-foreground/90 hover:bg-white/[0.05]",
+        active && "bg-primary/[0.12] text-foreground hover:bg-primary/[0.16]",
       )}
     >
+      {/* Indent guides: one hairline per level, so a deep file reads as part of its folder. */}
+      {Array.from({ length: depth }, (_, i) => (
+        <span key={i} aria-hidden className="absolute inset-y-0 w-px bg-white/[0.06]" style={{ left: i * 14 + 16 }} />
+      ))}
       {node.kind === "dir" ? (
-        <Triangle
-          aria-hidden
-          className={cn(
-            "size-[7px] shrink-0 fill-current transition-transform",
-            collapsed ? "rotate-90" : "rotate-180",
-          )}
-        />
+        <span className="flex shrink-0 items-center gap-1">
+          <ChevronRight aria-hidden className={cn("size-3 shrink-0 transition-transform", !collapsed && "rotate-90")} />
+          <Folder aria-hidden className="size-3.5 shrink-0" />
+        </span>
       ) : (
         <FileIcon path={node.path} className="size-3.5" />
       )}
@@ -82,7 +87,12 @@ function Row({ row, list, active, collapsed, onActivate }: RowProps) {
       {list && slash > 0 && (
         <MiddleTruncate text={node.path.slice(0, slash)} tail={14} className="text-[11.5px] text-muted-foreground" />
       )}
-      {file && <StatusMark file={file} />}
+      {file &&
+        (file.additions || file.deletions ? (
+          <LineCounts add={file.additions ?? 0} del={file.deletions ?? 0} className="ml-auto pl-1 text-[10.5px]" />
+        ) : (
+          <StatusMark file={file} />
+        ))}
     </li>
   );
 }
@@ -94,7 +104,12 @@ function CommitHeader({ repoPath, commit }: { repoPath: string; commit: CommitSu
   const coAuthors = commit.coAuthors.length;
   return (
     <div data-tauri-drag-region className="flex min-w-0 items-center gap-2.5">
-      <AuthorAvatar name={commit.author} src={avatar.data} className="size-7" />
+      <span className="relative shrink-0">
+        <AuthorAvatar name={commit.author} src={avatar.data} className="size-8" />
+        {coAgentOf(commit.coAuthors) && (
+          <AgentBadge agent={coAgentOf(commit.coAuthors) ?? "claude"} className="absolute -right-1 -bottom-1 size-4" />
+        )}
+      </span>
       <div data-tauri-drag-region className="min-w-0">
         <h2
           className="flex min-w-0 items-center gap-1.5 text-[14px] font-semibold text-white/95"
@@ -105,26 +120,31 @@ function CommitHeader({ repoPath, commit }: { repoPath: string; commit: CommitSu
             <PullRequestHoverCard repoPath={repoPath} number={Number(pr)}>
               <span
                 tabIndex={0}
-                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] font-normal text-foreground/85 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="shrink-0 rounded-sm text-[13px] font-normal text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <GitPullRequest aria-hidden className="size-3" />#{pr}
+                #{pr}
               </span>
             </PullRequestHoverCard>
           )}
         </h2>
-        <p className="flex gap-1.5 truncate text-[12px] text-foreground/90">
-          <span title={commit.authorEmail}>{commit.author}</span>
+        <p className="mt-0.5 flex items-center gap-1.5 truncate text-[12px] text-muted-foreground">
+          <span title={commit.authorEmail} className="text-foreground/85">
+            {commit.author}
+          </span>
           {coAuthors > 0 && <span title={commit.coAuthors.join(", ")}>+{coAuthors}</span>}
+          <span aria-hidden>·</span>
           <span>{formatCommitDate(commit.authoredAt, undefined, t.locale)}</span>
           <CommitHoverCard repoPath={repoPath} commit={commit}>
             <span
               tabIndex={0}
-              className="rounded-sm font-mono text-muted-foreground outline-none select-text focus-visible:ring-2 focus-visible:ring-ring"
+              className="rounded-md bg-white/[0.06] px-1.5 py-px font-mono text-[11px] outline-none select-text hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
               {commit.hash.slice(0, 7)}
             </span>
           </CommitHoverCard>
-          {commit.parents.length > 1 && <span>{t("files.merge")}</span>}
+          {commit.parents.length > 1 && (
+            <span className="rounded-md bg-merged/15 px-1.5 py-px text-[11px] text-merged">{t("files.merge")}</span>
+          )}
         </p>
       </div>
     </div>
@@ -139,7 +159,7 @@ function PullRequestHeader({ repoPath, pr }: { repoPath: string; pr: ActivePullR
       <AuthorAvatar
         name={pr.author}
         src={`https://avatars.githubusercontent.com/${pr.author}?s=64`}
-        className="size-7"
+        className="size-8"
       />
       <div data-tauri-drag-region className="min-w-0">
         <h2 className="flex min-w-0 items-center gap-1.5 text-[14px] font-semibold text-white/95" title={pr.title}>
@@ -147,16 +167,19 @@ function PullRequestHeader({ repoPath, pr }: { repoPath: string; pr: ActivePullR
           <PullRequestHoverCard repoPath={repoPath} number={pr.number}>
             <span
               tabIndex={0}
-              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/12 px-1.5 text-[11px] font-normal text-foreground/85 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="shrink-0 rounded-sm text-[13px] font-normal text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <GitPullRequest aria-hidden className="size-3" />#{pr.number}
+              #{pr.number}
             </span>
           </PullRequestHoverCard>
         </h2>
-        <p className="flex gap-1.5 truncate text-[12px] text-foreground/90">
-          <span>{pr.author}</span>
-          <span className="text-muted-foreground">{t("pr.allChanges")}</span>
-          <span className="font-mono text-muted-foreground select-text">{pr.head.slice(0, 7)}</span>
+        <p className="mt-0.5 flex items-center gap-1.5 truncate text-[12px] text-muted-foreground">
+          <span className="text-foreground/85">{pr.author}</span>
+          <span aria-hidden>·</span>
+          <span>{t("pr.allChanges")}</span>
+          <span className="rounded-md bg-white/[0.06] px-1.5 py-px font-mono text-[11px] select-text">
+            {pr.head.slice(0, 7)}
+          </span>
         </p>
       </div>
     </div>
@@ -199,7 +222,39 @@ function useToggleSet() {
   return [set, toggle] as const;
 }
 
-function FileList({ files }: { files: ChangedFile[] }) {
+/** What the change weighs: files, lines added and removed, and their split. */
+/** Folding the file list away: the diff below already shows every file, each under its own header. */
+type Fold = { open: boolean; toggle: () => void };
+
+function FilesSummaryLine({ files, fold }: { files: ChangedFile[]; fold?: Fold }) {
+  const t = useT();
+  const add = files.reduce((sum, f) => sum + (f.additions ?? 0), 0);
+  const del = files.reduce((sum, f) => sum + (f.deletions ?? 0), 0);
+  const body = (
+    <>
+      {fold && (
+        <ChevronRight aria-hidden className={cn("size-3.5 shrink-0 transition-transform", fold.open && "rotate-90")} />
+      )}
+      <span className="min-w-0 truncate">{t.plural("files.changed", files.length)}</span>
+      <LineCounts add={add} del={del} className="ml-auto" />
+      <DiffStatBar add={add} del={del} />
+    </>
+  );
+  return fold ? (
+    <button
+      type="button"
+      aria-expanded={fold.open}
+      onClick={fold.toggle}
+      className="mx-2 my-1.5 flex h-8 items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-muted-foreground outline-none hover:bg-white/[0.04] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {body}
+    </button>
+  ) : (
+    <p className="mx-4 mt-3 mb-1 flex items-center gap-2 text-[12px] text-muted-foreground">{body}</p>
+  );
+}
+
+function FileList({ files, fold }: { files: ChangedFile[]; fold?: Fold }) {
   const t = useT();
   const { selectedFilePath, selectFile } = useWorkspaceStore(
     useShallow((s) => ({ selectedFilePath: s.selectedFilePath, selectFile: s.selectFile })),
@@ -241,9 +296,11 @@ function FileList({ files }: { files: ChangedFile[] }) {
     revealInContainer(rowId(target.key));
   };
 
+  if (fold && !fold.open) return <FilesSummaryLine files={shown} fold={fold} />;
   return (
     <>
-      <PanelToolbar className="mt-1 gap-1">
+      {fold && shown.length > 0 && <FilesSummaryLine files={shown} fold={fold} />}
+      <PanelToolbar className={cn("gap-1", fold ? "mb-1" : "mt-1")}>
         <FilterInput
           label={t.plural("files.filter", shown.length)}
           placeholder={t.plural("files.count", shown.length)}
@@ -255,6 +312,7 @@ function FileList({ files }: { files: ChangedFile[] }) {
         <ModeButton mode="list" label="files.flat" icon={<List />} />
         <ModeButton mode="tree" label="files.tree" icon={<ListTree />} />
       </PanelToolbar>
+      {!fold && shown.length > 0 && <FilesSummaryLine files={shown} />}
       {navRows.length === 0 ? (
         <EmptyState
           size="sm"
@@ -270,7 +328,7 @@ function FileList({ files }: { files: ChangedFile[] }) {
           tabIndex={0}
           data-scroll-container
           onKeyDown={onKeyDown}
-          className="mt-4 min-h-0 flex-1 overflow-y-auto px-2 pb-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          className="mt-1 min-h-0 flex-1 overflow-y-auto px-2 pb-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         >
           {rows.map((row) =>
             row.kind === "header" ? (
@@ -314,17 +372,42 @@ function FileListSkeleton() {
   );
 }
 
-function CommitFiles({ repoPath, hash, base }: { repoPath: string; hash: string; base: string | null }) {
+function CommitFiles({
+  repoPath,
+  hash,
+  base,
+  fold,
+}: {
+  repoPath: string;
+  hash: string;
+  base: string | null;
+  fold?: Fold;
+}) {
   const t = useT();
   const files = useCommitFiles(repoPath, hash, base);
   if (files.isError) {
     return <DataUnavailable title={t("files.listError")} error={files.error} onRetry={() => void files.refetch()} />;
   }
   if (!files.data) return <FileListSkeleton />;
-  return <FileList files={files.data} />;
+  return <FileList files={files.data} fold={fold} />;
 }
 
-export function ChangedFilesPanel({ repoPath }: { repoPath: string }) {
+/**
+ * `header`: off under the commit list, where the picked commit is already in view. `actions`: tools shown at the
+ * header's end (the diff's, when the files sit above it).
+ */
+export function ChangedFilesPanel({
+  repoPath,
+  header = true,
+  actions,
+  fold,
+}: {
+  repoPath: string;
+  header?: boolean;
+  actions?: ReactNode;
+  /** The list folds to its one-line summary. */
+  fold?: Fold;
+}) {
   const t = useT();
   const {
     selectedCommitHash: hash,
@@ -346,15 +429,18 @@ export function ChangedFilesPanel({ repoPath }: { repoPath: string }) {
     .find((c) => c.hash === hash);
   return (
     <section aria-label={t("files.panel")} className="flex h-full flex-col bg-panel">
-      <PanelHeader>
-        {base && pullRequest ? (
-          <PullRequestHeader repoPath={repoPath} pr={pullRequest} />
-        ) : (
-          commit && <CommitHeader repoPath={repoPath} commit={commit} />
-        )}
-      </PanelHeader>
+      {header && (
+        <PanelHeader>
+          {base && pullRequest ? (
+            <PullRequestHeader repoPath={repoPath} pr={pullRequest} />
+          ) : (
+            commit && <CommitHeader repoPath={repoPath} commit={commit} />
+          )}
+          {actions && <span className="ml-auto flex shrink-0 items-center gap-0.5">{actions}</span>}
+        </PanelHeader>
+      )}
       {hash ? (
-        <CommitFiles key={`${hash}:${base}`} repoPath={repoPath} hash={hash} base={base} />
+        <CommitFiles key={`${hash}:${base}`} repoPath={repoPath} hash={hash} base={base} fold={fold} />
       ) : (
         <EmptyState
           size="sm"

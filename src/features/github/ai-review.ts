@@ -10,7 +10,7 @@ export type AiReviewResult = { summary: string; comments: AiComment[]; invalid: 
 const MAX_BODY = 65_536;
 
 /** The JSON object in an agent's answer: a fenced block when there is one, else the outermost braces. */
-function extractJson(text: string): unknown {
+export function extractJson(text: string): unknown {
   const fenced = /```(?:json)?\s*\n([\s\S]*?)```/.exec(text)?.[1];
   const start = (fenced ?? text).indexOf("{");
   const end = (fenced ?? text).lastIndexOf("}");
@@ -22,10 +22,10 @@ function extractJson(text: string): unknown {
   }
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const safePath = (path: string) =>
+export const safePath = (path: string) =>
   path.length > 0 &&
   path.length < 4096 &&
   !path.startsWith("/") &&

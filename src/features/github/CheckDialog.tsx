@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { JobTrace } from "./JobTrace";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, Copy, ExternalLink, MoreHorizontal, MousePointer2, RefreshCw, X } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
@@ -99,6 +100,7 @@ function CheckBody({ repoPath, check }: { repoPath: string; check: PullRequestCh
     );
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
+      <JobTrace job={job} />
       <JobLogView repoPath={repoPath} job={job} />
     </div>
   );

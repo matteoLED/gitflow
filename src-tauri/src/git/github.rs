@@ -467,15 +467,81 @@ pub fn set_pull_request_state(repo: &Path, number: u32, target: PrState) -> GitR
 const MAX_LOG_CHARS: usize = 400_000;
 
 /// A GitHub Actions job's log (`gh run view --job <id> --log`), keeping its end when it is huge.
+/// A finished job of a run that still has other jobs going: `gh run view` refuses until the whole run ends,
+/// so the job's raw log comes from the API and is split into steps by their start times.
 pub fn job_log(repo: &Path, job_id: u64, failed_only: bool) -> GitResult<String> {
     let id = job_id.to_string();
     let flag = if failed_only { "--log-failed" } else { "--log" };
-    let out = gh(&require_gh()?, repo, &["run", "view", "--job", &id, flag])?;
-    let text = String::from_utf8_lossy(&out).into_owned();
+    let gh_path = require_gh()?;
+    let text = match gh(&gh_path, repo, &["run", "view", "--job", &id, flag]) {
+        Ok(out) => String::from_utf8_lossy(&out).into_owned(),
+        Err(err) if err.message.contains("still in progress") => {
+            let job = gh_json(
+                repo,
+                &[
+                    "api",
+                    &format!("repos/{{owner}}/{{repo}}/actions/jobs/{id}"),
+                ],
+            )?;
+            let raw = gh(
+                &gh_path,
+                repo,
+                &[
+                    "api",
+                    &format!("repos/{{owner}}/{{repo}}/actions/jobs/{id}/logs"),
+                ],
+            )?;
+            label_steps(&job, &String::from_utf8_lossy(&raw))
+        }
+        Err(err) => return Err(err),
+    };
     Ok(match text.char_indices().rev().nth(MAX_LOG_CHARS) {
         Some((cut, _)) => text[cut..].to_string(),
         None => text,
     })
+}
+
+/// Raw job log lines as `gh run view --log` prints them ("job<TAB>step<TAB>line"). A line belongs to the
+/// last step started by its (whole) second; a top-level `##[group]` opens the next step started that second.
+fn label_steps(job: &serde_json::Value, raw: &str) -> String {
+    let name = job["name"].as_str().unwrap_or_default();
+    let steps: Vec<(&str, &str)> = job["steps"]
+        .as_array()
+        .map(|steps| {
+            steps
+                .iter()
+                .filter_map(|s| Some((s["name"].as_str()?, s["started_at"].as_str()?)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut current = 0;
+    let mut grouped = false;
+    let mut out = String::with_capacity(raw.len() + raw.len() / 4);
+    for line in raw.lines() {
+        // "2026-11-12T17:29:29.8988674Z text" → "2026-11-12T17:29:29": comparable with the step's start.
+        let second = line
+            .trim_start_matches('\u{feff}')
+            .get(..19)
+            .unwrap_or_default();
+        let text = line.split_once(' ').map_or("", |(_, t)| t);
+        let opens = text.starts_with("##[group]") && !grouped;
+        while let Some((_, start)) = steps.get(current + 1) {
+            let started = &start[..start.len().min(19)];
+            if started < second || (opens && started == second) {
+                current += 1;
+            } else {
+                break;
+            }
+        }
+        if text.starts_with("##[group]") {
+            grouped = true;
+        } else if text.starts_with("##[endgroup]") {
+            grouped = false;
+        }
+        let step = steps.get(current).map_or("", |(n, _)| n);
+        out.push_str(&format!("{name}\t{step}\t{line}\n"));
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -844,6 +910,29 @@ pub fn avatar_url(repo: &Path, hash: &str, email: &str) -> GitResult<Option<Stri
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn raw_job_logs_are_split_into_steps_by_start_time() {
+        let job = serde_json::json!({"name": "dup", "steps": [
+            {"name": "Set up job", "started_at": "2026-11-12T17:29:29Z"},
+            {"name": "Checkout", "started_at": "2026-11-12T17:29:31Z"},
+            {"name": "Check", "started_at": "2026-11-12T17:29:35Z"},
+        ]});
+        let raw = "\u{feff}2026-11-12T17:29:29.1Z Runner\n\
+2026-11-12T17:29:31.1Z still setting up\n\
+2026-11-12T17:29:31.5Z ##[group]Run actions/checkout\n\
+2026-11-12T17:29:31.6Z ##[endgroup]\n\
+2026-11-12T17:29:36.0Z ##[error]boom\n";
+        let labelled = super::label_steps(&job, raw);
+        let steps: Vec<&str> = labelled
+            .lines()
+            .map(|l| l.split('\t').nth(1).unwrap())
+            .collect();
+        assert_eq!(
+            steps,
+            ["Set up job", "Set up job", "Checkout", "Checkout", "Check"]
+        );
+    }
+
     #[test]
     fn branch_counts_commits_past_main() {
         let repo = crate::git::test_repo::TestRepo::new();

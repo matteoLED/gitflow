@@ -1,4 +1,5 @@
 import { lazy, Suspense, useState } from "react";
+import { CodeBlock } from "@/components/code-block";
 import type { Components } from "react-markdown";
 import { ChevronRight, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -13,10 +14,30 @@ const Markdown = lazy(() => import("@/features/agents/Markdown"));
 
 export type ProposedIssue = { title: string; description: string };
 
+/**
+ * Agents often write a long Markdown description with real line breaks inside the JSON string, which JSON
+ * forbids: inside strings, raw newlines, carriage returns and tabs become their escapes.
+ */
+function escapeRawControls(text: string): string {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString && c === "\\") {
+      out += c + (text[i + 1] ?? "");
+      i++;
+      continue;
+    }
+    if (c === '"') inString = !inString;
+    out += inString && c === "\n" ? "\\n" : inString && c === "\r" ? "\\r" : inString && c === "\t" ? "\\t" : c;
+  }
+  return out;
+}
+
 /** The JSON of a `linear-issue` block, or null while it streams in or when it isn't one. */
 export function parseProposal(text: string): ProposedIssue | null {
   try {
-    const value: unknown = JSON.parse(text);
+    const value: unknown = JSON.parse(escapeRawControls(text));
     if (typeof value !== "object" || value === null) return null;
     const { title, description } = value as Record<string, unknown>;
     if (typeof title !== "string" || !title.trim()) return null;
@@ -35,7 +56,13 @@ export const proposalPre: Components["pre"] = ({ node, children, ...rest }) => {
   const classes = code?.properties?.className;
   const isProposal = code?.tagName === "code" && Array.isArray(classes) && classes.includes("language-linear-issue");
   const issue = isProposal && code ? parseProposal(textOf(code)) : null;
-  return issue ? <IssueProposal issue={issue} /> : <pre {...rest}>{children}</pre>;
+  return issue ? (
+    <IssueProposal issue={issue} />
+  ) : (
+    <CodeBlock node={node} {...rest}>
+      {children}
+    </CodeBlock>
+  );
 };
 
 function IssueProposal({ issue }: { issue: ProposedIssue }) {

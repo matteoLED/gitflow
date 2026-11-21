@@ -36,7 +36,7 @@ const SEVERITY: Record<Severity, { label: MessageKey; tone: string }> = {
   question: { label: "aiReview.question", tone: "text-primary border-primary/40" },
 };
 
-const finished = (id: string) =>
+export const finished = (id: string) =>
   new Promise<AgentRun>((resolve) => {
     const check = (state: { runs: AgentRun[] }) => {
       const run = state.runs.find((r) => r.id === id && r.status !== "running");

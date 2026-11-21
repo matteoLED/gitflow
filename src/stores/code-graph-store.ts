@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type GraphSection = "impact" | "hotspots" | "map";
+export type GraphSection = "overview" | "impact" | "hotspots" | "map";
 /** What changes the impact is measured on: uncommitted work, the last commit, or the whole branch. */
 export type ImpactBase = "worktree" | "last-commit" | "branch";
 
@@ -13,7 +13,7 @@ type CodeGraphState = {
 };
 
 export const useCodeGraphStore = create<CodeGraphState>()(
-  persist((set) => ({ section: "impact", base: "branch", hideTests: true, set: (patch) => set(patch) }), {
+  persist((set) => ({ section: "overview", base: "branch", hideTests: true, set: (patch) => set(patch) }), {
     name: "gitflow-code-graph",
   }),
 );

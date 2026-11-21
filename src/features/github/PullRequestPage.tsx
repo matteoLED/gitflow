@@ -1,4 +1,8 @@
 import { Fragment, lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { tourKeyOf, useTourStore } from "./tour";
+import { PullRequestTour } from "./PullRequestTour";
+import { ReviewNavigator } from "@/features/history/ReviewNavigator";
+import { DiffStatBar, LineCounts } from "@/components/diffstat";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Panel } from "react-resizable-panels";
 import { ResizeHandle } from "@/components/layout/ResizeHandle";
@@ -10,8 +14,6 @@ import {
   GitCommitHorizontal,
   GitMerge,
   GitPullRequest,
-  GitPullRequestDraft,
-  GitPullRequestClosed,
   Check,
   ListTree,
   Ellipsis,
@@ -22,6 +24,7 @@ import {
   ChevronsUpDown,
   CornerDownRight,
   Plus,
+  Sparkles,
 } from "lucide-react";
 import { MiddleTruncate } from "@/components/middle-truncate";
 import { checkOutcome, ChecksMenu } from "./ChecksMenu";
@@ -48,7 +51,11 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PrClosedIcon, PrDraftIcon, PrOpenIcon } from "@/components/pr-state-icons";
 import { useT } from "@/i18n";
+import { mergeConfirmed } from "./merge";
+import { riskScoreOf } from "./risk-score";
+import { RiskScore } from "./RiskScore";
 import { toGitError } from "@/lib/errors";
 import { formatAge } from "@/lib/format-date";
 import { repoKey, usePullRequests } from "@/lib/git-queries";
@@ -57,10 +64,9 @@ import { cn } from "@/lib/utils";
 import { useLinearStore } from "@/stores/linear-store";
 import { useNoticesStore } from "@/stores/notices-store";
 import { useWorkspaceStore, type ActivePullRequest } from "@/stores/workspace-store";
-import type { MergeMethod, PullRequestDetails } from "@/types/git";
+import type { MergeMethod, PullRequest, PullRequestDetails } from "@/types/git";
 import { ChangedFilesPanel } from "@/features/changed-files/ChangedFilesPanel";
 import { DiffPanel } from "@/features/diff/DiffPanel";
-import { CommitList } from "@/features/history/CommitList";
 import { StateDot } from "@/features/linear/LinearList";
 import { useLinkedIssues } from "@/features/linear/use-pr-links";
 import { stackOf } from "./stacks";
@@ -74,25 +80,90 @@ type Tab = "overview" | "diff" | "ci";
 const avatarOf = (login: string) => `https://avatars.githubusercontent.com/${encodeURIComponent(login)}?s=64`;
 
 function usePullRequestDetails(repoPath: string, number: number) {
+  const client = useQueryClient();
   return useQuery({
     queryKey: ["pull-request", repoPath, number],
-    queryFn: () => gitBackend.getPullRequestDetails(repoPath, number),
+    queryFn: async () => {
+      const details = await gitBackend.getPullRequestDetails(repoPath, number);
+      // Merged or closed elsewhere (GitHub, a teammate): the list on the left moves it out of "Open" too.
+      const listed = client
+        .getQueryData<PullRequest[]>([...repoKey(repoPath), "pull-requests"])
+        ?.find((p) => p.number === number);
+      if (listed && listed.state !== details.state)
+        void client.invalidateQueries({ queryKey: [...repoKey(repoPath), "pull-requests"] });
+      return details;
+    },
     staleTime: 30_000,
     // While checks run, follow them closely; otherwise a slow refresh is enough.
     refetchInterval: (q) =>
-      q.state.data?.statusCheckRollup.some((c) => checkOutcome(c) === "pending") ? 10_000 : 60_000,
+      q.state.data?.statusCheckRollup.some((c) => checkOutcome(c) === "pending") ? 10_000 : 20_000,
   });
 }
 
-function Side({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+function Side({
+  title,
+  count,
+  action,
+  children,
+}: {
+  title: string;
+  /** Shown next to the title: "1/1", "92/92". */
+  count?: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
   return (
-    <section className="px-6 py-3.5">
-      <h2 className="mb-2 flex h-5 items-center text-[12.5px] text-muted-foreground">
+    <section className="border-b border-white/[0.05] px-6 py-4 last:border-b-0">
+      <h2 className="mb-2 flex h-5 items-center gap-2 text-[12.5px] font-medium text-foreground/90">
         {title}
+        {count !== undefined && (
+          <span className="rounded-md bg-white/[0.06] px-1.5 text-[11px] font-normal text-muted-foreground tabular-nums">
+            {count}
+          </span>
+        )}
         {action && <span className="ml-auto">{action}</span>}
       </h2>
       <div className="space-y-1.5 text-[13px]">{children}</div>
     </section>
+  );
+}
+
+/** "passed/total" of the checks that ran (skipped ones left out). */
+function checksCount(pr: PullRequestDetails) {
+  const ran = pr.statusCheckRollup.filter((c) => checkOutcome(c) !== "skip");
+  return ran.length ? `${ran.filter((c) => checkOutcome(c) === "pass").length}/${ran.length}` : undefined;
+}
+
+/** The checks as one bar: passed, failed, still running, like GitHub's. */
+function ChecksBar({ pr }: { pr: PullRequestDetails }) {
+  const ran = pr.statusCheckRollup.filter((c) => checkOutcome(c) !== "skip");
+  if (ran.length === 0) return null;
+  const share = (o: string) => `${(ran.filter((c) => checkOutcome(c) === o).length / ran.length) * 100}%`;
+  return (
+    <span className="mb-2 flex h-1 gap-[2px] overflow-hidden rounded-full bg-white/[0.06]">
+      <span className="bg-check-passed" style={{ width: share("pass") }} />
+      <span className="bg-check-failed" style={{ width: share("fail") }} />
+      <span className="animate-pulse bg-amber-400" style={{ width: share("pending") }} />
+    </span>
+  );
+}
+
+/** The state as a filled pill, in its color: open green, merged purple, closed red, draft gray. */
+function StatePill({ pr }: { pr: PullRequestDetails }) {
+  const t = useT();
+  const [Icon, label, tone] =
+    pr.state === "MERGED"
+      ? [GitMerge, t("pr.merged"), "bg-merged text-white"]
+      : pr.state === "CLOSED"
+        ? [PrClosedIcon, t("pr.closed"), "bg-removed text-white"]
+        : pr.isDraft
+          ? [PrDraftIcon, t("pr.draft"), "bg-white/15 text-foreground"]
+          : [PrOpenIcon, t("pr.open"), "bg-added text-white"];
+  return (
+    <span className={cn("flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[12px] font-medium", tone)}>
+      <Icon aria-hidden className="size-3.5" />
+      {label}
+    </span>
   );
 }
 
@@ -108,16 +179,16 @@ function StatusLine({ pr }: { pr: PullRequestDetails }) {
   if (pr.state === "CLOSED")
     return (
       <p className="flex items-center gap-2">
-        <CircleX aria-hidden className="size-4 text-removed-foreground" />
+        <PrClosedIcon aria-hidden className="text-removed-foreground" />
         {t("pr.closed")}
       </p>
     );
   return (
     <p className="flex items-center gap-2">
       {pr.isDraft ? (
-        <GitPullRequestDraft aria-hidden className="size-4 text-muted-foreground" />
+        <PrDraftIcon aria-hidden className="text-muted-foreground" />
       ) : (
-        <GitPullRequest aria-hidden className="size-4 text-added-foreground" />
+        <PrOpenIcon aria-hidden className="text-added-foreground" />
       )}
       {pr.isDraft ? t("pr.draft") : t("pr.open")}
     </p>
@@ -142,10 +213,10 @@ function StatusMenu({ repoPath, pr }: { repoPath: string; pr: PullRequestDetails
     onError: (error) => notify({ tone: "error", title: t("pr.stateFailed"), detail: toGitError(error).message }),
   });
   if (pr.state === "MERGED") return <StatusLine pr={pr} />;
-  const options: { target: Target; Icon: typeof GitPullRequest; tone: string; label: string }[] = [
-    { target: "draft", Icon: GitPullRequestDraft, tone: "text-muted-foreground", label: t("pr.draft") },
-    { target: "open", Icon: GitPullRequest, tone: "text-added-foreground", label: t("pr.open") },
-    { target: "closed", Icon: GitPullRequestClosed, tone: "text-removed-foreground", label: t("pr.closed") },
+  const options: { target: Target; Icon: typeof PrOpenIcon; tone: string; label: string }[] = [
+    { target: "draft", Icon: PrDraftIcon, tone: "text-muted-foreground", label: t("pr.draft") },
+    { target: "open", Icon: PrOpenIcon, tone: "text-added-foreground", label: t("pr.open") },
+    { target: "closed", Icon: PrClosedIcon, tone: "text-removed-foreground", label: t("pr.closed") },
   ];
   const active = options.find((o) => o.target === current) ?? options[1];
   return (
@@ -154,17 +225,18 @@ function StatusMenu({ repoPath, pr }: { repoPath: string; pr: PullRequestDetails
         {change.isPending ? <BrailleLoader /> : <active.Icon aria-hidden className={cn("size-4", active.tone)} />}
         {active.label}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-52 rounded-xl p-1">
+      <DropdownMenuContent align="start" className="w-48 rounded-xl p-1.5">
         {options.map(({ target, Icon, tone, label }) => (
           <Fragment key={target}>
-            {target === "closed" && <DropdownMenuSeparator />}
+            {target === "closed" && <DropdownMenuSeparator className="my-1.5" />}
             <DropdownMenuItem
               onSelect={() => target !== current && change.mutate(target)}
-              className="gap-2.5 px-2 py-1.5 text-[13px]"
+              // The current state keeps its row lit, as in Linear, not only the one under the pointer.
+              className={cn("gap-3 rounded-lg px-2.5 py-2 text-[13px]", target === current && "bg-white/[0.06]")}
             >
-              <Icon aria-hidden className={cn("size-4", tone)} />
+              <Icon aria-hidden className={tone} />
               <span className="flex-1">{label}</span>
-              {target === current && <Check aria-hidden className="size-3.5" />}
+              {target === current && <Check aria-hidden className="size-4 text-foreground/80" />}
             </DropdownMenuItem>
           </Fragment>
         ))}
@@ -701,7 +773,7 @@ function OpenedWith({ pr }: { pr: PullRequestDetails }) {
   return (
     <div className="mb-4 text-[13px] text-muted-foreground">
       <p className="flex items-center gap-2.5">
-        <GitPullRequest aria-hidden className="size-4 text-added-foreground" />
+        <PrOpenIcon aria-hidden className="text-added-foreground" />
         <span>
           {t("pr.openedBy", { author: pr.author.login })}{" "}
           <button
@@ -811,14 +883,17 @@ function MergeButton({ repoPath, pr }: { repoPath: string; pr: PullRequestDetail
   const [open, setOpen] = useState(false);
   const [method, setMethod] = useState<MergeMethod>("squash");
   const merge = useMutation({
-    mutationFn: () => gitBackend.mergePullRequest(repoPath, pr.number, method),
+    mutationFn: () => mergeConfirmed(repoPath, pr.number, method),
     onSuccess: () => {
       setOpen(false);
       notify({ tone: "success", title: t("pr.mergedNotice", { number: pr.number }) });
+    },
+    onError: (error) => notify({ tone: "error", title: t("pr.mergeFailed"), detail: toGitError(error).message }),
+    // Even a failed merge may have landed (see mergeConfirmed): the page and the list follow GitHub.
+    onSettled: () => {
       void client.invalidateQueries({ queryKey: ["pull-request", repoPath, pr.number] });
       void client.invalidateQueries({ queryKey: [...repoKey(repoPath), "pull-requests"] });
     },
-    onError: (error) => notify({ tone: "error", title: t("pr.mergeFailed"), detail: toGitError(error).message }),
   });
   if (pr.state !== "OPEN") return null;
   const blocked = pr.isDraft || pr.mergeable === "CONFLICTING";
@@ -880,44 +955,65 @@ function Overview({
   onOpenFile: (path: string | null) => void;
 }) {
   const t = useT();
+  const risk = riskScoreOf(pr);
   return (
     <div className="flex min-h-0 flex-1">
       <div className="min-w-0 flex-1 overflow-y-auto px-10 pb-16">
         <article className="mx-auto max-w-[820px] pt-8">
-          <h1 className="font-display text-[26px]">{pr.title}</h1>
-          <p className="mt-2 flex min-w-0 items-center gap-2 text-[13px]">
-            <AuthorAvatar name={pr.author.login} src={avatarOf(pr.author.login)} className="size-5" />
-            <span>{pr.author.login}</span>
-            <span className="flex min-w-0 items-center gap-1.5 font-mono text-[12px] text-muted-foreground">
-              <MiddleTruncate text={pr.baseRefName} tail={14} className="max-w-[40%]" />
+          {/* GitHub's header: the title and its number, then the state and the branches it merges. */}
+          <h1 className="font-display text-[26px] leading-tight">
+            {pr.title} <span className="text-muted-foreground tabular-nums">#{pr.number}</span>
+          </h1>
+          <p className="mt-3 flex min-w-0 flex-wrap items-center gap-2 text-[12.5px]">
+            <StatePill pr={pr} />
+            <span className="flex min-w-0 items-center gap-1.5 font-mono text-[11.5px] text-muted-foreground">
+              <span className="max-w-[40%] rounded-md bg-primary/10 px-1.5 py-0.5 text-[color-mix(in_oklab,var(--primary)_60%,white)]">
+                <MiddleTruncate text={pr.baseRefName} tail={14} />
+              </span>
               <span aria-hidden>←</span>
-              <MiddleTruncate text={pr.headRefName} tail={22} className="min-w-0 flex-1" />
+              <span className="min-w-0 rounded-md bg-primary/10 px-1.5 py-0.5 text-[color-mix(in_oklab,var(--primary)_60%,white)]">
+                <MiddleTruncate text={pr.headRefName} tail={22} />
+              </span>
             </span>
           </p>
-          <div className="mt-6 border-t border-white/[0.07] pt-6 text-[14px]">
-            {pr.body.trim() ? (
-              <Suspense fallback={<p className="whitespace-pre-wrap">{pr.body}</p>}>
-                <Markdown text={pr.body} />
-              </Suspense>
-            ) : (
-              <p className="text-muted-foreground">{t("pr.noDescription")}</p>
-            )}
-          </div>
+          {/* The description as the author's first comment: who, when, then the text. */}
+          <section className="mt-6 overflow-hidden rounded-xl border border-white/[0.07]">
+            <header className="flex items-center gap-2 border-b border-white/[0.06] bg-white/[0.02] px-4 py-2.5 text-[12.5px]">
+              <AuthorAvatar name={pr.author.login} src={avatarOf(pr.author.login)} className="size-5" />
+              <span className="font-medium">{pr.author.login}</span>
+              <span className="text-muted-foreground">· {formatAge(pr.createdAt, undefined, t.locale)}</span>
+              <span className="ml-auto flex items-center gap-2 text-muted-foreground">
+                <LineCounts add={pr.additions} del={pr.deletions} />
+                <DiffStatBar add={pr.additions} del={pr.deletions} />
+              </span>
+            </header>
+            <div className="px-5 py-4 text-[14px]">
+              {pr.body.trim() ? (
+                <Suspense fallback={<p className="whitespace-pre-wrap">{pr.body}</p>}>
+                  <Markdown text={pr.body} />
+                </Suspense>
+              ) : (
+                <p className="text-muted-foreground">{t("pr.noDescription")}</p>
+              )}
+            </div>
+          </section>
           <Activity repoPath={repoPath} pr={pr} />
         </article>
       </div>
       <aside className="hidden w-[340px] shrink-0 overflow-y-auto border-l border-white/[0.06] py-3 lg:block">
         <Side title={t("linear.status")}>
           <StatusMenu repoPath={repoPath} pr={pr} />
+          {risk && <RiskScore score={risk} />}
         </Side>
         <Side title={t("pr.resolves")}>
           <Resolves branch={pr.headRefName} title={pr.title} />
         </Side>
-        <Side title={t("pr.reviewers")}>
+        <Side title={t("pr.reviewers")} count={pr.reviews.length + pr.reviewRequests.length || undefined}>
           <Reviewers pr={pr} />
           {pr.state === "OPEN" && <AddReviewer repoPath={repoPath} number={pr.number} />}
         </Side>
-        <Side title={t("pr.checks")}>
+        <Side title={t("pr.checks")} count={checksCount(pr)}>
+          <ChecksBar pr={pr} />
           <ChecksMenu repoPath={repoPath} pr={pr} />
         </Side>
         <Side title={t("linear.branch")}>
@@ -933,18 +1029,26 @@ function Overview({
 /** Files of the whole PR next to their diffs; Commits adds the commit list to read it commit by commit. */
 function DiffTab({ repoPath }: { repoPath: string }) {
   const t = useT();
-  const [mode, setMode] = useState<"files" | "commits">("files");
+  const [mode, setMode] = useState<"files" | "commits" | "tour">("files");
+  // Opened from the "tour ready" notice: straight to the tour, once per request.
+  const pr = useWorkspaceStore((s) => s.pullRequest);
+  const requested = useTourStore((s) => s.requested);
+  const [handled, setHandled] = useState(0);
+  if (pr && requested && requested.n !== handled && requested.key === tourKeyOf(repoPath, pr.number)) {
+    setHandled(requested.n);
+    setMode("tour");
+  }
   const showAll = useWorkspaceStore((s) => s.showPullRequestChanges);
-  const pick = (next: "files" | "commits") => {
+  const pick = (next: "files" | "commits" | "tour") => {
     if (next === "files") showAll();
     setMode(next);
   };
-  const tab = (value: "files" | "commits", Icon: typeof ListTree, label: string) => (
+  const tab = (value: "files" | "commits" | "tour", Icon: typeof ListTree, label: string) => (
     <button
       type="button"
       aria-pressed={mode === value}
       onClick={() => pick(value)}
-      className="flex h-7 items-center gap-1.5 rounded-full px-3 text-[12.5px] text-muted-foreground hover:text-foreground aria-pressed:bg-white/[0.08] aria-pressed:text-foreground"
+      className="flex h-6 items-center gap-1.5 rounded-full px-3 text-[12px] text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-white/[0.1] aria-pressed:text-foreground aria-pressed:shadow-sm"
     >
       <Icon aria-hidden className="size-3.5" />
       {label}
@@ -952,29 +1056,28 @@ function DiffTab({ repoPath }: { repoPath: string }) {
   );
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-white/[0.06] px-3">
-        {tab("files", ListTree, t("pr.files"))}
-        {tab("commits", GitCommitHorizontal, t("pr.commits"))}
+      <div className="flex h-10 shrink-0 items-center border-b border-white/[0.06] px-3">
+        <div className="flex items-center gap-0.5 rounded-full bg-white/[0.04] p-0.5">
+          {tab("files", ListTree, t("pr.files"))}
+          {tab("commits", GitCommitHorizontal, t("pr.commits"))}
+          {tab("tour", Sparkles, t("tour.tab"))}
+        </div>
       </div>
-      <div className="min-h-0 flex-1">
-        <Columns id={`pr-diff-${mode}`}>
-          {mode === "commits" && (
-            <>
-              <Panel id="commits" defaultSize="26" minSize={240}>
-                <CommitList repoPath={repoPath} />
-              </Panel>
-              <ResizeHandle />
-            </>
-          )}
-          <Panel id="files" defaultSize={mode === "commits" ? "22" : "26"} minSize={200}>
-            <ChangedFilesPanel repoPath={repoPath} />
-          </Panel>
-          <ResizeHandle />
-          <Panel id="diff" minSize={320}>
-            <DiffPanel repoPath={repoPath} />
-          </Panel>
-        </Columns>
-      </div>
+      {mode === "tour" ? (
+        <PullRequestTour repoPath={repoPath} />
+      ) : (
+        <div className="min-h-0 flex-1">
+          <Columns id={`pr-diff-${mode}`}>
+            <Panel id="files" defaultSize="26" minSize={220}>
+              {mode === "commits" ? <ReviewNavigator repoPath={repoPath} /> : <ChangedFilesPanel repoPath={repoPath} />}
+            </Panel>
+            <ResizeHandle />
+            <Panel id="diff" minSize={320}>
+              <DiffPanel repoPath={repoPath} />
+            </Panel>
+          </Columns>
+        </div>
+      )}
     </div>
   );
 }
@@ -983,6 +1086,12 @@ function DiffTab({ repoPath }: { repoPath: string }) {
 export function PullRequestPage({ repoPath, pr }: { repoPath: string; pr: ActivePullRequest }) {
   const t = useT();
   const [tab, setTab] = useState<Tab>("overview");
+  const tourAsked = useTourStore((s) => s.requested);
+  const [tourSeen, setTourSeen] = useState(0);
+  if (tourAsked && tourAsked.n !== tourSeen && tourAsked.key === tourKeyOf(repoPath, pr.number)) {
+    setTourSeen(tourAsked.n);
+    setTab("diff");
+  }
   const repoName = useWorkspaceStore((s) => s.repo?.name ?? "");
   const details = usePullRequestDetails(repoPath, pr.number);
   const selectFile = useWorkspaceStore((s) => s.selectFile);
@@ -995,7 +1104,7 @@ export function PullRequestPage({ repoPath, pr }: { repoPath: string; pr: Active
   return (
     <section aria-label={`#${pr.number}`} className="flex h-full flex-col">
       <PanelHeader className="gap-2 text-[13px]">
-        {data ? <StatusLine pr={data} /> : <GitPullRequest aria-hidden className="size-4 text-added-foreground" />}
+        {data ? <StatusLine pr={data} /> : <PrOpenIcon aria-hidden className="text-added-foreground" />}
         <span className="shrink-0 text-muted-foreground">#{pr.number}</span>
         <span className="min-w-0 truncate font-medium">{pr.title}</span>
         {data && <DiffStat pr={data} />}
@@ -1019,24 +1128,29 @@ export function PullRequestPage({ repoPath, pr }: { repoPath: string; pr: Active
         </button>
         <PullRequestMenu pr={pr} data={data} />
       </PanelHeader>
-      <div className="flex h-12 shrink-0 items-center gap-1 px-3">
-        {(["overview", "diff", "ci"] as const).map((value) => (
-          <button
-            key={value}
-            type="button"
-            role="tab"
-            aria-selected={tab === value}
-            onClick={() => setTab(value)}
-            className="h-8 rounded-full px-3.5 text-[13px] text-muted-foreground hover:text-foreground aria-selected:bg-white/[0.08] aria-selected:text-foreground"
-          >
-            {t(`pr.tab.${value}`)}
-            {value === "ci" && failingCount > 0 && (
-              <span className="ml-1.5 rounded-full bg-removed/25 px-1.5 text-[11px] text-removed-foreground">
-                {failingCount}
-              </span>
-            )}
-          </button>
-        ))}
+      <div className="flex h-12 shrink-0 items-center gap-1 border-b border-white/[0.05] px-3">
+        <div role="tablist" className="flex items-center gap-0.5 rounded-full bg-white/[0.04] p-0.5">
+          {(["overview", "diff", "ci"] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={tab === value}
+              onClick={() => setTab(value)}
+              className="flex h-7 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-selected:bg-white/[0.1] aria-selected:text-foreground aria-selected:shadow-sm"
+            >
+              {t(`pr.tab.${value}`)}
+              {value === "diff" && data && (
+                <span className="text-[11px] text-muted-foreground tabular-nums">{data.changedFiles}</span>
+              )}
+              {value === "ci" && failingCount > 0 && (
+                <span className="rounded-full bg-removed/25 px-1.5 text-[11px] text-removed-foreground">
+                  {failingCount}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
         <div className="ml-auto">{data && <MergeButton repoPath={repoPath} pr={data} />}</div>
       </div>
       {tab === "diff" ? (

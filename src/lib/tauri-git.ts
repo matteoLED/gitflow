@@ -77,6 +77,8 @@ import type {
   MergeMethod,
   PullRequestDetails,
   PreviewTarget,
+  CommitStamp,
+  CodeGraphOverview,
 } from "@/types/git";
 
 export const gitBackend = {
@@ -94,6 +96,10 @@ export const gitBackend = {
   /** Files of a commit against its first parent, or against `base` (a pull request's merge-base). */
   listCommitFiles: (repoPath: string, hash: string, base: string | null = null) =>
     invoke<ChangedFile[]>("list_commit_files", { repoPath, hash, base }),
+  /** Commits authored between two Unix times (seconds). */
+  commitActivity: (repoPath: string, since: number, until: number) =>
+    invoke<CommitStamp[]>("commit_activity", { repoPath, since, until }),
+  firstCommitAt: (repoPath: string) => invoke<number | null>("first_commit_at", { repoPath }),
   getCommitDiff: (
     repoPath: string,
     hash: string,
@@ -186,8 +192,11 @@ export const gitBackend = {
   codeGraphStatus: (repoPath: string) => invoke<CodeGraphStatus>("code_graph_status", { repoPath }),
   codeGraphHotspots: (repoPath: string) => invoke<CodeHotspot[]>("code_graph_hotspots", { repoPath }),
   codeGraphMap: (repoPath: string) => invoke<CodeFileMap>("code_graph_map", { repoPath }),
+  codeGraphOverview: (repoPath: string) => invoke<CodeGraphOverview>("code_graph_overview", { repoPath }),
   codeGraphImpact: (repoPath: string, base: string) => invoke<CodeImpact>("code_graph_impact", { repoPath, base }),
   codeGraphUpdate: (repoPath: string) => invoke<null>("code_graph_update", { repoPath }),
+  /** Refreshes the code indexes agents search (codebase-memory, code-review-graph) in the background. */
+  refreshCodeIndexes: (repoPath: string) => invoke<null>("refresh_code_indexes", { repoPath }),
   /** Every Claude Code session on this machine, by day, project and model. */
   getUsageStats: () => invoke<UsageStats>("get_usage_stats"),
   listPreviewTargets: (repoPath: string) => invoke<PreviewTarget[]>("list_preview_targets", { repoPath }),
@@ -278,6 +287,8 @@ export const gitBackend = {
   /** From `base` (else HEAD), on `branch` (reused when free, else suffixed) or a new `agent/<id>` branch. */
   createAgentWorktree: (repoPath: string, base?: string | null, branch?: string | null) =>
     invoke<Worktree>("create_agent_worktree", { repoPath, base: base ?? null, branch: branch ?? null }),
+  reopenAgentWorktree: (repoPath: string, branch: string) =>
+    invoke<Worktree>("reopen_agent_worktree", { repoPath, branch }),
   agentWorktreeStatus: (repoPath: string, path: string) =>
     invoke<WorktreeStatus>("agent_worktree_status", { repoPath, path }),
   /** Commits what the agent left, then merges its branch into the current one. */
@@ -293,11 +304,23 @@ export const gitBackend = {
   /** Multi-file patch of `git diff <branch of a> <branch of b>`. */
   compareAgentWorktrees: (repoPath: string, a: string, b: string) =>
     invoke<string>("compare_agent_worktrees", { repoPath, a, b }),
-  mergeAgentWorktree: (repoPath: string, path: string, message: string) =>
-    invoke<null>("merge_agent_worktree", { repoPath, path, message }),
+  /** `skipHooks`: commit and merge past the repository's hooks (the user's explicit choice after one failed). */
+  mergeAgentWorktree: (repoPath: string, path: string, message: string, skipHooks = false) =>
+    invoke<null>("merge_agent_worktree", { repoPath, path, message, skipHooks }),
   /** Commits what's left, pushes the agent's branch and opens a PR into `target` (else the current branch). */
-  publishAgentWorktree: (repoPath: string, path: string, title: string, body: string, target?: string) =>
-    invoke<string>("publish_agent_worktree", { repoPath, path, title, body, target: target ?? null }),
+  publishAgentWorktree: (
+    repoPath: string,
+    path: string,
+    title: string,
+    body: string,
+    target?: string,
+    skipHooks = false,
+  ) => invoke<string>("publish_agent_worktree", { repoPath, path, title, body, target: target ?? null, skipHooks }),
+  /** Commits what the agent left (with `title`) and pushes its branch to GitHub; no pull request. */
+  pushAgentWorktree: (repoPath: string, path: string, title: string) =>
+    invoke<null>("push_agent_worktree", { repoPath, path, title }),
+  /** Removes an agent's worktree but keeps its branch, for the user to check out; refused if work is uncommitted. */
+  releaseAgentWorktree: (repoPath: string, path: string) => invoke<null>("release_agent_worktree", { repoPath, path }),
   removeAgentWorktree: (repoPath: string, path: string, deleteBranch: boolean) =>
     invoke<null>("remove_agent_worktree", { repoPath, path, deleteBranch }),
   /** Claude Code's custom commands and skills, project then user. */
@@ -418,8 +441,17 @@ export const gitBackend = {
     invoke<string>("delete_remote_branch", { repoPath, remote, name }),
   restoreRemoteBranch: (repoPath: string, remote: string, name: string, tip: string) =>
     invoke<null>("restore_remote_branch", { repoPath, remote, name, tip }),
-  createBranch: (repoPath: string, name: string, switchTo: boolean) =>
-    invoke<null>("create_branch", { repoPath, name, switch: switchTo }),
+  /** From HEAD, or from `from` (e.g. `origin/main`) without tracking it. */
+  createBranch: (repoPath: string, name: string, switchTo: boolean, from: string | null = null) =>
+    invoke<null>("create_branch", { repoPath, name, switch: switchTo, from }),
+  /** `git push --force-with-lease --force-if-includes`: only over the remote state last fetched. */
+  pushForceWithLease: (repoPath: string) => invoke<null>("push_force_with_lease", { repoPath }),
+  /** The current branch's commits `onto` lacks, oldest first, as [hash, subject]. */
+  rebaseCandidates: (repoPath: string, onto: string) =>
+    invoke<[string, string][]>("rebase_candidates", { repoPath, onto }),
+  /** `git rebase --onto <onto> <after>` (or `git rebase <onto>` without `after`). */
+  rebaseOnto: (repoPath: string, onto: string, after: string | null) =>
+    invoke<null>("rebase_onto", { repoPath, onto, after }),
   fetch: (repoPath: string) => invoke<null>("fetch", { repoPath }),
   pull: (repoPath: string) => invoke<null>("pull", { repoPath }),
   push: (repoPath: string) => invoke<null>("push", { repoPath }),

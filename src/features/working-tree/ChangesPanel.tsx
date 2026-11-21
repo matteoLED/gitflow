@@ -1,4 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
+import { FileIcon } from "@/components/file-icon";
+import { FocusButton } from "@/components/layout/FocusButton";
 import { DataUnavailable, EmptyState } from "@/components/states";
 import { RowSkeleton, SkeletonList } from "@/components/skeletons";
 import { useMemo, useState } from "react";
@@ -46,20 +48,21 @@ function ChangeRow({ item, action, onAction, busy }: ChangeRowProps) {
         onClick={() => selectChange({ path: item.path, previousPath: item.previousPath, side: item.side })}
         title={item.previousPath ? `${item.previousPath} → ${item.path}` : item.path}
         className={cn(
-          "flex h-7 w-full items-center gap-2 rounded-md pr-9 pl-2 text-left outline-none hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-ring",
-          selected && "bg-white/[0.06]",
+          "flex h-7 w-full items-center gap-2 rounded-md pr-2 pl-2 text-left group-hover/row:pr-9 outline-none hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-ring",
+          selected && "bg-primary/[0.12] hover:bg-primary/[0.16]",
         )}
       >
+        <FileIcon path={item.path} className="size-3.5" />
+        <span className="truncate text-[12.5px]">{item.path.slice(slash + 1)}</span>
+        <LfsBadge path={item.path} />
+        <span className="truncate text-[11.5px] text-muted-foreground">{item.path.slice(0, Math.max(slash, 0))}</span>
         <span
+          role="img"
           aria-label={t(status.label)}
-          className={cn("w-3 shrink-0 font-mono text-[12px] font-semibold", status.className)}
+          title={t(status.label)}
+          className={cn("ml-auto w-3 shrink-0 text-center font-mono text-[11px] font-semibold", status.className)}
         >
           {status.letter}
-        </span>
-        <span className="truncate font-mono text-[12.5px]">{item.path.slice(slash + 1)}</span>
-        <LfsBadge path={item.path} />
-        <span className="truncate font-mono text-[11.5px] text-muted-foreground">
-          {item.path.slice(0, Math.max(slash, 0))}
         </span>
       </button>
       {action && (
@@ -91,9 +94,12 @@ function Group({ title, items, action, run, busy }: GroupProps) {
   if (items.length === 0) return null;
   return (
     <section aria-label={title} className="mb-3">
-      <header className="flex h-7 items-center justify-between px-2 text-[12px] font-medium text-muted-foreground">
-        <span>
-          {title} <span className="font-mono">{items.length}</span>
+      <header className="flex h-7 items-center justify-between px-2 text-[11.5px] font-medium tracking-wide text-muted-foreground uppercase">
+        <span className="flex items-center gap-1.5">
+          {title}
+          <span className="rounded-full bg-white/[0.06] px-1.5 text-[10.5px] tracking-normal tabular-nums">
+            {items.length}
+          </span>
         </span>
         {action && (
           <Button variant="ghost" size="xs" disabled={busy} onClick={() => run(pathsOf(items))}>
@@ -200,7 +206,18 @@ function useAmendable(repoPath: string) {
   };
 }
 
-function CommitForm({ repoPath, stagedCount, changed }: { repoPath: string; stagedCount: number; changed: string[] }) {
+function CommitForm({
+  repoPath,
+  stagedCount,
+  unstaged,
+  changed,
+}: {
+  repoPath: string;
+  stagedCount: number;
+  /** Paths not staged yet: with nothing staged, the commit takes them all (like GitHub Desktop). */
+  unstaged: string[];
+  changed: string[];
+}) {
   const t = useT();
   const [message, setMessage] = useState("");
   // The message typed before turning Amend on, given back when it's turned off.
@@ -210,11 +227,16 @@ function CommitForm({ repoPath, stagedCount, changed }: { repoPath: string; stag
   const amend = draft !== null && amendable.available && !amendable.pushed;
   const generated = useAgentAnswer(repoPath, { kind: "commit-message" }, t("agents.commitMessage"), setMessage);
   const commit = useGitAction(repoPath, {
-    run: () => (amend ? gitBackend.amendCommit(repoPath, message) : gitBackend.createCommit(repoPath, message)),
+    run: async () => {
+      if (amend) return gitBackend.amendCommit(repoPath, message);
+      if (stagedCount === 0) await gitBackend.stageFiles(repoPath, unstaged);
+      return gitBackend.createCommit(repoPath, message);
+    },
     success: amend ? t("changes.amended") : t("changes.committed"),
     failure: amend ? t("changes.amendFailed") : t("changes.commitFailed"),
   });
-  const canCommit = (amend || stagedCount > 0) && message.trim().length > 0 && !commit.isPending;
+  const commitAll = stagedCount === 0 && unstaged.length > 0;
+  const canCommit = (amend || stagedCount > 0 || commitAll) && message.trim().length > 0 && !commit.isPending;
   const submit = () =>
     canCommit &&
     commit.mutate(undefined, {
@@ -242,41 +264,60 @@ function CommitForm({ repoPath, stagedCount, changed }: { repoPath: string; stag
       }}
     >
       {splitStep !== null && <SplitBanner step={splitStep} onStop={() => setSplitStep(null)} />}
-      <Textarea
-        aria-label={t("changes.message")}
-        placeholder={t("changes.messagePlaceholder")}
-        value={message}
-        onChange={(e) => setMessage(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && e.metaKey) {
-            e.preventDefault();
-            submit();
-          }
-        }}
-        className="min-h-20 resize-none bg-transparent text-[13px] md:text-[13px]"
-      />
-      {generated.available && (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={stagedCount === 0 || generated.pending}
-          onClick={() => void generated.generate()}
-          className="h-7 gap-1.5 text-[13px]"
-        >
-          {generated.pending ? <BrailleLoader /> : <Sparkles aria-hidden className="size-3.5 text-primary" />}
-          {generated.pending ? t("agents.writingMessage") : t("agents.generateMessage")}
-        </Button>
-      )}
+      {/* One composer, like a chat box: the message, then what helps write it, then amend. */}
+      <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] transition-colors focus-within:border-primary/50">
+        <Textarea
+          aria-label={t("changes.message")}
+          placeholder={t("changes.messagePlaceholder")}
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && e.metaKey) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          className="min-h-20 resize-none border-0 bg-transparent text-[13px] shadow-none focus-visible:ring-0 md:text-[13px] dark:bg-transparent"
+        />
+        <div className="flex items-center gap-1 px-1.5 pb-1.5">
+          {generated.available && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={stagedCount === 0 || generated.pending}
+              onClick={() => void generated.generate()}
+              className="h-6 gap-1.5 rounded-full px-2 text-[12px] text-muted-foreground"
+            >
+              {generated.pending ? <BrailleLoader /> : <Sparkles aria-hidden className="size-3.5 text-primary" />}
+              {generated.pending ? t("agents.writingMessage") : t("agents.generateMessage")}
+            </Button>
+          )}
+          {amendable.available && (
+            <label
+              title={t(amendable.pushed ? "changes.amendPushed" : "changes.amendHint")}
+              className={cn(
+                "ml-auto flex h-6 items-center gap-2 px-1.5 text-[12px] text-muted-foreground",
+                amendable.pushed && "opacity-50",
+              )}
+            >
+              <Checkbox checked={amend} disabled={amendable.pushed} onCheckedChange={(v) => toggleAmend(v === true)} />
+              {t("changes.amend")}
+            </label>
+          )}
+        </div>
+      </div>
       <Button type="submit" disabled={!canCommit}>
         {commit.isPending && <BrailleLoader />}
         {amend
           ? t("changes.amendSubmit")
-          : stagedCount === 0
-            ? t("changes.stageFirst")
-            : t.plural("changes.commit", stagedCount)}
+          : commitAll
+            ? t.plural("changes.commitAll", unstaged.length)
+            : stagedCount === 0
+              ? t("changes.stageFirst")
+              : t.plural("changes.commit", stagedCount)}
       </Button>
-      <div className="flex flex-wrap gap-1">
+      <div className="flex flex-wrap justify-center gap-1">
         {splitStep === null && (
           <Button
             type="button"
@@ -291,18 +332,6 @@ function CommitForm({ repoPath, stagedCount, changed }: { repoPath: string; stag
           </Button>
         )}
         <AiSplit repoPath={repoPath} changed={changed} />
-        {amendable.available && (
-          <label
-            title={t(amendable.pushed ? "changes.amendPushed" : "changes.amendHint")}
-            className={cn(
-              "ml-auto flex h-7 items-center gap-2 px-2 text-[12.5px] text-muted-foreground",
-              amendable.pushed && "opacity-50",
-            )}
-          >
-            <Checkbox checked={amend} disabled={amendable.pushed} onCheckedChange={(v) => toggleAmend(v === true)} />
-            {t("changes.amend")}
-          </label>
-        )}
       </div>
     </form>
   );
@@ -384,6 +413,7 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
           {t("changes.title")}
         </h2>
         <StashButton repoPath={repoPath} />
+        <FocusButton />
       </PanelHeader>
       <BranchStatus repoPath={repoPath} />
       {tree.isError ? (
@@ -419,7 +449,12 @@ export function ChangesPanel({ repoPath }: { repoPath: string }) {
           <RecentCommits repoPath={repoPath} />
         </div>
       )}
-      <CommitForm repoPath={repoPath} stagedCount={groups.staged.length} changed={changed} />
+      <CommitForm
+        repoPath={repoPath}
+        stagedCount={groups.staged.length}
+        unstaged={pathsOf(groups.unstaged)}
+        changed={changed}
+      />
     </section>
   );
 }

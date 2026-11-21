@@ -8,6 +8,9 @@ import { gitBackend } from "@/lib/tauri-git";
 import { useGitAction } from "@/features/operations/use-git-action";
 import type { RefsSnapshot } from "@/types/git";
 import { useT } from "@/i18n";
+import { useQueryClient } from "@tanstack/react-query";
+import { invalidateRepo } from "@/lib/git-queries";
+import { forcePushWithLease, isRejectedPush } from "./force-push";
 
 type SyncButtonProps = {
   label: string;
@@ -42,6 +45,7 @@ function SyncButton({ label, hint, icon, count, pending, onClick }: SyncButtonPr
 /** Network operations. They use the user's own Git credentials (SSH agent, gh, keychain); nothing is stored here. */
 export function SyncBar({ repoPath, refs }: { repoPath: string; refs: RefsSnapshot }) {
   const t = useT();
+  const client = useQueryClient();
   const current = refs.branches.find((b) => b.name === refs.head.branch);
   const fetch = useGitAction(repoPath, {
     run: () => gitBackend.fetch(repoPath),
@@ -60,6 +64,15 @@ export function SyncBar({ repoPath, refs }: { repoPath: string; refs: RefsSnapsh
     success: t("sync.pushed"),
     pending: t("sync.pushing"),
     failure: t("sync.pushFailed"),
+    // After a rebase or an amend the remote refuses a plain push: offer the safe force.
+    recover: (message) =>
+      isRejectedPush(message) && refs.head.branch
+        ? {
+            label: t("sync.force"),
+            run: () =>
+              void forcePushWithLease(repoPath, refs.head.branch ?? "", () => void invalidateRepo(client, repoPath)),
+          }
+        : undefined,
   });
   const pushHint = current?.upstream ? t("sync.pushTo", { upstream: current.upstream }) : t("sync.publish");
 

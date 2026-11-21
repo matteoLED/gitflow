@@ -25,7 +25,58 @@ function useBackendEvent<T>(name: string, handle: (payload: T) => void) {
   }, [name, handle]);
 }
 
-const applyAgentEvent = (event: AgentRunEvent) => useAgentsStore.getState().applyEvent(event);
+const applyAgentEvent = (event: AgentRunEvent) => {
+  useAgentsStore.getState().applyEvent(event);
+  if (event.type === "finished" && event.status === "done") void pushFinishedWork(event.runId);
+};
+
+/** Whether a local branch still exists (a published agent branch does; a merged one was deleted). */
+async function branchExists(repoPath: string, name: string) {
+  const refs = await gitBackend.listRefs(repoPath).catch(() => null);
+  return !!refs?.branches.some((b) => b.name === name);
+}
+
+/**
+ * An agent done in its worktree: its branch goes to GitHub, then the user is asked whether to open the pull
+ * request (which also removes the worktree). Nothing happens when the agent changed nothing.
+ */
+export async function pushFinishedWork(runId: string) {
+  const run = useAgentsStore.getState().runs.find((r) => r.id === runId);
+  const worktree = run?.worktree;
+  if (!run || !worktree) return;
+  const t = getT();
+  const { notify } = useNoticesStore.getState();
+  try {
+    const status = await gitBackend.agentWorktreeStatus(run.repoPath, worktree.path);
+    // Work left uncommitted isn't committed here: the repository's hooks (lint-staged…) would run on the
+    // agent's unfinished edits. The agent, or the bar's buttons, commit it; then it's pushed.
+    if (status.changed > 0) {
+      notify({ tone: "info", title: t.plural("worktree.uncommitted", status.changed), detail: worktree.branch });
+      return;
+    }
+    if (status.ahead === 0) return;
+    await gitBackend.pushAgentWorktree(run.repoPath, worktree.path, run.title);
+  } catch (error) {
+    const { message, detail } = toGitError(error);
+    notify({ tone: "error", title: t("worktree.pushFailed", { branch: worktree.branch }), detail: detail ?? message });
+    return;
+  }
+  notify({
+    tone: "success",
+    title: t("worktree.pushed", { branch: worktree.branch }),
+    action: {
+      label: t("worktree.openPr"),
+      run: () =>
+        void gitBackend
+          .publishAgentWorktree(run.repoPath, worktree.path, run.title, t("worktree.prBody"), worktree.target)
+          .then((url) => url && gitBackend.openGithubUrl(url))
+          .catch((error: unknown) => {
+            const { message, detail } = toGitError(error);
+            notify({ tone: "error", title: t("worktree.failed"), detail: detail ?? message });
+          }),
+    },
+  });
+}
 const applyPreviewEvent = (event: PreviewEvent) => usePreviewStore.getState().apply(event);
 const applyBrowserEvent = (event: BrowserEvent) => useBrowserStore.getState().apply(event);
 
@@ -66,10 +117,32 @@ export async function startAgentRun(
     // Ready-made tasks (review, explain, commit message) only read; free requests use the composer's mode.
     const { runSettings, runs } = useAgentsStore.getState();
     // Isolation: a new free-form conversation gets its own worktree; follow-ups keep working in the same one.
+    // A follow-up stays in its worktree while it exists; once merged or published (removed), in the repository.
+    const previous = continuation && runs.find((r) => r.thread === continuation.thread && r.worktree)?.worktree;
+    const live =
+      previous &&
+      (await gitBackend.agentWorktreeStatus(repoPath, previous.path).then(
+        () => true,
+        () => false,
+      ));
+    // Published (its worktree removed, the branch kept for the pull request): the follow-up goes on working on
+    // that branch, in a fresh worktree, never in the user's checkout. Merged (branch deleted): in the repository.
+    const reopened =
+      previous && !live && (await branchExists(repoPath, previous.branch))
+        ? { ...(await gitBackend.reopenAgentWorktree(repoPath, previous.branch)), target: previous.target }
+        : undefined;
     const worktree = continuation
-      ? runs.find((r) => r.thread === continuation.thread && r.worktree)?.worktree
+      ? live
+        ? previous
+        : reopened
       : task.kind === "custom" && !readOnly && (runSettings.isolated || group || branch || base)
-        ? { ...(await gitBackend.createAgentWorktree(repoPath, base?.commit ?? null, branch)), target: base?.target }
+        ? {
+            ...(await gitBackend.createAgentWorktree(repoPath, base?.commit ?? null, branch)),
+            // An issue's branch starts from the default branch (see worktrees.rs): its pull request goes there.
+            target:
+              base?.target ??
+              (branch ? (await gitBackend.compareWithBase(repoPath, null).catch(() => null))?.base : undefined),
+          }
         : undefined;
     const editMode = (branch || base) && runSettings.mode === "plan" ? "accept-edits" : runSettings.mode;
     const mode = task.kind === "custom" && !readOnly ? editMode : ("plan" as const);

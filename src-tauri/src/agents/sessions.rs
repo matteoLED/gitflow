@@ -49,6 +49,34 @@ fn projects_dir(repo: &Path) -> Option<PathBuf> {
     Some(projects_root()?.join(encode(repo)))
 }
 
+/// Claude Code only resumes a conversation saved under the folder it runs in. An agent's worktree can move
+/// (out of `~/.gitflow`) or be recreated elsewhere for a follow-up: its transcript is copied next to the new
+/// folder first. Nothing happens when it's already there or can't be found (Claude then says so).
+pub(super) fn bring_session(cwd: &Path, id: &str) {
+    if let Some(root) = projects_root() {
+        bring_session_in(&root, cwd, id);
+    }
+}
+
+fn bring_session_in(root: &Path, cwd: &Path, id: &str) {
+    let dir = root.join(encode(cwd));
+    let file = format!("{id}.jsonl");
+    if dir.join(&file).is_file() {
+        return;
+    }
+    let found = std::fs::read_dir(root).ok().and_then(|folders| {
+        folders
+            .flatten()
+            .map(|f| f.path().join(&file))
+            .find(|p| p.is_file())
+    });
+    if let Some(source) = found
+        && std::fs::create_dir_all(&dir).is_ok()
+    {
+        let _ = std::fs::copy(source, dir.join(&file));
+    }
+}
+
 fn check_id(id: &str) -> GitResult<()> {
     let valid = !id.is_empty()
         && id.len() <= 64
@@ -450,6 +478,17 @@ fn codex_steps(repo: &Path, id: &str) -> GitResult<Vec<AgentStep>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_moved_worktree_finds_its_conversation_again() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join(encode(Path::new("/old/wt")));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("abc.jsonl"), "{}\n").unwrap();
+        bring_session_in(root.path(), Path::new("/new/wt"), "abc");
+        let new = root.path().join(encode(Path::new("/new/wt")));
+        assert!(new.join("abc.jsonl").is_file());
+    }
 
     #[test]
     fn project_folders_encode_every_separator() {

@@ -1,5 +1,18 @@
 import type { ReactNode } from "react";
-import { ArrowDown, ArrowUp, CircleAlert, CircleCheck, CircleDot, CircleX, GitMerge, PencilLine } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  CircleAlert,
+  CircleCheck,
+  CircleDot,
+  CircleX,
+  GitMerge,
+  PencilLine,
+  X,
+} from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { formatAge } from "@/lib/format-date";
 import { BrailleLoader } from "@/components/braille-loader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BranchSwitcher } from "@/features/branches/BranchSwitcher";
@@ -87,16 +100,60 @@ function CiItem({ repoPath, branch }: { repoPath: string; branch: string | null 
   );
 }
 
+/**
+ * What runs in the background (agents: tours, reviews, conversations): a count in the bar, the list on click,
+ * each with what it's doing now, how long it has run, and a way to open or stop it.
+ */
 function AgentsItem({ repoPath }: { repoPath: string }) {
   const t = useT();
-  const setView = useWorkspaceStore((s) => s.setView);
-  const running = useAgentsStore((s) => s.runs.filter((r) => r.repoPath === repoPath && r.status === "running").length);
-  if (running === 0) return null;
+  const running = useAgentsStore(
+    useShallow((s) => s.runs.filter((r) => r.repoPath === repoPath && r.status === "running")),
+  );
+  if (running.length === 0) return null;
+  const open = (id: string) => {
+    useAgentsStore.getState().select({ type: "run", id });
+    useWorkspaceStore.getState().setView("agents");
+  };
   return (
-    <Item hint={t.plural("statusBar.agents", running)} onClick={() => setView("agents")}>
-      <BrailleLoader variant="grid-orbit" />
-      {t.plural("statusBar.agents", running)}
-    </Item>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="flex h-5 shrink-0 items-center gap-1 rounded px-1.5 whitespace-nowrap tabular-nums outline-none hover:bg-white/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-white/[0.06] [&_svg]:size-3 [&_svg]:shrink-0"
+        >
+          <BrailleLoader variant="grid-orbit" />
+          {t.plural("statusBar.agents", running.length)}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" className="w-80 p-1.5">
+        <p className="px-2 pt-1 pb-1.5 text-[11.5px] font-medium tracking-wide text-muted-foreground uppercase">
+          {t("statusBar.background")}
+        </p>
+        <ul className="flex flex-col gap-0.5">
+          {running.map((run) => (
+            <li key={run.id} className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-white/[0.05]">
+              <BrailleLoader className="shrink-0 text-primary" />
+              <button type="button" onClick={() => open(run.id)} className="min-w-0 flex-1 text-left outline-none">
+                <span className="block truncate text-[12.5px] text-foreground">{run.title}</span>
+                <span className="block truncate text-[11.5px] text-muted-foreground">
+                  {formatAge(run.startedAt, undefined, t.locale)}
+                  {run.steps.at(-1) && ` · ${run.steps.at(-1)?.title}`}
+                </span>
+              </button>
+              <button
+                type="button"
+                aria-label={t("common.cancel")}
+                title={t("common.cancel")}
+                onClick={() => void gitBackend.cancelAgentRun(run.id)}
+                className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground opacity-0 outline-none group-hover:opacity-100 hover:bg-white/[0.08] hover:text-foreground focus-visible:opacity-100"
+              >
+                <X aria-hidden className="size-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }
 

@@ -129,3 +129,12 @@ pub struct FileDiff {
     pub patch: String,
     pub binary: bool,
 }
+
+/// One commit of the activity charts: when, and by whom.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitStamp {
+    /// Unix seconds, author date.
+    pub at: i64,
+    pub author: String,
+}

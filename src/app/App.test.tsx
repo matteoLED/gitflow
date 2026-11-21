@@ -127,9 +127,11 @@ describe("history view", () => {
     expect(await within(await commitList()).findByText("Commit number 2")).toBeInTheDocument();
   });
 
-  it("lists the files of a clicked commit", async () => {
+  it("lists the files of a clicked commit once the list is unfolded", async () => {
     renderApp();
     await userEvent.click(await within(await commitList()).findByText("Commit number 1"));
+    // Folded by default to its summary: the diff below already shows each file.
+    await userEvent.click(await screen.findByRole("button", { name: /1 file changed/ }));
     expect(await screen.findByRole("option", { name: /app\.ts/ })).toBeInTheDocument();
   });
 
@@ -163,9 +165,10 @@ describe("history view", () => {
     useHistorySearchStore.getState().setQuery("", true);
   });
 
-  it("asks for the history of a branch when it is clicked", async () => {
+  it("asks for the history of a branch picked in the header", async () => {
     renderApp();
-    await userEvent.click(await screen.findByRole("button", { name: /^login/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Show another branch/ }));
+    await userEvent.click(await screen.findByRole("option", { name: /feature\/login/ }));
     expect(backend.listCommits).toHaveBeenLastCalledWith(REPO.path, {
       rev: "feature/login",
       skip: 0,
@@ -189,7 +192,8 @@ describe("operations", () => {
       detail: null,
     });
     renderApp();
-    await userEvent.click(await screen.findByRole("button", { name: "Switch to feature/login" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Switch branch" }));
+    await userEvent.click(await screen.findByRole("button", { name: /feature\/login/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Your local changes would be overwritten");
   });
 });
@@ -288,7 +292,8 @@ describe("pull request review", () => {
   it("folds a file once it is marked as reviewed", async () => {
     await renderDiff();
     await userEvent.click(await screen.findByRole("checkbox"));
-    expect(await screen.findByText("1/1 reviewed")).toBeInTheDocument();
+    // The diff and its review state load in a few steps: under the full parallel suite they take over a second.
+    expect(await screen.findByText("1/1 reviewed", undefined, { timeout: 3000 })).toBeInTheDocument();
   });
 
   it("compares the pull request head with its merge-base", async () => {

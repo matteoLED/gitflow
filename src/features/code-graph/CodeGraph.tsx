@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { GraphOverview } from "./GraphOverview";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useShallow } from "zustand/react/shallow";
-import { Flame, GitCompareArrows, Network, RefreshCw, ShieldAlert, TriangleAlert } from "lucide-react";
+import { Flame, GitCompareArrows, Network, RefreshCw, ShieldAlert, TriangleAlert, LayoutDashboard } from "lucide-react";
 import { BrailleLoader } from "@/components/braille-loader";
 import { PanelHeader, PanelLoading } from "@/components/layout/panel";
 import { DataUnavailable, EmptyState } from "@/components/states";
@@ -36,6 +37,7 @@ function useUpdateGraph(repoPath: string) {
 }
 
 const SECTIONS: { id: GraphSection; label: MessageKey; hint: MessageKey; Icon: typeof Flame }[] = [
+  { id: "overview", label: "graph.overview", hint: "graph.overviewHint", Icon: LayoutDashboard },
   { id: "impact", label: "graph.impact", hint: "graph.impactHint", Icon: GitCompareArrows },
   { id: "hotspots", label: "graph.hotspots", hint: "graph.hotspotsHint", Icon: Flame },
   { id: "map", label: "graph.map", hint: "graph.mapHint", Icon: Network },
@@ -539,7 +541,9 @@ export function CodeGraphPage({ repoPath }: { repoPath: string }) {
               {t("graph.noCli")}
             </p>
           )}
-          {section === "impact" ? (
+          {section === "overview" ? (
+            <GraphOverview repoPath={repoPath} status={status.data} />
+          ) : section === "impact" ? (
             <ImpactView repoPath={repoPath} />
           ) : section === "hotspots" ? (
             <HotspotsView repoPath={repoPath} />

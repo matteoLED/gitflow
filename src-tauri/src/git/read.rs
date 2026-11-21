@@ -455,6 +455,51 @@ pub fn working_file_diff(
     Ok(to_file_diff(out))
 }
 
+/// Commits on HEAD authored between `since` and `until` (Unix seconds), merges left out: the activity charts.
+pub fn commit_activity(repo: &Path, since: i64, until: i64) -> GitResult<Vec<CommitStamp>> {
+    if since < 0 || until < since {
+        return Err(GitError::new(ErrorKind::InvalidInput, "invalid date range"));
+    }
+    let (since, until) = (format!("--since=@{since}"), format!("--until=@{until}"));
+    let out = git_text(
+        repo,
+        &[
+            "log",
+            &since,
+            &until,
+            "--no-merges",
+            "--format=%at%x1f%an",
+            "--end-of-options",
+            "HEAD",
+        ],
+    )?;
+    Ok(out
+        .lines()
+        .filter_map(|line| {
+            let (at, author) = line.split_once('\x1f')?;
+            Some(CommitStamp {
+                at: at.parse().ok()?,
+                author: author.to_string(),
+            })
+        })
+        .collect())
+}
+
+/// When the history starts (its oldest root commit), to offer one activity view per year since.
+pub fn first_commit_at(repo: &Path) -> GitResult<Option<i64>> {
+    let out = git_text(
+        repo,
+        &[
+            "log",
+            "--max-parents=0",
+            "--format=%at",
+            "--end-of-options",
+            "HEAD",
+        ],
+    )?;
+    Ok(out.lines().filter_map(|l| l.trim().parse().ok()).min())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -805,5 +850,31 @@ mod tests {
         save_image(repo.path(), &first, None, "logo.png", false, &dest).unwrap();
         let committed = image_bytes(repo.path(), &first, None, "logo.png", false).unwrap();
         assert_eq!(std::fs::read(&dest).ok(), committed);
+    }
+
+    #[test]
+    fn activity_lists_each_commit_with_its_author_and_time() {
+        let (repo, _, _) = repo_with_history();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let stamps = commit_activity(repo.path(), now - 86_400, now + 60).unwrap();
+        assert_eq!(
+            stamps.iter().map(|s| s.author.as_str()).collect::<Vec<_>>(),
+            ["Test User", "Test User"]
+        );
+    }
+
+    #[test]
+    fn an_inverted_range_is_refused() {
+        let (repo, _, _) = repo_with_history();
+        assert!(commit_activity(repo.path(), 10, 5).is_err());
+    }
+
+    #[test]
+    fn history_starts_at_its_root_commit() {
+        let (repo, _, _) = repo_with_history();
+        assert!(first_commit_at(repo.path()).unwrap().is_some());
     }
 }

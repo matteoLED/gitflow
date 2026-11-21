@@ -1,4 +1,5 @@
 import { useThemeKind } from "@/features/settings/use-apply-appearance";
+import { DiffStatBar, LineCounts } from "@/components/diffstat";
 import { useShallow } from "zustand/react/shallow";
 import { Fragment, useEffect, useMemo, useState, type ReactNode, type Ref } from "react";
 import { ArrowDownToLine, ArrowUpToLine, ChevronDown, ChevronsUpDown } from "lucide-react";
@@ -392,9 +393,15 @@ export function DiffCard({ file, open, onToggle, highlighted = false, cardRef, i
       ref={cardRef}
       id={id}
       aria-label={file.path}
-      className={cn("overflow-hidden rounded-lg border border-white/8 bg-card", highlighted && "border-primary/60")}
+      className={cn(
+        "overflow-clip rounded-xl border border-white/[0.07] bg-card",
+        highlighted && "border-primary/50 ring-1 ring-primary/25",
+      )}
     >
-      <div className={cn("flex h-10 items-center bg-card pr-2", open && "border-b border-white/8")}>
+      {/* Sticky: a long file keeps its name in view while it scrolls (the card clips instead of scrolling). */}
+      <div
+        className={cn("sticky top-0 z-10 flex h-10 items-center bg-card pr-2", open && "border-b border-white/[0.07]")}
+      >
         <button
           type="button"
           aria-expanded={open}
@@ -421,9 +428,11 @@ export function DiffCard({ file, open, onToggle, highlighted = false, cardRef, i
             }
           />
           {showLineCounts && (
-            <span className="ml-auto flex shrink-0 gap-2 pl-2 font-mono text-[11px]">
-              {!!file.additions && <span className="text-added-foreground">+{file.additions}</span>}
-              {!!file.deletions && <span className="text-removed-foreground">-{file.deletions}</span>}
+            <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
+              <LineCounts add={file.additions ?? 0} del={file.deletions ?? 0} />
+              {!!(file.additions || file.deletions) && (
+                <DiffStatBar add={file.additions ?? 0} del={file.deletions ?? 0} />
+              )}
             </span>
           )}
         </button>

@@ -29,6 +29,8 @@ import { useActiveAccount, useMyIssues } from "@/features/linear/linear-queries"
 import { usePreviewTargets } from "@/features/preview/PreviewList";
 import type { PreviewTarget, RepositoryInfo } from "@/types/git";
 import { Kpis } from "./Kpis";
+import { Activity } from "./Activity";
+import { GetStarted } from "./GetStarted";
 
 const go = (view: View) => useWorkspaceStore.getState().setView(view);
 
@@ -359,7 +361,9 @@ export function Dashboard({ repo }: { repo: RepositoryInfo }) {
           <p className="mt-1 text-[13.5px] text-muted-foreground">
             {now.toLocaleDateString(t.locale, { weekday: "long", day: "numeric", month: "long" })}
           </p>
+          <GetStarted repo={repo} />
           <Kpis repo={repo} />
+          <Activity repo={repo} />
           <div className="mt-4 grid items-start gap-4 lg:grid-cols-2">
             <LinearCard />
             <PullRequestsCard repo={repo} />

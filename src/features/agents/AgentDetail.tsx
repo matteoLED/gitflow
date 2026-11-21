@@ -242,9 +242,11 @@ function Composer({ repoPath }: { repoPath: string }) {
         <p className="mt-1 text-[13.5px] text-muted-foreground">{t("agents.composerHint")}</p>
         <div
           ref={composerRef}
-          onDragOver={(e) => e.preventDefault()}
+          onDragOver={attachments.onDragOver}
+          onDragLeave={attachments.onDragLeave}
+          data-dragging={attachments.dragging || undefined}
           onDrop={attachments.onDrop}
-          className="relative mt-7 rounded-xl border border-white/[0.07] bg-[color-mix(in_oklab,var(--foreground)_5%,var(--background))] transition-colors focus-within:border-white/[0.14]"
+          className="relative mt-7 rounded-xl border border-white/[0.07] bg-[color-mix(in_oklab,var(--foreground)_5%,var(--background))] transition-colors focus-within:border-white/[0.14] data-[dragging]:border-primary/60 data-[dragging]:bg-primary/[0.06]"
         >
           {completion}
           <AttachmentStrip attachments={attachments} />

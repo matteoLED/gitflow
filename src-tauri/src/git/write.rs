@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::errors::{GitError, GitResult};
 use super::read::head;
-use super::runner::{NETWORK_TIMEOUT, RunOptions, git, git_text, git_with};
+use super::runner::{HOOK_TIMEOUT, NETWORK_TIMEOUT, RunOptions, git, git_text, git_with};
 use super::validate;
 
 const NETWORK: RunOptions = RunOptions {
@@ -13,6 +13,12 @@ const NETWORK: RunOptions = RunOptions {
     stdin: None,
     ok_codes: &[],
     env: &[],
+};
+
+/// A push runs the pre-push hook (tests, builds) before the network: the hook timeout.
+const PUSHING: RunOptions = RunOptions {
+    timeout: HOOK_TIMEOUT,
+    ..NETWORK
 };
 
 pub fn stage(repo: &Path, paths: &[String]) -> GitResult<()> {
@@ -63,8 +69,10 @@ fn commit_index(repo: &Path, message: &str, args: &[&str]) -> GitResult<String> 
     if message.is_empty() {
         return Err(GitError::invalid("Write a commit message first."));
     }
+    // Pre-commit hooks may lint, test or build: they get the time they need.
     let opts = RunOptions {
         stdin: Some(message.as_bytes()),
+        timeout: HOOK_TIMEOUT,
         ..RunOptions::default()
     };
     git_with(repo, args, &opts)?;
@@ -127,13 +135,20 @@ pub(crate) fn checked_branch_name(repo: &Path, name: &str) -> GitResult<String> 
         .map_err(|_| GitError::invalid(format!("“{name}” isn't a valid branch name.")))
 }
 
-pub fn create_branch(repo: &Path, name: &str, switch: bool) -> GitResult<()> {
+/// A new branch from HEAD, or from `from` (e.g. `origin/main`) without tracking it: its first push publishes
+/// it under its own name instead of pushing into `from`.
+pub fn create_branch(repo: &Path, name: &str, switch: bool, from: Option<&str>) -> GitResult<()> {
     let name = checked_branch_name(repo, name)?;
-    let args = if switch {
+    let from = from.map(validate::revision).transpose()?;
+    let mut args = if switch {
         vec!["switch", "-c", name.as_str()]
     } else {
         vec!["branch", "--end-of-options", name.as_str()]
     };
+    if let Some(from) = from {
+        args.insert(1, "--no-track");
+        args.push(from);
+    }
     git(repo, &args).map(drop)
 }
 
@@ -325,47 +340,80 @@ pub fn pull(repo: &Path) -> GitResult<()> {
 
 /// Pushes the current branch. A branch without upstream is published to `origin` (or the only remote).
 pub fn push(repo: &Path) -> GitResult<()> {
-    let branch = head(repo)?
-        .branch
-        .ok_or_else(|| GitError::invalid("Check out a branch before pushing."))?;
-    if git(
+    push_verified(repo, true)
+}
+
+/// The remote a branch goes to: the one it already tracks, else the only remote, else `origin`.
+fn push_remote(repo: &Path, branch: &str) -> GitResult<String> {
+    if let Ok(remote) = git_text(
         repo,
-        &[
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            "@{upstream}",
-        ],
-    )
-    .is_ok()
-    {
-        return git_with(repo, &["push"], &NETWORK).map(drop);
+        &["config", "--get", &format!("branch.{branch}.remote")],
+    ) {
+        let remote = remote.trim();
+        if !remote.is_empty() && remote != "." {
+            return Ok(remote.to_string());
+        }
     }
     let remotes = git_text(repo, &["remote"])?;
     let remotes: Vec<&str> = remotes.lines().collect();
-    let remote = match remotes.as_slice() {
-        [] => {
-            return Err(GitError::invalid(
-                "This repository has no remote to push to.",
-            ));
-        }
-        [only] => *only,
-        _ if remotes.contains(&"origin") => "origin",
-        _ => {
-            return Err(GitError::invalid(
-                "Several remotes and none is “origin”: set an upstream in a terminal first.",
-            ));
-        }
-    };
+    match remotes.as_slice() {
+        [] => Err(GitError::invalid(
+            "This repository has no remote to push to.",
+        )),
+        [only] => Ok((*only).to_string()),
+        _ if remotes.contains(&"origin") => Ok("origin".into()),
+        _ => Err(GitError::invalid(
+            "Several remotes and none is “origin”: set an upstream in a terminal first.",
+        )),
+    }
+}
+
+fn current_branch(repo: &Path) -> GitResult<String> {
+    head(repo)?
+        .branch
+        .ok_or_else(|| GitError::invalid("Check out a branch before pushing."))
+}
+
+/// `push`, past the pre-push hook when `verify` is false (the user's explicit choice). Always to the branch of the
+/// same name, and that becomes the upstream: a branch started from `origin/main` (which then tracks it) is
+/// published as itself, never onto main, and stops tracking main.
+pub fn push_verified(repo: &Path, verify: bool) -> GitResult<()> {
+    let skip: &[&str] = if verify { &[] } else { &["--no-verify"] };
+    let branch = current_branch(repo)?;
+    let remote = push_remote(repo, &branch)?;
+    git_with(
+        repo,
+        &[
+            &["push", "--set-upstream"],
+            skip,
+            &[remote.as_str(), &format!("HEAD:refs/heads/{branch}")],
+        ]
+        .concat(),
+        &PUSHING,
+    )
+    .map(drop)
+}
+
+/// Replaces the remote branch with the local one after a rebase, only if the remote is still where it was last
+/// fetched (`--force-with-lease`, `--force-if-includes`): someone else's newer push is refused, never lost.
+/// Like `push`, only ever the branch of the same name.
+pub fn push_force_with_lease(repo: &Path) -> GitResult<()> {
+    let branch = current_branch(repo)?;
+    let remote = push_remote(repo, &branch)?;
+    let tracking = format!("refs/remotes/{remote}/{branch}");
+    git(repo, &["rev-parse", "--verify", "--quiet", &tracking])
+        .map_err(|_| GitError::invalid("This branch isn't on the remote yet: push it normally."))?;
     git_with(
         repo,
         &[
             "push",
             "--set-upstream",
-            remote,
+            &format!("--force-with-lease=refs/heads/{branch}:{tracking}"),
+            "--force-if-includes",
+            &remote,
             &format!("HEAD:refs/heads/{branch}"),
         ],
-        &NETWORK,
+        &PUSHING,
     )
     .map(drop)
 }
@@ -529,9 +577,44 @@ mod tests {
     }
 
     #[test]
+    fn a_branch_can_start_elsewhere_without_tracking_it() {
+        let repo = committed_repo();
+        repo.git(&["branch", "base"]);
+        repo.write("b.txt", "b\n");
+        repo.commit_all("later");
+        create_branch(repo.path(), "fix", true, Some("base")).unwrap();
+        assert!(!repo.path().join("b.txt").exists());
+        assert!(git(repo.path(), &["config", "--get", "branch.fix.merge"]).is_err());
+    }
+
+    #[test]
+    fn a_branch_tracking_main_is_pushed_as_itself_not_onto_main() {
+        let (repo, remote) = repo_with_remote();
+        push(repo.path()).unwrap();
+        repo.git(&["switch", "-q", "-c", "feature", "--track", "origin/main"]);
+        repo.write("a.txt", "feature\n");
+        repo.git(&["commit", "-q", "-am", "Feature"]);
+        push(repo.path()).unwrap();
+        let remote = remote.path();
+        let main = git_text(remote, &["rev-parse", "main"]).unwrap();
+        let feature = git_text(remote, &["rev-parse", "feature"]).unwrap();
+        assert_ne!(main, feature);
+    }
+
+    #[test]
+    fn a_rebased_branch_replaces_its_remote_copy() {
+        let (repo, _remote) = repo_with_remote();
+        push(repo.path()).unwrap();
+        repo.write("a.txt", "rewritten\n");
+        repo.git(&["commit", "-q", "--amend", "-am", "Rewritten"]);
+        assert!(push(repo.path()).is_err());
+        push_force_with_lease(repo.path()).unwrap();
+    }
+
+    #[test]
     fn create_branch_can_switch_to_it() {
         let repo = committed_repo();
-        create_branch(repo.path(), "feature/new", true).unwrap();
+        create_branch(repo.path(), "feature/new", true, None).unwrap();
         assert_eq!(
             list_refs(repo.path()).unwrap().head.branch.as_deref(),
             Some("feature/new")
@@ -541,7 +624,7 @@ mod tests {
     #[test]
     fn create_branch_rejects_invalid_names() {
         let repo = committed_repo();
-        assert!(create_branch(repo.path(), "bad..name", false).is_err());
+        assert!(create_branch(repo.path(), "bad..name", false, None).is_err());
     }
 
     #[test]
